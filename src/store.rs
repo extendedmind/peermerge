@@ -20,7 +20,7 @@ where
     docs: HashMap<
         String,
         (
-            Option<Automerge>,
+            Option<Arc<Mutex<Automerge>>>,
             HashMap<String, Arc<Mutex<HypercoreWrapper<T>>>>,
         ),
     >,
@@ -46,7 +46,7 @@ where
         &mut self,
         doc_url: &str,
     ) -> Option<&(
-        Option<Automerge>,
+        Option<Arc<Mutex<Automerge>>>,
         HashMap<String, Arc<Mutex<HypercoreWrapper<T>>>>,
     )> {
         let public_key = to_public_key(doc_url);
@@ -66,18 +66,19 @@ impl HypermergeStore<RandomAccessMemory> {
         }
     }
 
-    pub async fn add_doc_memory(&mut self, doc: Automerge) -> String {
+    pub async fn add_doc_memory(&mut self, mut doc: Automerge) -> String {
         // First generate a key pair, its discovery key and the public key string
         let (key_pair, discovery_key, public_key) = generate_keys();
 
         // Second: create the memory hypercore
-        let hypercore = create_new_write_memory_hypercore(key_pair).await;
+        let hypercore = create_new_write_memory_hypercore(key_pair, doc.save()).await;
 
         // Third: store the value to the map
         let mut hypercores: HashMap<String, Arc<Mutex<HypercoreWrapper<RandomAccessMemory>>>> =
             HashMap::new();
         hypercores.insert(discovery_key.clone(), Arc::new(Mutex::new(hypercore)));
-        self.docs.insert(discovery_key, (Some(doc), hypercores));
+        self.docs
+            .insert(discovery_key, (Some(Arc::new(Mutex::new(doc))), hypercores));
 
         // Return the doc url
         to_doc_url(public_key)
@@ -112,19 +113,23 @@ impl HypermergeStore<RandomAccessDisk> {
         }
     }
 
-    pub async fn add_doc_disk(&mut self, doc: Automerge) -> String {
+    pub async fn add_doc_disk(&mut self, mut doc: Automerge) -> String {
         // First generate a key pair, its discovery key and the public key string
         let (key_pair, discovery_key, public_key) = generate_keys();
 
-        // Second: create the disk hypercore
+        // Second: create the disk hypercore with init data
         let hypercore =
-            create_new_write_disk_hypercore(&self.prefix, key_pair, &discovery_key).await;
+            create_new_write_disk_hypercore(&self.prefix, key_pair, &discovery_key, doc.save())
+                .await;
 
         // Third: store the value to the map
         let mut hypercores: HashMap<String, Arc<Mutex<HypercoreWrapper<RandomAccessDisk>>>> =
             HashMap::new();
         hypercores.insert(discovery_key.clone(), Arc::new(Mutex::new(hypercore)));
-        self.docs.insert(discovery_key, (Some(doc), hypercores));
+        self.docs.insert(
+            discovery_key,
+            (Some(Arc::new(Mutex::from(doc))), hypercores),
+        );
 
         // Return the doc url
         to_doc_url(public_key)

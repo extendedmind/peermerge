@@ -80,7 +80,7 @@ where
     {
         let is_initiator = protocol.is_initiator();
 
-        if let Some((doc, hypercore_store)) = self.store.lock().await.get_doc_state(doc_url) {
+        if let Some((_doc, hypercore_store)) = self.store.lock().await.get_doc_state(doc_url) {
             while let Some(event) = protocol.next().await {
                 let event = event?;
                 match event {

@@ -19,6 +19,7 @@ pub(super) async fn on_message<T>(
 where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send,
 {
+    println!("GOT MESSAGE {:?}", message);
     match message {
         Message::Synchronize(message) => {
             let length_changed = message.length != peer_state.remote_length;
