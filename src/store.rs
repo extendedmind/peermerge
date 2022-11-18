@@ -6,8 +6,9 @@ use random_access_storage::RandomAccess;
 use std::{collections::HashMap, fmt::Debug, path::PathBuf};
 
 use crate::hypercore::{
-    create_new_disk_hypercore, create_new_memory_hypercore, discovery_key_from_public_key,
-    generate_keys, HypercoreWrapper,
+    create_new_read_disk_hypercore, create_new_read_memory_hypercore,
+    create_new_write_disk_hypercore, create_new_write_memory_hypercore,
+    discovery_key_from_public_key, generate_keys, HypercoreWrapper,
 };
 
 /// A container for hypermerge documents.
@@ -30,12 +31,27 @@ impl<T> HypermergeStore<T>
 where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send,
 {
-    pub fn get_hypercore(&mut self, doc_url: &str) -> Option<&Arc<Mutex<HypercoreWrapper<T>>>> {
+    pub fn get_root_hypercore(
+        &mut self,
+        doc_url: &str,
+    ) -> Option<&Arc<Mutex<HypercoreWrapper<T>>>> {
         let public_key = to_public_key(doc_url);
-        let discovery_key = discovery_key_from_public_key(public_key);
+        let discovery_key = discovery_key_from_public_key(&public_key);
         self.docs
             .get(&discovery_key)
             .and_then(|doc_state| doc_state.1.get(&discovery_key))
+    }
+
+    pub fn get_doc_state(
+        &mut self,
+        doc_url: &str,
+    ) -> Option<&(
+        Option<Automerge>,
+        HashMap<String, Arc<Mutex<HypercoreWrapper<T>>>>,
+    )> {
+        let public_key = to_public_key(doc_url);
+        let discovery_key = discovery_key_from_public_key(&public_key);
+        self.docs.get(&discovery_key)
     }
 }
 
@@ -55,7 +71,7 @@ impl HypermergeStore<RandomAccessMemory> {
         let (key_pair, discovery_key, public_key) = generate_keys();
 
         // Second: create the memory hypercore
-        let hypercore = create_new_memory_hypercore(key_pair).await;
+        let hypercore = create_new_write_memory_hypercore(key_pair).await;
 
         // Third: store the value to the map
         let mut hypercores: HashMap<String, Arc<Mutex<HypercoreWrapper<RandomAccessMemory>>>> =
@@ -65,6 +81,21 @@ impl HypermergeStore<RandomAccessMemory> {
 
         // Return the doc url
         to_doc_url(public_key)
+    }
+
+    pub async fn register_doc_memory(&mut self, doc_url: &str) {
+        // First process keys from doc URL
+        let public_key = to_public_key(doc_url);
+        let discovery_key = discovery_key_from_public_key(&public_key);
+
+        // Second: create the memory hypercore
+        let hypercore = create_new_read_memory_hypercore(&public_key).await;
+
+        // Third: store the value to the map
+        let mut hypercores: HashMap<String, Arc<Mutex<HypercoreWrapper<RandomAccessMemory>>>> =
+            HashMap::new();
+        hypercores.insert(discovery_key.clone(), Arc::new(Mutex::new(hypercore)));
+        self.docs.insert(discovery_key, (None, hypercores));
     }
 }
 
@@ -86,7 +117,8 @@ impl HypermergeStore<RandomAccessDisk> {
         let (key_pair, discovery_key, public_key) = generate_keys();
 
         // Second: create the disk hypercore
-        let hypercore = create_new_disk_hypercore(&self.prefix, key_pair, &discovery_key).await;
+        let hypercore =
+            create_new_write_disk_hypercore(&self.prefix, key_pair, &discovery_key).await;
 
         // Third: store the value to the map
         let mut hypercores: HashMap<String, Arc<Mutex<HypercoreWrapper<RandomAccessDisk>>>> =
@@ -96,6 +128,22 @@ impl HypermergeStore<RandomAccessDisk> {
 
         // Return the doc url
         to_doc_url(public_key)
+    }
+
+    pub async fn register_doc_disk(&mut self, doc_url: &str) {
+        // First process keys from doc URL
+        let public_key = to_public_key(doc_url);
+        let discovery_key = discovery_key_from_public_key(&public_key);
+
+        // Second: create the disk hypercore
+        let hypercore =
+            create_new_read_disk_hypercore(&self.prefix, &public_key, &discovery_key).await;
+
+        // Third: store the value to the map
+        let mut hypercores: HashMap<String, Arc<Mutex<HypercoreWrapper<RandomAccessDisk>>>> =
+            HashMap::new();
+        hypercores.insert(discovery_key.clone(), Arc::new(Mutex::new(hypercore)));
+        self.docs.insert(discovery_key, (None, hypercores));
     }
 }
 

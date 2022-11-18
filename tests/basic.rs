@@ -14,14 +14,24 @@ use _util::*;
 
 #[async_std::test]
 async fn open_close_channels() -> anyhow::Result<()> {
-    let (mut proto_a, mut proto_b) = create_pair_memory().await?;
+    let (mut proto_responder, mut proto_initiator) = create_pair_memory().await?;
 
-    let mut repo_a = Repo::new_memory().await;
-    let doc_url = repo_a.create_doc_memory(vec![("version", 1)]).await;
+    let mut repo_creator = Repo::new_memory().await;
+    let mut repo_joiner = Repo::new_memory().await;
 
-    let mut repo_b = Repo::new_memory().await;
-    repo_a.connect(&doc_url, &mut proto_a).await;
-    repo_b.connect(&doc_url, &mut proto_b).await;
+    let doc_url = repo_creator.create_doc_memory(vec![("version", 1)]).await;
+    let doc_url_for_responder = doc_url.clone();
+    task::spawn(async move {
+        repo_creator
+            .connect(&doc_url_for_responder, &mut proto_responder)
+            .await
+            .unwrap();
+    });
+    repo_joiner.register_doc_memory(&doc_url).await;
+    repo_joiner
+        .connect(&doc_url, &mut proto_initiator)
+        .await
+        .unwrap();
 
     Ok(())
 }

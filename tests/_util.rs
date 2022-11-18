@@ -2,8 +2,6 @@ use async_std::prelude::*;
 use async_std::task::{self, JoinHandle};
 use futures_lite::io::{AsyncRead, AsyncWrite};
 use hypercore_protocol::{Channel, DiscoveryKey, Duplex, Event, Protocol, ProtocolBuilder};
-use hypermerge::Repo;
-use random_access_memory::RandomAccessMemory;
 use std::io;
 
 pub type MemoryProtocol = Protocol<Duplex<sluice::pipe::PipeReader, sluice::pipe::PipeWriter>>;
@@ -11,11 +9,11 @@ pub async fn create_pair_memory() -> io::Result<(MemoryProtocol, MemoryProtocol)
     let (ar, bw) = sluice::pipe::pipe();
     let (br, aw) = sluice::pipe::pipe();
 
-    let a = ProtocolBuilder::new(true);
-    let b = ProtocolBuilder::new(false);
-    let a = a.connect_rw(ar, aw);
-    let b = b.connect_rw(br, bw);
-    Ok((a, b))
+    let responder = ProtocolBuilder::new(false);
+    let initiator = ProtocolBuilder::new(true);
+    let responder = responder.connect_rw(ar, aw);
+    let initiator = initiator.connect_rw(br, bw);
+    Ok((responder, initiator))
 }
 
 pub fn next_event<IO>(
