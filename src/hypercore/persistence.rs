@@ -15,6 +15,11 @@ pub(crate) fn generate_keys() -> (Keypair, String, String) {
     (key_pair, discovery_key, public_key)
 }
 
+pub(crate) fn discovery_key_from_public_key(public_key: String) -> String {
+    let public_key = hex::decode(public_key).unwrap();
+    hex::encode(discovery_key(&public_key))
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) async fn create_new_disk_hypercore(
     prefix: &PathBuf,

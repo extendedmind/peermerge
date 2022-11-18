@@ -1,11 +1,13 @@
+use async_std::sync::{Arc, Mutex};
 use automerge::Automerge;
 use random_access_disk::RandomAccessDisk;
 use random_access_memory::RandomAccessMemory;
 use random_access_storage::RandomAccess;
-use std::{collections::HashMap, fmt::Debug, path::PathBuf, sync::Arc};
+use std::{collections::HashMap, fmt::Debug, path::PathBuf};
 
 use crate::hypercore::{
-    create_new_disk_hypercore, create_new_memory_hypercore, generate_keys, HypercoreWrapper,
+    create_new_disk_hypercore, create_new_memory_hypercore, discovery_key_from_public_key,
+    generate_keys, HypercoreWrapper,
 };
 
 /// A container for hypermerge documents.
@@ -14,7 +16,13 @@ pub(crate) struct HypermergeStore<T>
 where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send,
 {
-    docs: HashMap<String, (Option<Automerge>, HashMap<String, Arc<HypercoreWrapper<T>>>)>,
+    docs: HashMap<
+        String,
+        (
+            Option<Automerge>,
+            HashMap<String, Arc<Mutex<HypercoreWrapper<T>>>>,
+        ),
+    >,
     state: T,
     prefix: PathBuf,
 }
@@ -22,10 +30,13 @@ impl<T> HypermergeStore<T>
 where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send,
 {
-    // pub fn get(&self, discovery_key: &[u8; 32]) -> Option<&Arc<HypercoreWrapper<T>>> {
-    //     let hdkey = hex::encode(discovery_key);
-    //     self.hypercores.get(&hdkey)
-    // }
+    pub fn get_hypercore(&mut self, doc_url: &str) -> Option<&Arc<Mutex<HypercoreWrapper<T>>>> {
+        let public_key = to_public_key(doc_url);
+        let discovery_key = discovery_key_from_public_key(public_key);
+        self.docs
+            .get(&discovery_key)
+            .and_then(|doc_state| doc_state.1.get(&discovery_key))
+    }
 }
 
 impl HypermergeStore<RandomAccessMemory> {
@@ -47,9 +58,9 @@ impl HypermergeStore<RandomAccessMemory> {
         let hypercore = create_new_memory_hypercore(key_pair).await;
 
         // Third: store the value to the map
-        let mut hypercores: HashMap<String, Arc<HypercoreWrapper<RandomAccessMemory>>> =
+        let mut hypercores: HashMap<String, Arc<Mutex<HypercoreWrapper<RandomAccessMemory>>>> =
             HashMap::new();
-        hypercores.insert(discovery_key.clone(), Arc::new(hypercore));
+        hypercores.insert(discovery_key.clone(), Arc::new(Mutex::new(hypercore)));
         self.docs.insert(discovery_key, (Some(doc), hypercores));
 
         // Return the doc url
@@ -78,9 +89,9 @@ impl HypermergeStore<RandomAccessDisk> {
         let hypercore = create_new_disk_hypercore(&self.prefix, key_pair, &discovery_key).await;
 
         // Third: store the value to the map
-        let mut hypercores: HashMap<String, Arc<HypercoreWrapper<RandomAccessDisk>>> =
+        let mut hypercores: HashMap<String, Arc<Mutex<HypercoreWrapper<RandomAccessDisk>>>> =
             HashMap::new();
-        hypercores.insert(discovery_key.clone(), Arc::new(hypercore));
+        hypercores.insert(discovery_key.clone(), Arc::new(Mutex::new(hypercore)));
         self.docs.insert(discovery_key, (Some(doc), hypercores));
 
         // Return the doc url
@@ -90,4 +101,8 @@ impl HypermergeStore<RandomAccessDisk> {
 
 fn to_doc_url(public_key: String) -> String {
     format!("hypermerge:/{}", public_key)
+}
+
+fn to_public_key(doc_url: &str) -> String {
+    doc_url[12..].to_string()
 }

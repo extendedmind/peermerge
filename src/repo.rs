@@ -12,16 +12,9 @@ use std::{fmt::Debug, path::PathBuf};
 pub struct Repo<T>
 where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send,
-    // IO: AsyncWrite + AsyncRead + Send + Unpin + 'static,
 {
     store: Arc<Mutex<HypermergeStore<T>>>,
     state: Arc<T>,
-    // create_protocol: Box<
-    //     dyn Fn(
-    //         String,
-    //     )
-    //         -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Protocol<IO>>> + Send>>,
-    // >,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -47,23 +40,6 @@ impl Repo<RandomAccessDisk> {
 }
 
 impl Repo<RandomAccessMemory> {
-    // pub async fn new_memory<Cb>(create_protocol: Cb) -> Self
-    // where
-    //     Cb: Fn(
-    //             String,
-    //         )
-    //             -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Protocol<IO>>> + Send>>
-    //         + 'static,
-    // {
-    //     let mut hypercore_store: HypercoreStore<RandomAccessMemory> = HypercoreStore::new();
-    //     let state = RandomAccessMemory::new(1000);
-    //     Self {
-    //         hypercore_store: Arc::new(hypercore_store),
-    //         state: Arc::new(state),
-    //         create_protocol: Box::new(create_protocol),
-    //     }
-    // }
-
     pub async fn new_memory() -> Self {
         let store: HypermergeStore<RandomAccessMemory> = HypermergeStore::new_memory();
         let state = RandomAccessMemory::default();
@@ -84,11 +60,15 @@ impl Repo<RandomAccessMemory> {
 
 impl<T> Repo<T>
 where
-    T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send,
+    T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send + 'static,
 {
-    pub async fn connect<IO>(&mut self, protocol: &mut Protocol<IO>)
+    pub async fn connect<IO>(&mut self, doc_url: &str, protocol: &mut Protocol<IO>)
     where
         IO: AsyncWrite + AsyncRead + Send + Unpin + 'static,
     {
+        if let Some(hypercore) = self.store.lock().await.get_hypercore(doc_url) {
+            let hypercore = hypercore.lock().await;
+            println!("Found hypercore {:02X?}", hypercore.key());
+        }
     }
 }
