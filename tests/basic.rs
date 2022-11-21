@@ -13,7 +13,7 @@ mod _util;
 use _util::*;
 
 #[async_std::test]
-async fn open_close_channels() -> anyhow::Result<()> {
+async fn basic_two_writers() -> anyhow::Result<()> {
     let (mut proto_responder, mut proto_initiator) = create_pair_memory().await?;
 
     let mut repo_creator = Repo::new_memory().await;
@@ -25,7 +25,7 @@ async fn open_close_channels() -> anyhow::Result<()> {
         repo_creator
             .connect(&doc_url_for_responder, &mut proto_responder)
             .await
-            .unwrap();
+            .expect("Connect should not thorw error");
     });
     repo_joiner.register_doc_memory(&doc_url).await;
     repo_joiner

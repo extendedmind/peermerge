@@ -97,14 +97,41 @@ where
             }
         }
         Message::Data(message) => {
-            let (old_info, applied, new_info, synced) = {
+            let (old_info, applied, new_info, request_block, synced) = {
                 let mut hypercore = hypercore.lock().await;
                 let old_info = hypercore.info();
                 let proof = message.clone().into_proof();
                 let applied = hypercore.verify_and_apply_proof(&proof).await?;
                 let new_info = hypercore.info();
+                let request_block: Option<RequestBlock> = if let Some(upgrade) = &message.upgrade {
+                    // When getting the initial upgrade, send a request for the first missing block
+                    if old_info.length < upgrade.length {
+                        let request_index = old_info.length;
+                        let nodes = hypercore.missing_nodes(request_index * 2).await?;
+                        Some(RequestBlock {
+                            index: request_index,
+                            nodes,
+                        })
+                    } else {
+                        None
+                    }
+                } else if let Some(block) = &message.block {
+                    // When receiving a block, ask for the next, if there are still some missing
+                    if block.index < peer_state.remote_length - 1 {
+                        let request_index = block.index + 1;
+                        let nodes = hypercore.missing_nodes(request_index * 2).await?;
+                        Some(RequestBlock {
+                            index: request_index,
+                            nodes,
+                        })
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
                 let synced = new_info.contiguous_length == new_info.length;
-                (old_info, applied, new_info, synced)
+                (old_info, applied, new_info, request_block, synced)
             };
             assert!(applied, "Could not apply proof");
             let mut messages: Vec<Message> = vec![];
@@ -125,17 +152,6 @@ where
                     uploading: true,
                     downloading: true,
                 }));
-
-                for i in old_info.length..new_length {
-                    messages.push(Message::Request(Request {
-                        id: i + 1,
-                        fork: new_info.fork,
-                        hash: None,
-                        block: Some(RequestBlock { index: i, nodes: 2 }),
-                        seek: None,
-                        upgrade: None,
-                    }));
-                }
             }
             if let Some(block) = &message.block {
                 // Send Range if the number of items changed, both for the single and
@@ -155,20 +171,20 @@ where
                     }));
                 }
             }
-            let exit = if synced { true } else { false };
-            channel.send_batch(&messages).await.unwrap();
-            if exit {
-                return Ok(true);
+            if let Some(request_block) = request_block {
+                messages.push(Message::Request(Request {
+                    id: request_block.index + 1,
+                    fork: new_info.fork,
+                    hash: None,
+                    block: Some(request_block),
+                    seek: None,
+                    upgrade: None,
+                }));
             }
+            channel.send_batch(&messages).await.unwrap();
         }
         Message::Range(message) => {
-            let info = {
-                let hypercore = hypercore.lock().await;
-                hypercore.info()
-            };
-            if message.start == 0 && message.length == info.contiguous_length {
-                return Ok(true);
-            }
+            // Should something be done with a Range?
         }
         _ => {
             panic!("Received unexpected message {:?}", message);
