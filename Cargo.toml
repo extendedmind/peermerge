@@ -10,7 +10,7 @@ authors = ["Timo Tiuraniemi <timo.tiuraniemi@iki.fi>"]
 
 [dependencies]
 automerge = { git = "https://github.com/automerge/automerge-rs.git", rev = "bba4fe2c36a165f0513d0c2751b35a5cb1acbda5", features=["wasm"] }
-hypercore-protocol = { git = "https://github.com/ttiurani/hypercore-protocol-rs", branch = "v10", features = ["wasm-bindgen"] }
+hypercore-protocol = { git = "https://github.com/ttiurani/hypercore-protocol-rs", branch = "v10" }
 random-access-storage = { git = "https://github.com/ttiurani/random-access-storage", branch = "v10" }
 random-access-memory = { git = "https://github.com/ttiurani/random-access-memory", branch = "v10" }
 anyhow = "1.0.28"
@@ -19,6 +19,7 @@ log = "0.4.14"
 async-std = { version = "1.9.0", features = ["attributes", "unstable"], optional = true }
 futures-lite = "1.12"
 async-channel = "1.7.1"
+wasm-bindgen-futures = { version = "0.4.33", optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 random-access-disk = { git = "https://github.com/ttiurani/random-access-disk", branch = "v10" }
@@ -27,4 +28,8 @@ random-access-disk = { git = "https://github.com/ttiurani/random-access-disk", b
 sluice = "0.5.5"
 
 [features]
-default=["async-std"]
+default =  ["async-std", "wasm-bindgen"]
+wasm-bindgen = [
+  "wasm-bindgen-futures", 
+  "hypercore-protocol/wasm-bindgen"
+]

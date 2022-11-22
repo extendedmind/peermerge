@@ -1,16 +1,17 @@
 use async_std::sync::{Arc, Mutex};
 use automerge::Automerge;
+#[cfg(not(target_arch = "wasm32"))]
 use random_access_disk::RandomAccessDisk;
 use random_access_memory::RandomAccessMemory;
 use random_access_storage::RandomAccess;
 use std::{collections::HashMap, fmt::Debug, path::PathBuf};
 
+#[cfg(not(target_arch = "wasm32"))]
+use crate::hypercore::{create_new_read_disk_hypercore, create_new_write_disk_hypercore};
 use crate::hypercore::{
-    create_new_read_disk_hypercore, create_new_read_memory_hypercore,
-    create_new_write_disk_hypercore, create_new_write_memory_hypercore,
+    create_new_read_memory_hypercore, create_new_write_memory_hypercore,
     discovery_key_from_public_key, generate_keys, HypercoreWrapper,
 };
-
 /// A container for hypermerge documents.
 #[derive(Debug)]
 pub(crate) struct HypermergeStore<T>

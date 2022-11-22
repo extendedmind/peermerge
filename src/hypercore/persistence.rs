@@ -2,8 +2,10 @@ use hypercore_protocol::{
     discovery_key,
     hypercore::{generate_keypair, Hypercore, Keypair, PartialKeypair, PublicKey, Storage},
 };
+#[cfg(not(target_arch = "wasm32"))]
 use random_access_disk::RandomAccessDisk;
 use random_access_memory::RandomAccessMemory;
+#[cfg(not(target_arch = "wasm32"))]
 use std::path::PathBuf;
 
 use super::HypercoreWrapper;

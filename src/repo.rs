@@ -3,10 +3,13 @@ use async_std::sync::{Arc, Mutex};
 use automerge::{Prop, ScalarValue};
 use futures_lite::{AsyncRead, AsyncWrite, StreamExt};
 use hypercore_protocol::{Event, Protocol};
+#[cfg(not(target_arch = "wasm32"))]
 use random_access_disk::RandomAccessDisk;
 use random_access_memory::RandomAccessMemory;
 use random_access_storage::RandomAccess;
-use std::{fmt::Debug, path::PathBuf};
+use std::fmt::Debug;
+#[cfg(not(target_arch = "wasm32"))]
+use std::path::PathBuf;
 
 /// Repo is the main abstraction of hypermerge
 pub struct Repo<T>

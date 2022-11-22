@@ -1,13 +1,16 @@
-use async_std::sync::Mutex;
+use async_std::sync::{Arc, Mutex};
+#[cfg(not(target_arch = "wasm32"))]
 use async_std::task;
-use futures_lite::stream::StreamExt;
-use hypercore_protocol::{discovery_key, hypercore::Hypercore, schema::*, Channel, Message};
+use hypercore_protocol::{discovery_key, hypercore::Hypercore, Channel};
+#[cfg(not(target_arch = "wasm32"))]
 use random_access_disk::RandomAccessDisk;
 use random_access_memory::RandomAccessMemory;
 use random_access_storage::RandomAccess;
-use std::{fmt::Debug, sync::Arc};
+use std::fmt::Debug;
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen_futures::spawn_local;
 
-use super::{on_message, PeerState};
+use super::{on_peer, PeerState};
 
 #[derive(Debug, Clone)]
 pub struct HypercoreWrapper<T>
@@ -19,6 +22,7 @@ where
     pub(super) hypercore: Arc<Mutex<Hypercore<T>>>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl HypercoreWrapper<RandomAccessDisk> {
     pub fn from_disk_hypercore(hypercore: Hypercore<RandomAccessDisk>) -> Self {
         let key = hypercore.key_pair().public.to_bytes();
@@ -49,55 +53,16 @@ where
         &self.key
     }
 
-    pub fn on_peer(&self, mut channel: Channel) {
-        let mut peer_state = PeerState::default();
-        let mut hypercore = self.hypercore.clone();
+    pub fn on_peer(&self, channel: Channel) {
+        let peer_state = PeerState::default();
+        let hypercore = self.hypercore.clone();
+        #[cfg(not(target_arch = "wasm32"))]
         task::spawn(async move {
-            let info = {
-                let hypercore = hypercore.lock().await;
-                hypercore.info()
-            };
-
-            if info.fork != peer_state.remote_fork {
-                peer_state.can_upgrade = false;
-            }
-            let remote_length = if info.fork == peer_state.remote_fork {
-                peer_state.remote_length
-            } else {
-                0
-            };
-
-            let sync_msg = Synchronize {
-                fork: info.fork,
-                length: info.length,
-                remote_length,
-                can_upgrade: peer_state.can_upgrade,
-                uploading: true,
-                downloading: true,
-            };
-
-            if info.contiguous_length > 0 {
-                let range_msg = Range {
-                    drop: false,
-                    start: 0,
-                    length: info.contiguous_length,
-                };
-                channel
-                    .send_batch(&[Message::Synchronize(sync_msg), Message::Range(range_msg)])
-                    .await
-                    .unwrap();
-            } else {
-                channel.send(Message::Synchronize(sync_msg)).await.unwrap();
-            }
-            while let Some(message) = channel.next().await {
-                let ready = on_message(&mut hypercore, &mut peer_state, &mut channel, message)
-                    .await
-                    .expect("on_message should return Ok");
-                if ready {
-                    channel.close().await.expect("Should be able to close");
-                    break;
-                }
-            }
+            on_peer(hypercore, peer_state, channel).await;
+        });
+        #[cfg(target_arch = "wasm32")]
+        spawn_local(async move {
+            on_peer(hypercore, peer_state, channel).await;
         });
     }
 }

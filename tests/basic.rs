@@ -9,8 +9,8 @@ use hypercore_protocol::{schema::*, DiscoveryKey};
 use hypermerge::Repo;
 use std::io;
 
-mod _util;
-use _util::*;
+mod common;
+use common::*;
 
 #[async_std::test]
 async fn basic_two_writers() -> anyhow::Result<()> {
