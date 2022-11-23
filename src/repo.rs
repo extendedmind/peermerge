@@ -1,8 +1,8 @@
-use crate::{automerge::init_doc_with_root_props, store::HypermergeStore};
+use crate::{automerge::init_doc_with_root_props, hypercore::on_protocol, store::HypermergeStore};
 use async_std::sync::{Arc, Mutex};
 use automerge::{Prop, ScalarValue};
-use futures_lite::{AsyncRead, AsyncWrite, StreamExt};
-use hypercore_protocol::{Event, Protocol};
+use futures_lite::{AsyncRead, AsyncWrite};
+use hypercore_protocol::Protocol;
 #[cfg(not(target_arch = "wasm32"))]
 use random_access_disk::RandomAccessDisk;
 use random_access_memory::RandomAccessMemory;
@@ -81,38 +81,8 @@ where
     where
         IO: AsyncWrite + AsyncRead + Send + Unpin + 'static,
     {
-        let is_initiator = protocol.is_initiator();
-
         if let Some((_doc, hypercore_store)) = self.store.lock().await.get_doc_state(doc_url) {
-            while let Some(event) = protocol.next().await {
-                let event = event?;
-                match event {
-                    Event::Handshake(_) => {
-                        if is_initiator {
-                            for hypercore in hypercore_store.values() {
-                                let hypercore = hypercore.lock().await;
-                                protocol.open(hypercore.key().clone()).await?;
-                            }
-                        }
-                    }
-                    Event::DiscoveryKey(dkey) => {
-                        let discovery_key = hex::encode(dkey);
-                        if let Some(hypercore) = hypercore_store.get(&discovery_key) {
-                            let hypercore = hypercore.lock().await;
-                            protocol.open(hypercore.key().clone()).await?;
-                        }
-                    }
-                    Event::Channel(channel) => {
-                        let discovery_key = hex::encode(channel.discovery_key());
-                        if let Some(hypercore) = hypercore_store.get(&discovery_key) {
-                            let hypercore = hypercore.lock().await;
-                            hypercore.on_peer(channel);
-                        }
-                    }
-                    Event::Close(_dkey) => {}
-                    _ => {}
-                }
-            }
+            on_protocol(protocol, hypercore_store).await?;
         }
 
         Ok(())
