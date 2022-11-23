@@ -19,10 +19,10 @@ where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send,
 {
     docs: HashMap<
-        String,
+        [u8; 32],
         (
             Option<Arc<Mutex<Automerge>>>,
-            HashMap<String, Arc<Mutex<HypercoreWrapper<T>>>>,
+            HashMap<[u8; 32], Arc<Mutex<HypercoreWrapper<T>>>>,
         ),
     >,
     state: T,
@@ -48,7 +48,7 @@ where
         doc_url: &str,
     ) -> Option<&(
         Option<Arc<Mutex<Automerge>>>,
-        HashMap<String, Arc<Mutex<HypercoreWrapper<T>>>>,
+        HashMap<[u8; 32], Arc<Mutex<HypercoreWrapper<T>>>>,
     )> {
         let public_key = to_public_key(doc_url);
         let discovery_key = discovery_key_from_public_key(&public_key);
@@ -75,7 +75,7 @@ impl HypermergeStore<RandomAccessMemory> {
         let hypercore = create_new_write_memory_hypercore(key_pair, doc.save()).await;
 
         // Third: store the value to the map
-        let mut hypercores: HashMap<String, Arc<Mutex<HypercoreWrapper<RandomAccessMemory>>>> =
+        let mut hypercores: HashMap<[u8; 32], Arc<Mutex<HypercoreWrapper<RandomAccessMemory>>>> =
             HashMap::new();
         hypercores.insert(discovery_key.clone(), Arc::new(Mutex::new(hypercore)));
         self.docs
@@ -94,7 +94,7 @@ impl HypermergeStore<RandomAccessMemory> {
         let hypercore = create_new_read_memory_hypercore(&public_key).await;
 
         // Third: store the value to the map
-        let mut hypercores: HashMap<String, Arc<Mutex<HypercoreWrapper<RandomAccessMemory>>>> =
+        let mut hypercores: HashMap<[u8; 32], Arc<Mutex<HypercoreWrapper<RandomAccessMemory>>>> =
             HashMap::new();
         hypercores.insert(discovery_key.clone(), Arc::new(Mutex::new(hypercore)));
         self.docs.insert(discovery_key, (None, hypercores));
@@ -124,7 +124,7 @@ impl HypermergeStore<RandomAccessDisk> {
                 .await;
 
         // Third: store the value to the map
-        let mut hypercores: HashMap<String, Arc<Mutex<HypercoreWrapper<RandomAccessDisk>>>> =
+        let mut hypercores: HashMap<[u8; 32], Arc<Mutex<HypercoreWrapper<RandomAccessDisk>>>> =
             HashMap::new();
         hypercores.insert(discovery_key.clone(), Arc::new(Mutex::new(hypercore)));
         self.docs.insert(
@@ -146,7 +146,7 @@ impl HypermergeStore<RandomAccessDisk> {
             create_new_read_disk_hypercore(&self.prefix, &public_key, &discovery_key).await;
 
         // Third: store the value to the map
-        let mut hypercores: HashMap<String, Arc<Mutex<HypercoreWrapper<RandomAccessDisk>>>> =
+        let mut hypercores: HashMap<[u8; 32], Arc<Mutex<HypercoreWrapper<RandomAccessDisk>>>> =
             HashMap::new();
         hypercores.insert(discovery_key.clone(), Arc::new(Mutex::new(hypercore)));
         self.docs.insert(discovery_key, (None, hypercores));

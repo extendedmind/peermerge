@@ -8,7 +8,7 @@ use super::HypercoreWrapper;
 
 pub async fn on_protocol<T, IO>(
     protocol: &mut Protocol<IO>,
-    hypercore_store: &HashMap<String, Arc<Mutex<HypercoreWrapper<T>>>>,
+    hypercore_store: &HashMap<[u8; 32], Arc<Mutex<HypercoreWrapper<T>>>>,
 ) -> anyhow::Result<()>
 where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send + 'static,
@@ -27,15 +27,13 @@ where
                 }
             }
             Event::DiscoveryKey(dkey) => {
-                let discovery_key = hex::encode(dkey);
-                if let Some(hypercore) = hypercore_store.get(&discovery_key) {
+                if let Some(hypercore) = hypercore_store.get(&dkey) {
                     let hypercore = hypercore.lock().await;
                     protocol.open(hypercore.key().clone()).await?;
                 }
             }
             Event::Channel(channel) => {
-                let discovery_key = hex::encode(channel.discovery_key());
-                if let Some(hypercore) = hypercore_store.get(&discovery_key) {
+                if let Some(hypercore) = hypercore_store.get(channel.discovery_key()) {
                     let hypercore = hypercore.lock().await;
                     hypercore.on_peer(channel);
                 }

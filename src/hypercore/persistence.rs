@@ -10,23 +10,24 @@ use std::path::PathBuf;
 
 use super::HypercoreWrapper;
 
-pub(crate) fn generate_keys() -> (Keypair, String, String) {
+pub(crate) fn generate_keys() -> (Keypair, [u8; 32], String) {
     let key_pair = generate_keypair();
-    let discovery_key = hex::encode(discovery_key(&key_pair.public.to_bytes()));
+    let discovery_key = discovery_key(&key_pair.public.to_bytes());
     let public_key = hex::encode(key_pair.public);
     (key_pair, discovery_key, public_key)
 }
 
-pub(crate) fn discovery_key_from_public_key(public_key: &str) -> String {
+pub(crate) fn discovery_key_from_public_key(public_key: &str) -> [u8; 32] {
     let public_key = hex::decode(public_key).unwrap();
-    hex::encode(discovery_key(&public_key))
+    let discovery_key: [u8; 32] = discovery_key(&public_key);
+    discovery_key
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) async fn create_new_write_disk_hypercore(
     prefix: &PathBuf,
     key_pair: Keypair,
-    discovery_key: &str,
+    discovery_key: &[u8; 32],
     init_data: Vec<u8>,
 ) -> HypercoreWrapper<RandomAccessDisk> {
     create_new_disk_hypercore(
@@ -45,7 +46,7 @@ pub(crate) async fn create_new_write_disk_hypercore(
 pub(crate) async fn create_new_read_disk_hypercore(
     prefix: &PathBuf,
     public_key: &str,
-    discovery_key: &str,
+    discovery_key: &[u8; 32],
 ) -> HypercoreWrapper<RandomAccessDisk> {
     create_new_disk_hypercore(
         prefix,
@@ -63,10 +64,10 @@ pub(crate) async fn create_new_read_disk_hypercore(
 async fn create_new_disk_hypercore(
     prefix: &PathBuf,
     key_pair: PartialKeypair,
-    discovery_key: &str,
+    discovery_key: &[u8; 32],
     init_data: Option<Vec<u8>>,
 ) -> HypercoreWrapper<RandomAccessDisk> {
-    let hypercore_dir = prefix.join(PathBuf::from(discovery_key));
+    let hypercore_dir = prefix.join(PathBuf::from(hex::encode(discovery_key)));
     let storage = Storage::new_disk(&hypercore_dir, true).await.unwrap();
     let mut hypercore = Hypercore::new_with_key_pair(storage, key_pair)
         .await
