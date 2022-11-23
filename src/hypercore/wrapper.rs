@@ -1,7 +1,7 @@
 use async_std::sync::{Arc, Mutex};
 #[cfg(not(target_arch = "wasm32"))]
 use async_std::task;
-use hypercore_protocol::{discovery_key, hypercore::Hypercore, Channel};
+use hypercore_protocol::{hypercore::Hypercore, Channel};
 #[cfg(not(target_arch = "wasm32"))]
 use random_access_disk::RandomAccessDisk;
 use random_access_memory::RandomAccessMemory;
@@ -17,7 +17,6 @@ pub struct HypercoreWrapper<T>
 where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send,
 {
-    pub(super) discovery_key: [u8; 32],
     pub(super) key: [u8; 32],
     pub(super) hypercore: Arc<Mutex<Hypercore<T>>>,
 }
@@ -28,7 +27,6 @@ impl HypercoreWrapper<RandomAccessDisk> {
         let key = hypercore.key_pair().public.to_bytes();
         HypercoreWrapper {
             key,
-            discovery_key: discovery_key(&key),
             hypercore: Arc::new(Mutex::new(hypercore)),
         }
     }
@@ -39,7 +37,6 @@ impl HypercoreWrapper<RandomAccessMemory> {
         let key = hypercore.key_pair().public.to_bytes();
         HypercoreWrapper {
             key,
-            discovery_key: discovery_key(&key),
             hypercore: Arc::new(Mutex::new(hypercore)),
         }
     }
