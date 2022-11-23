@@ -1,7 +1,8 @@
-use crate::{automerge::init_doc_with_root_props, hypercore::on_protocol, store::HypermergeStore};
+use async_channel::{Receiver, Sender};
 use async_std::sync::{Arc, Mutex};
+#[cfg(not(target_arch = "wasm32"))]
 use automerge::{Prop, ScalarValue};
-use futures_lite::{AsyncRead, AsyncWrite};
+use futures_lite::{AsyncRead, AsyncWrite, StreamExt};
 use hypercore_protocol::Protocol;
 #[cfg(not(target_arch = "wasm32"))]
 use random_access_disk::RandomAccessDisk;
@@ -10,14 +11,23 @@ use random_access_storage::RandomAccess;
 use std::fmt::Debug;
 #[cfg(not(target_arch = "wasm32"))]
 use std::path::PathBuf;
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen_futures::spawn_local;
+
+use crate::{
+    automerge::init_doc_with_root_props, common::SynchronizeEvent, hypercore::on_protocol,
+    store::HypermergeStore, StateEvent,
+};
 
 /// Repo is the main abstraction of hypermerge
+#[derive(derivative::Derivative)]
+#[derivative(Clone(bound = ""))]
 pub struct Repo<T>
 where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send,
 {
     store: Arc<Mutex<HypermergeStore<T>>>,
-    state: Arc<T>,
+    state: Arc<Mutex<T>>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -29,7 +39,7 @@ impl Repo<RandomAccessDisk> {
         let state = RandomAccessDisk::builder(state_path).build().await.unwrap();
         Self {
             store: Arc::new(Mutex::new(store)),
-            state: Arc::new(state),
+            state: Arc::new(Mutex::new(state)),
         }
     }
 
@@ -52,7 +62,7 @@ impl Repo<RandomAccessMemory> {
         let state = RandomAccessMemory::default();
         Self {
             store: Arc::new(Mutex::new(store)),
-            state: Arc::new(state),
+            state: Arc::new(Mutex::new(state)),
         }
     }
 
@@ -73,18 +83,30 @@ impl<T> Repo<T>
 where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send + 'static,
 {
-    pub async fn connect<IO>(
+    pub async fn connect_protocol<IO>(
         &mut self,
         doc_url: &str,
         protocol: &mut Protocol<IO>,
+        sync_event_sender: &mut Sender<SynchronizeEvent>,
     ) -> anyhow::Result<()>
     where
         IO: AsyncWrite + AsyncRead + Send + Unpin + 'static,
     {
-        if let Some((_doc, hypercore_store)) = self.store.lock().await.get_doc_state(doc_url) {
-            on_protocol(protocol, hypercore_store).await?;
+        if let Some((_doc, hypercore_store)) = self.store.lock().await.get_mut(doc_url) {
+            on_protocol(protocol, hypercore_store, sync_event_sender).await?
         }
+        Ok(())
+    }
 
+    pub async fn connect_document(
+        &mut self,
+        doc_url: &str,
+        state_event_sender: Sender<StateEvent>,
+        sync_event_receiver: &mut Receiver<SynchronizeEvent>,
+    ) -> anyhow::Result<()> {
+        while let Some(event) = sync_event_receiver.next().await {
+            // TODO: Do something here with sync event to trigger state event
+        }
         Ok(())
     }
 }

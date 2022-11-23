@@ -1,16 +1,20 @@
+use anyhow::Result;
+use async_channel::Sender;
 use async_std::sync::{Arc, Mutex};
 use futures_lite::stream::StreamExt;
 use hypercore_protocol::{hypercore::Hypercore, schema::*, Channel, Message};
 use random_access_storage::RandomAccess;
 use std::fmt::Debug;
 
-use super::{on_message, PeerState};
+use super::{on_message, PeerEvent, PeerState};
 
 pub(super) async fn on_peer<T>(
     mut hypercore: Arc<Mutex<Hypercore<T>>>,
     mut peer_state: PeerState,
     mut channel: Channel,
-) where
+    peer_event_sender: &mut Sender<PeerEvent>,
+) -> Result<()>
+where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send + 'static,
 {
     let info = {
@@ -44,18 +48,20 @@ pub(super) async fn on_peer<T>(
         };
         channel
             .send_batch(&[Message::Synchronize(sync_msg), Message::Range(range_msg)])
-            .await
-            .unwrap();
+            .await?;
     } else {
-        channel.send(Message::Synchronize(sync_msg)).await.unwrap();
+        channel.send(Message::Synchronize(sync_msg)).await?;
     }
     while let Some(message) = channel.next().await {
-        let ready = on_message(&mut hypercore, &mut peer_state, &mut channel, message)
-            .await
-            .expect("on_message should return Ok");
-        if ready {
-            channel.close().await.expect("Should be able to close");
-            break;
+        let event = on_message(&mut hypercore, &mut peer_state, &mut channel, message).await?;
+        if let Some(event) = event {
+            peer_event_sender.send(event.clone()).await?;
+            if let PeerEvent::PeersAdvertised(_) = event {
+                // When there are new peers advertised, let's just close the channel, write
+                // the new peers to state and reopen.
+                channel.close().await?;
+            }
         }
     }
+    Ok(())
 }

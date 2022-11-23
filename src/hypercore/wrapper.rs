@@ -1,3 +1,4 @@
+use async_channel::Sender;
 use async_std::sync::{Arc, Mutex};
 #[cfg(not(target_arch = "wasm32"))]
 use async_std::task;
@@ -10,7 +11,7 @@ use std::fmt::Debug;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_futures::spawn_local;
 
-use super::{on_peer, PeerState};
+use super::{on_peer, PeerEvent, PeerState};
 
 #[derive(Debug, Clone)]
 pub struct HypercoreWrapper<T>
@@ -46,20 +47,35 @@ impl<T> HypercoreWrapper<T>
 where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send + 'static,
 {
-    pub fn key(&self) -> &[u8; 32] {
+    pub(super) fn key(&self) -> &[u8; 32] {
         &self.key
     }
 
-    pub fn on_peer(&self, channel: Channel) {
+    pub(super) fn on_channel(&self, channel: Channel, peer_event_sender: &mut Sender<PeerEvent>) {
         let peer_state = PeerState::default();
         let hypercore = self.hypercore.clone();
+        let mut peer_event_sender_for_task = peer_event_sender.clone();
         #[cfg(not(target_arch = "wasm32"))]
         task::spawn(async move {
-            on_peer(hypercore, peer_state, channel).await;
+            on_peer(
+                hypercore,
+                peer_state,
+                channel,
+                &mut peer_event_sender_for_task,
+            )
+            .await
+            .expect("peer connect failed");
         });
         #[cfg(target_arch = "wasm32")]
         spawn_local(async move {
-            on_peer(hypercore, peer_state, channel).await;
+            on_peer(
+                hypercore,
+                peer_state,
+                channel,
+                &mut peer_event_sender_for_task,
+            )
+            .await
+            .expect("peer connect failed");
         });
     }
 }

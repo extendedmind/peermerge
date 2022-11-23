@@ -8,14 +8,14 @@ use hypercore_protocol::{
 use random_access_storage::RandomAccess;
 use std::fmt::Debug;
 
-use super::PeerState;
+use super::{PeerEvent, PeerState};
 
 pub(super) async fn on_message<T>(
     hypercore: &mut Arc<Mutex<Hypercore<T>>>,
     peer_state: &mut PeerState,
     channel: &mut Channel,
     message: Message,
-) -> Result<bool>
+) -> Result<Option<PeerEvent>>
 where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send,
 {
@@ -184,11 +184,19 @@ where
             channel.send_batch(&messages).await.unwrap();
         }
         Message::Range(message) => {
+            let info = {
+                let hypercore = hypercore.lock().await;
+                hypercore.info()
+            };
+            if message.start == 0 && message.length == info.contiguous_length {
+                return Ok(None);
+            }
+
             // Should something be done with a Range?
         }
         _ => {
             panic!("Received unexpected message {:?}", message);
         }
     };
-    Ok(false)
+    Ok(None)
 }

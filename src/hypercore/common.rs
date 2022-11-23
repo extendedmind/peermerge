@@ -24,3 +24,9 @@ impl Default for PeerState {
         }
     }
 }
+
+#[derive(Clone, Debug)]
+pub(super) enum PeerEvent {
+    PeersAdvertised(Vec<String>),
+    PeerSynced([u8; 32]),
+}

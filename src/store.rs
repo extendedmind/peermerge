@@ -43,16 +43,16 @@ where
             .and_then(|doc_state| doc_state.1.get(&discovery_key))
     }
 
-    pub fn get_doc_state(
+    pub fn get_mut(
         &mut self,
         doc_url: &str,
-    ) -> Option<&(
+    ) -> Option<&mut (
         Option<Arc<Mutex<Automerge>>>,
         HashMap<[u8; 32], Arc<Mutex<HypercoreWrapper<T>>>>,
     )> {
         let public_key = to_public_key(doc_url);
         let discovery_key = discovery_key_from_public_key(&public_key);
-        self.docs.get(&discovery_key)
+        self.docs.get_mut(&discovery_key)
     }
 }
 

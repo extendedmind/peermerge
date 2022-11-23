@@ -1,20 +1,41 @@
+use async_channel::{unbounded, Receiver, Sender};
 use async_std::sync::{Arc, Mutex};
+#[cfg(not(target_arch = "wasm32"))]
+use async_std::task;
 use futures_lite::{AsyncRead, AsyncWrite, StreamExt};
 use hypercore_protocol::{Event, Protocol};
 use random_access_storage::RandomAccess;
 use std::{collections::HashMap, fmt::Debug};
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen_futures::spawn_local;
 
+use super::common::PeerEvent;
 use super::HypercoreWrapper;
+use crate::common::SynchronizeEvent;
 
-pub async fn on_protocol<T, IO>(
+pub(crate) async fn on_protocol<T, IO>(
     protocol: &mut Protocol<IO>,
-    hypercore_store: &HashMap<[u8; 32], Arc<Mutex<HypercoreWrapper<T>>>>,
+    hypercore_store: &mut HashMap<[u8; 32], Arc<Mutex<HypercoreWrapper<T>>>>,
+    sync_event_sender: &mut Sender<SynchronizeEvent>,
 ) -> anyhow::Result<()>
 where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send + 'static,
     IO: AsyncWrite + AsyncRead + Send + Unpin + 'static,
 {
     let is_initiator = protocol.is_initiator();
+    let (mut peer_event_sender, peer_event_receiver): (Sender<PeerEvent>, Receiver<PeerEvent>) =
+        unbounded();
+
+    let sync_event_sender = sync_event_sender.clone();
+    #[cfg(not(target_arch = "wasm32"))]
+    task::spawn(async move {
+        on_peer_event(peer_event_receiver, sync_event_sender).await;
+    });
+    #[cfg(target_arch = "wasm32")]
+    spawn_local(async move {
+        on_peer_event(peer_event_receiver, sync_event_sender).await;
+    });
+
     while let Some(event) = protocol.next().await {
         let event = event?;
         match event {
@@ -35,7 +56,7 @@ where
             Event::Channel(channel) => {
                 if let Some(hypercore) = hypercore_store.get(channel.discovery_key()) {
                     let hypercore = hypercore.lock().await;
-                    hypercore.on_peer(channel);
+                    hypercore.on_channel(channel, &mut peer_event_sender);
                 }
             }
             Event::Close(_dkey) => {}
@@ -44,4 +65,11 @@ where
     }
 
     Ok(())
+}
+
+async fn on_peer_event(
+    mut peer_event_receiver: Receiver<PeerEvent>,
+    mut sync_event_sender: Sender<SynchronizeEvent>,
+) {
+    while let Some(event) = peer_event_receiver.next().await {}
 }

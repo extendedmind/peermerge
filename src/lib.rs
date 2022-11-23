@@ -8,9 +8,12 @@
 // 5. PeerA creates a read-only hypercore for PeerB's hypercore.
 
 mod automerge;
+mod common;
 mod encoding;
 mod hypercore;
 mod repo;
 mod store;
 
+pub use ::automerge::Automerge;
+pub use common::{StateEvent, SynchronizeEvent};
 pub use repo::Repo;

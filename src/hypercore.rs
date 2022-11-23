@@ -9,7 +9,7 @@ mod protocol;
 mod tcp;
 mod wrapper;
 
-use common::PeerState;
+use common::{PeerEvent, PeerState};
 use messaging::on_message;
 use peer::on_peer;
 
