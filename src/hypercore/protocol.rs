@@ -10,12 +10,12 @@ use std::{collections::HashMap, fmt::Debug};
 use wasm_bindgen_futures::spawn_local;
 
 use super::common::PeerEvent;
-use super::HypercoreWrapper;
 use crate::common::SynchronizeEvent;
+use crate::store::HypercoreStore;
 
 pub(crate) async fn on_protocol<T, IO>(
     protocol: &mut Protocol<IO>,
-    hypercores: &mut HashMap<[u8; 32], Arc<Mutex<HypercoreWrapper<T>>>>,
+    hypercore_store: &mut HypercoreStore<T>,
     sync_event_sender: &mut Sender<SynchronizeEvent>,
 ) -> anyhow::Result<()>
 where
@@ -41,22 +41,26 @@ where
         match event {
             Event::Handshake(_) => {
                 if is_initiator {
-                    for hypercore in hypercores.values() {
+                    for hypercore in hypercore_store.hypercores.values() {
                         let hypercore = hypercore.lock().await;
                         protocol.open(hypercore.key().clone()).await?;
                     }
                 }
             }
             Event::DiscoveryKey(dkey) => {
-                if let Some(hypercore) = hypercores.get(&dkey) {
+                if let Some(hypercore) = hypercore_store.hypercores.get(&dkey) {
                     let hypercore = hypercore.lock().await;
                     protocol.open(hypercore.key().clone()).await?;
                 }
             }
             Event::Channel(channel) => {
-                if let Some(hypercore) = hypercores.get(channel.discovery_key()) {
+                if let Some(hypercore) = hypercore_store.hypercores.get(channel.discovery_key()) {
                     let hypercore = hypercore.lock().await;
-                    hypercore.on_channel(channel, &mut peer_event_sender);
+                    hypercore.on_channel(
+                        channel,
+                        hypercore_store.peer_public_keys(),
+                        &mut peer_event_sender,
+                    );
                 }
             }
             Event::Close(_dkey) => {}

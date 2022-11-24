@@ -91,7 +91,7 @@ where
         IO: AsyncWrite + AsyncRead + Send + Unpin + 'static,
     {
         if let Some(hypercore_store) = self.store.lock().await.get_mut(doc_url) {
-            on_protocol(protocol, &mut hypercore_store.hypercores, sync_event_sender).await?
+            on_protocol(protocol, hypercore_store, sync_event_sender).await?
         }
         Ok(())
     }

@@ -51,8 +51,13 @@ where
         &self.key
     }
 
-    pub(super) fn on_channel(&self, channel: Channel, peer_event_sender: &mut Sender<PeerEvent>) {
-        let peer_state = PeerState::default();
+    pub(super) fn on_channel(
+        &self,
+        channel: Channel,
+        peer_public_keys: Vec<[u8; 32]>,
+        peer_event_sender: &mut Sender<PeerEvent>,
+    ) {
+        let peer_state = PeerState::new(peer_public_keys);
         let hypercore = self.hypercore.clone();
         let mut peer_event_sender_for_task = peer_event_sender.clone();
         #[cfg(not(target_arch = "wasm32"))]

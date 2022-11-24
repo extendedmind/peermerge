@@ -10,6 +10,8 @@ use std::fmt::Debug;
 
 use super::{PeerEvent, PeerState};
 
+const HYPERMERGE_ADVERTISE_MSG: &str = "hypermerge/v1/advertise";
+
 pub(super) async fn on_message<T>(
     hypercore: &mut Arc<Mutex<Hypercore<T>>>,
     peer_state: &mut PeerState,
@@ -194,6 +196,12 @@ where
 
             // Should something be done with a Range?
         }
+        Message::Extension(message) => match message.name.as_str() {
+            HYPERMERGE_ADVERTISE_MSG => {}
+            _ => {
+                panic!("Received unexpected extension message {:?}", message);
+            }
+        },
         _ => {
             panic!("Received unexpected message {:?}", message);
         }

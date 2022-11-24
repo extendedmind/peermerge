@@ -6,13 +6,13 @@ use std::convert::TryInto;
 #[derive(Debug)]
 pub(super) struct RepoState {
     pub(crate) version: u8,
-    pub(crate) doc_discovery_keys: Vec<[u8; 32]>,
+    pub(crate) doc_public_keys: Vec<[u8; 32]>,
 }
 impl Default for RepoState {
     fn default() -> Self {
         Self {
             version: 1,
-            doc_discovery_keys: Vec::new(),
+            doc_public_keys: Vec::new(),
         }
     }
 }
@@ -20,20 +20,20 @@ impl Default for RepoState {
 impl CompactEncoding<RepoState> for State {
     fn preencode(&mut self, value: &RepoState) {
         self.preencode(&value.version);
-        preencode_fixed_32_byte_vec(self, &value.doc_discovery_keys);
+        preencode_fixed_32_byte_vec(self, &value.doc_public_keys);
     }
 
     fn encode(&mut self, value: &RepoState, buffer: &mut [u8]) {
         self.encode(&value.version, buffer);
-        encode_fixed_32_byte_vec(self, &value.doc_discovery_keys, buffer);
+        encode_fixed_32_byte_vec(self, &value.doc_public_keys, buffer);
     }
 
     fn decode(&mut self, buffer: &[u8]) -> RepoState {
         let version: u8 = self.decode(buffer);
-        let doc_discovery_keys = decode_fixed_32_byte_vec(self, buffer);
+        let doc_public_keys = decode_fixed_32_byte_vec(self, buffer);
         RepoState {
             version,
-            doc_discovery_keys,
+            doc_public_keys,
         }
     }
 }
@@ -42,13 +42,13 @@ impl CompactEncoding<RepoState> for State {
 #[derive(Debug)]
 pub(super) struct DocState {
     pub(crate) version: u8,
-    pub(crate) peer_discovery_keys: Vec<[u8; 32]>,
+    pub(crate) peer_public_keys: Vec<[u8; 32]>,
 }
 impl Default for DocState {
     fn default() -> Self {
         Self {
             version: 1,
-            peer_discovery_keys: Vec::new(),
+            peer_public_keys: Vec::new(),
         }
     }
 }
@@ -56,21 +56,47 @@ impl Default for DocState {
 impl CompactEncoding<DocState> for State {
     fn preencode(&mut self, value: &DocState) {
         self.preencode(&value.version);
-        preencode_fixed_32_byte_vec(self, &value.peer_discovery_keys);
+        preencode_fixed_32_byte_vec(self, &value.peer_public_keys);
     }
 
     fn encode(&mut self, value: &DocState, buffer: &mut [u8]) {
         self.encode(&value.version, buffer);
-        encode_fixed_32_byte_vec(self, &value.peer_discovery_keys, buffer);
+        encode_fixed_32_byte_vec(self, &value.peer_public_keys, buffer);
     }
 
     fn decode(&mut self, buffer: &[u8]) -> DocState {
         let version: u8 = self.decode(buffer);
-        let peer_discovery_keys = decode_fixed_32_byte_vec(self, buffer);
+        let peer_public_keys = decode_fixed_32_byte_vec(self, buffer);
         DocState {
             version,
-            peer_discovery_keys,
+            peer_public_keys,
         }
+    }
+}
+
+/// An AdvertiseMessage transmits all of the active public keys the peer knows to the other peer
+#[derive(Debug)]
+pub(super) struct AdvertiseMessage {
+    pub(crate) public_keys: Vec<[u8; 32]>,
+}
+impl AdvertiseMessage {
+    pub fn new(public_keys: Vec<[u8; 32]>) -> Self {
+        Self { public_keys }
+    }
+}
+
+impl CompactEncoding<AdvertiseMessage> for State {
+    fn preencode(&mut self, value: &AdvertiseMessage) {
+        preencode_fixed_32_byte_vec(self, &value.public_keys);
+    }
+
+    fn encode(&mut self, value: &AdvertiseMessage, buffer: &mut [u8]) {
+        encode_fixed_32_byte_vec(self, &value.public_keys, buffer);
+    }
+
+    fn decode(&mut self, buffer: &[u8]) -> AdvertiseMessage {
+        let public_keys = decode_fixed_32_byte_vec(self, buffer);
+        AdvertiseMessage { public_keys }
     }
 }
 
