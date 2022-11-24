@@ -75,5 +75,7 @@ async fn on_peer_event(
     mut peer_event_receiver: Receiver<PeerEvent>,
     mut sync_event_sender: Sender<SynchronizeEvent>,
 ) {
-    while let Some(event) = peer_event_receiver.next().await {}
+    while let Some(event) = peer_event_receiver.next().await {
+        println!("GOT NEW PEER EVENT {:?}", event);
+    }
 }

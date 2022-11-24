@@ -1,7 +1,10 @@
 use anyhow::Result;
 use async_std::sync::{Arc, Mutex};
 use hypercore_protocol::{
-    hypercore::{Hypercore, RequestBlock, RequestUpgrade},
+    hypercore::{
+        compact_encoding::{CompactEncoding, State},
+        Hypercore, RequestBlock, RequestUpgrade,
+    },
     schema::*,
     Channel, Message,
 };
@@ -9,8 +12,23 @@ use random_access_storage::RandomAccess;
 use std::fmt::Debug;
 
 use super::{PeerEvent, PeerState};
+use crate::encoding::AdvertiseMessage;
 
 const HYPERMERGE_ADVERTISE_MSG: &str = "hypermerge/v1/advertise";
+
+pub(super) fn create_advertise_message(peer_state: &PeerState) -> Message {
+    let advertise_message: AdvertiseMessage = AdvertiseMessage {
+        public_keys: peer_state.peer_public_keys.clone(),
+    };
+    let mut enc_state = State::new();
+    enc_state.preencode(&advertise_message);
+    let mut buffer = enc_state.create_buffer();
+    enc_state.encode(&advertise_message, &mut buffer);
+    Message::Extension(Extension {
+        name: HYPERMERGE_ADVERTISE_MSG.to_string(),
+        message: buffer.to_vec(),
+    })
+}
 
 pub(super) async fn on_message<T>(
     hypercore: &mut Arc<Mutex<Hypercore<T>>>,
@@ -191,13 +209,63 @@ where
                 hypercore.info()
             };
             if message.start == 0 && message.length == info.contiguous_length {
+                // TODO: Ready with this core
                 return Ok(None);
             }
-
-            // Should something be done with a Range?
         }
         Message::Extension(message) => match message.name.as_str() {
-            HYPERMERGE_ADVERTISE_MSG => {}
+            HYPERMERGE_ADVERTISE_MSG => {
+                let mut dec_state = State::from_buffer(&message.message);
+                let advertise_message: AdvertiseMessage = dec_state.decode(&message.message);
+                let new_peers =
+                    peer_state.filter_new_peer_public_keys(&advertise_message.public_keys);
+
+                if new_peers.is_empty() {
+                    // There are no new peers, start sync
+                    let info = {
+                        let hypercore = hypercore.lock().await;
+                        hypercore.info()
+                    };
+
+                    if info.fork != peer_state.remote_fork {
+                        peer_state.can_upgrade = false;
+                    }
+                    let remote_length = if info.fork == peer_state.remote_fork {
+                        peer_state.remote_length
+                    } else {
+                        0
+                    };
+
+                    let sync_msg = Synchronize {
+                        fork: info.fork,
+                        length: info.length,
+                        remote_length,
+                        can_upgrade: peer_state.can_upgrade,
+                        uploading: true,
+                        downloading: true,
+                    };
+
+                    if info.contiguous_length > 0 {
+                        let range_msg = Range {
+                            drop: false,
+                            start: 0,
+                            length: info.contiguous_length,
+                        };
+                        channel
+                            .send_batch(&[
+                                Message::Synchronize(sync_msg),
+                                Message::Range(range_msg),
+                            ])
+                            .await?;
+                    } else {
+                        channel.send(Message::Synchronize(sync_msg)).await?;
+                    }
+                }
+                if !new_peers.is_empty() {
+                    // New peers found, return a peer event
+                    return Ok(Some(PeerEvent::NewPeersAdvertised(new_peers)));
+                }
+            }
             _ => {
                 panic!("Received unexpected extension message {:?}", message);
             }
