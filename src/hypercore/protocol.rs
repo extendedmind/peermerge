@@ -15,7 +15,7 @@ use crate::common::SynchronizeEvent;
 
 pub(crate) async fn on_protocol<T, IO>(
     protocol: &mut Protocol<IO>,
-    hypercore_store: &mut HashMap<[u8; 32], Arc<Mutex<HypercoreWrapper<T>>>>,
+    hypercores: &mut HashMap<[u8; 32], Arc<Mutex<HypercoreWrapper<T>>>>,
     sync_event_sender: &mut Sender<SynchronizeEvent>,
 ) -> anyhow::Result<()>
 where
@@ -41,20 +41,20 @@ where
         match event {
             Event::Handshake(_) => {
                 if is_initiator {
-                    for hypercore in hypercore_store.values() {
+                    for hypercore in hypercores.values() {
                         let hypercore = hypercore.lock().await;
                         protocol.open(hypercore.key().clone()).await?;
                     }
                 }
             }
             Event::DiscoveryKey(dkey) => {
-                if let Some(hypercore) = hypercore_store.get(&dkey) {
+                if let Some(hypercore) = hypercores.get(&dkey) {
                     let hypercore = hypercore.lock().await;
                     protocol.open(hypercore.key().clone()).await?;
                 }
             }
             Event::Channel(channel) => {
-                if let Some(hypercore) = hypercore_store.get(channel.discovery_key()) {
+                if let Some(hypercore) = hypercores.get(channel.discovery_key()) {
                     let hypercore = hypercore.lock().await;
                     hypercore.on_channel(channel, &mut peer_event_sender);
                 }

@@ -1,6 +1,5 @@
 use async_channel::{Receiver, Sender};
 use async_std::sync::{Arc, Mutex};
-#[cfg(not(target_arch = "wasm32"))]
 use automerge::{Prop, ScalarValue};
 use futures_lite::{AsyncRead, AsyncWrite, StreamExt};
 use hypercore_protocol::Protocol;
@@ -16,7 +15,7 @@ use wasm_bindgen_futures::spawn_local;
 
 use crate::{
     automerge::init_doc_with_root_props, common::SynchronizeEvent, hypercore::on_protocol,
-    store::HypermergeStore, StateEvent,
+    store::DocStore, StateEvent,
 };
 
 /// Repo is the main abstraction of hypermerge
@@ -26,15 +25,14 @@ pub struct Repo<T>
 where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send,
 {
-    store: Arc<Mutex<HypermergeStore<T>>>,
+    store: Arc<Mutex<DocStore<T>>>,
     state: Arc<Mutex<T>>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 impl Repo<RandomAccessDisk> {
     pub async fn new_disk(data_root_dir: &PathBuf) -> Self {
-        let store: HypermergeStore<RandomAccessDisk> =
-            HypermergeStore::new_disk(data_root_dir).await;
+        let store: DocStore<RandomAccessDisk> = DocStore::new_disk(data_root_dir).await;
         let state_path = data_root_dir.join(PathBuf::from("state.bin"));
         let state = RandomAccessDisk::builder(state_path).build().await.unwrap();
         Self {
@@ -58,7 +56,7 @@ impl Repo<RandomAccessDisk> {
 
 impl Repo<RandomAccessMemory> {
     pub async fn new_memory() -> Self {
-        let store: HypermergeStore<RandomAccessMemory> = HypermergeStore::new_memory();
+        let store: DocStore<RandomAccessMemory> = DocStore::new_memory().await;
         let state = RandomAccessMemory::default();
         Self {
             store: Arc::new(Mutex::new(store)),
@@ -92,8 +90,8 @@ where
     where
         IO: AsyncWrite + AsyncRead + Send + Unpin + 'static,
     {
-        if let Some((_doc, hypercore_store)) = self.store.lock().await.get_mut(doc_url) {
-            on_protocol(protocol, hypercore_store, sync_event_sender).await?
+        if let Some(hypercore_store) = self.store.lock().await.get_mut(doc_url) {
+            on_protocol(protocol, &mut hypercore_store.hypercores, sync_event_sender).await?
         }
         Ok(())
     }

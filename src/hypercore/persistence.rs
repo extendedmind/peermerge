@@ -67,7 +67,7 @@ async fn create_new_disk_hypercore(
     discovery_key: &[u8; 32],
     init_data: Option<Vec<u8>>,
 ) -> HypercoreWrapper<RandomAccessDisk> {
-    let hypercore_dir = prefix.join(PathBuf::from(hex::encode(discovery_key)));
+    let hypercore_dir = get_path_from_discovery_key(prefix, discovery_key);
     let storage = Storage::new_disk(&hypercore_dir, true).await.unwrap();
     let mut hypercore = Hypercore::new_with_key_pair(storage, key_pair)
         .await
@@ -76,6 +76,11 @@ async fn create_new_disk_hypercore(
         hypercore.append(&init_data).await.unwrap();
     }
     HypercoreWrapper::from_disk_hypercore(hypercore)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn get_path_from_discovery_key(prefix: &PathBuf, discovery_key: &[u8; 32]) -> PathBuf {
+    prefix.join(PathBuf::from(hex::encode(discovery_key)))
 }
 
 pub(crate) async fn create_new_write_memory_hypercore(
