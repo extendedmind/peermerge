@@ -73,9 +73,20 @@ where
 
 async fn on_peer_event(
     mut peer_event_receiver: Receiver<PeerEvent>,
-    mut sync_event_sender: Sender<SynchronizeEvent>,
+    sync_event_sender: Sender<SynchronizeEvent>,
 ) {
     while let Some(event) = peer_event_receiver.next().await {
         println!("GOT NEW PEER EVENT {:?}", event);
+        match event {
+            PeerEvent::NewPeersAdvertised(event) => {
+                sync_event_sender
+                    .send(SynchronizeEvent::NewPeersAdvertised(event.len()))
+                    .await
+                    .unwrap();
+            }
+            PeerEvent::PeerSynced(_) => {
+                unimplemented!();
+            }
+        }
     }
 }

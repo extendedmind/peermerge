@@ -7,6 +7,6 @@ pub enum StateEvent {
 
 #[derive(Clone, Debug)]
 pub enum SynchronizeEvent {
-    NewPeersAdvertized(Vec<String>),
+    NewPeersAdvertised(usize),
     DocumentCreated(),
 }
