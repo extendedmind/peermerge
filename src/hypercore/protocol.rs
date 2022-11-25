@@ -5,11 +5,12 @@ use async_std::task;
 use futures_lite::{AsyncRead, AsyncWrite, StreamExt};
 use hypercore_protocol::{Event, Protocol};
 use random_access_storage::RandomAccess;
-use std::{collections::HashMap, fmt::Debug};
+use std::fmt::Debug;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_futures::spawn_local;
 
 use super::common::PeerEvent;
+use crate::common::storage::DocStateWrapper;
 use crate::common::SynchronizeEvent;
 use crate::store::HypercoreStore;
 
@@ -27,13 +28,14 @@ where
         unbounded();
 
     let sync_event_sender = sync_event_sender.clone();
+    let doc_state = hypercore_store.doc_state();
     #[cfg(not(target_arch = "wasm32"))]
     task::spawn(async move {
-        on_peer_event(peer_event_receiver, sync_event_sender).await;
+        on_peer_event(peer_event_receiver, sync_event_sender, doc_state).await;
     });
     #[cfg(target_arch = "wasm32")]
     spawn_local(async move {
-        on_peer_event(peer_event_receiver, sync_event_sender).await;
+        on_peer_event(peer_event_receiver, sync_event_sender, doc_state).await;
     });
 
     while let Some(event) = protocol.next().await {
@@ -58,12 +60,15 @@ where
                     let hypercore = hypercore.lock().await;
                     hypercore.on_channel(
                         channel,
-                        hypercore_store.peer_public_keys(),
+                        hypercore_store.peer_public_keys().await,
                         &mut peer_event_sender,
                     );
                 }
             }
-            Event::Close(_dkey) => {}
+            Event::Close(_dkey) => {
+                // When any channel is closed, stop listeningA
+                break;
+            }
             _ => {}
         }
     }
@@ -71,18 +76,30 @@ where
     Ok(())
 }
 
-async fn on_peer_event(
+async fn on_peer_event<T>(
     mut peer_event_receiver: Receiver<PeerEvent>,
     sync_event_sender: Sender<SynchronizeEvent>,
-) {
+    doc_state: Arc<Mutex<DocStateWrapper<T>>>,
+) where
+    T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send + 'static,
+{
     while let Some(event) = peer_event_receiver.next().await {
         println!("GOT NEW PEER EVENT {:?}", event);
         match event {
-            PeerEvent::NewPeersAdvertised(event) => {
+            PeerEvent::NewPeersAdvertised(public_keys) => {
+                {
+                    // Save new keys to state
+                    let mut doc_state = doc_state.lock().await;
+                    for public_key in &public_keys {
+                        doc_state.add_public_key_to_state(&public_key).await;
+                    }
+                }
                 sync_event_sender
-                    .send(SynchronizeEvent::NewPeersAdvertised(event.len()))
+                    .send(SynchronizeEvent::NewPeersAdvertised(public_keys.len()))
                     .await
                     .unwrap();
+                // Stop listening
+                break;
             }
             PeerEvent::PeerSynced(_) => {
                 unimplemented!();

@@ -162,15 +162,19 @@ where
 {
     pub(crate) doc: Option<Automerge>,
     pub(crate) hypercores: HashMap<[u8; 32], Arc<Mutex<HypercoreWrapper<T>>>>,
-    doc_state: DocStateWrapper<T>,
+    doc_state: Arc<Mutex<DocStateWrapper<T>>>,
 }
 
 impl<T> HypercoreStore<T>
 where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send,
 {
-    pub fn peer_public_keys(&self) -> Vec<[u8; 32]> {
-        self.doc_state.state().peer_public_keys.clone()
+    pub async fn peer_public_keys(&self) -> Vec<[u8; 32]> {
+        self.doc_state.lock().await.state().peer_public_keys.clone()
+    }
+
+    pub fn doc_state(&self) -> Arc<Mutex<DocStateWrapper<T>>> {
+        self.doc_state.clone()
     }
 }
 
@@ -190,7 +194,7 @@ impl HypercoreStore<RandomAccessMemory> {
         Self {
             doc,
             hypercores,
-            doc_state,
+            doc_state: Arc::new(Mutex::new(doc_state)),
         }
     }
 }
@@ -213,7 +217,7 @@ impl HypercoreStore<RandomAccessDisk> {
         Self {
             doc,
             hypercores,
-            doc_state,
+            doc_state: Arc::new(Mutex::new(doc_state)),
         }
     }
 }
