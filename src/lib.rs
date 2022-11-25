@@ -9,7 +9,6 @@
 
 mod automerge;
 mod common;
-mod encoding;
 mod hypercore;
 mod repo;
 mod store;

@@ -2,6 +2,7 @@
 use hypercore_protocol::hypercore::compact_encoding::{CompactEncoding, State};
 use std::convert::TryInto;
 
+pub(crate) use crate::common::message::AdvertiseMessage;
 pub(crate) use crate::common::state::{DocState, RepoState};
 
 impl CompactEncoding<RepoState> for State {
@@ -43,17 +44,6 @@ impl CompactEncoding<DocState> for State {
             version,
             peer_public_keys,
         }
-    }
-}
-
-/// An AdvertiseMessage transmits all of the active public keys the peer knows to the other peer
-#[derive(Debug)]
-pub(super) struct AdvertiseMessage {
-    pub(crate) public_keys: Vec<[u8; 32]>,
-}
-impl AdvertiseMessage {
-    pub fn new(public_keys: Vec<[u8; 32]>) -> Self {
-        Self { public_keys }
     }
 }
 

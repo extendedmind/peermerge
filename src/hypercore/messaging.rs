@@ -12,7 +12,7 @@ use random_access_storage::RandomAccess;
 use std::fmt::Debug;
 
 use super::{PeerEvent, PeerState};
-use crate::encoding::AdvertiseMessage;
+use crate::common::message::AdvertiseMessage;
 
 const HYPERMERGE_ADVERTISE_MSG: &str = "hypermerge/v1/advertise";
 

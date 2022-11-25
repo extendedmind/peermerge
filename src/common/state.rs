@@ -1,3 +1,5 @@
+use std::fmt::Debug;
+
 /// A RepoState stores serialized information about the Repo.
 #[derive(Debug)]
 pub(crate) struct RepoState {
