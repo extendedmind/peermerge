@@ -11,7 +11,9 @@ use std::fmt::Debug;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_futures::spawn_local;
 
-use super::{on_peer, PeerEvent, PeerState};
+use crate::common::PeerEvent;
+
+use super::{on_peer, PeerState};
 
 #[derive(Debug, Clone)]
 pub struct HypercoreWrapper<T>
@@ -54,10 +56,18 @@ where
     pub(super) fn on_channel(
         &self,
         channel: Channel,
-        peer_public_keys: Vec<[u8; 32]>,
+        public_keys: Vec<[u8; 32]>,
         peer_event_sender: &mut Sender<PeerEvent>,
+        is_initiator: bool,
     ) {
-        let peer_state = PeerState::new(peer_public_keys);
+        println!(
+            "on_channel({}): id={}, len={}: {:?}",
+            is_initiator,
+            channel.id(),
+            public_keys.len(),
+            public_keys
+        );
+        let peer_state = PeerState::new(public_keys);
         let hypercore = self.hypercore.clone();
         let mut peer_event_sender_for_task = peer_event_sender.clone();
         #[cfg(not(target_arch = "wasm32"))]
@@ -67,6 +77,7 @@ where
                 peer_state,
                 channel,
                 &mut peer_event_sender_for_task,
+                is_initiator,
             )
             .await
             .expect("peer connect failed");
@@ -78,6 +89,7 @@ where
                 peer_state,
                 channel,
                 &mut peer_event_sender_for_task,
+                is_initiator,
             )
             .await
             .expect("peer connect failed");

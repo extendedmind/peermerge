@@ -20,8 +20,11 @@ pub(crate) fn generate_keys() -> (Keypair, String, [u8; 32]) {
 
 pub(crate) fn keys_from_public_key(public_key: &str) -> ([u8; 32], [u8; 32]) {
     let public_key: [u8; 32] = hex::decode(public_key).unwrap().try_into().unwrap();
-    let discovery_key: [u8; 32] = discovery_key(&public_key);
-    (public_key, discovery_key)
+    (public_key, discovery_key_from_public_key(&public_key))
+}
+
+pub(crate) fn discovery_key_from_public_key(public_key: &[u8; 32]) -> [u8; 32] {
+    discovery_key(public_key)
 }
 
 #[cfg(not(target_arch = "wasm32"))]

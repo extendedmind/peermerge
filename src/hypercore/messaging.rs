@@ -11,14 +11,14 @@ use hypercore_protocol::{
 use random_access_storage::RandomAccess;
 use std::fmt::Debug;
 
-use super::{PeerEvent, PeerState};
-use crate::common::message::AdvertiseMessage;
+use super::PeerState;
+use crate::common::{message::AdvertiseMessage, PeerEvent};
 
 const HYPERMERGE_ADVERTISE_MSG: &str = "hypermerge/v1/advertise";
 
 pub(super) fn create_advertise_message(peer_state: &PeerState) -> Message {
     let advertise_message: AdvertiseMessage = AdvertiseMessage {
-        public_keys: peer_state.peer_public_keys.clone(),
+        public_keys: peer_state.public_keys.clone(),
     };
     let mut enc_state = State::new();
     enc_state.preencode(&advertise_message);
@@ -35,11 +35,12 @@ pub(super) async fn on_message<T>(
     peer_state: &mut PeerState,
     channel: &mut Channel,
     message: Message,
+    is_initiator: bool,
 ) -> Result<Option<PeerEvent>>
 where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send,
 {
-    println!("GOT MESSAGE {:?}", message);
+    println!("on_message({}): GOT MESSAGE {:?}", is_initiator, message);
     match message {
         Message::Synchronize(message) => {
             let length_changed = message.length != peer_state.remote_length;
@@ -270,6 +271,9 @@ where
                 panic!("Received unexpected extension message {:?}", message);
             }
         },
+        Message::Close(message) => {
+            return Ok(Some(PeerEvent::PeerDisconnected(message.channel)));
+        }
         _ => {
             panic!("Received unexpected message {:?}", message);
         }

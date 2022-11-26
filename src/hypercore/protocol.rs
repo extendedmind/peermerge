@@ -1,109 +1,101 @@
-use async_channel::{unbounded, Receiver, Sender};
-use async_std::sync::{Arc, Mutex};
-#[cfg(not(target_arch = "wasm32"))]
-use async_std::task;
+use async_channel::Sender;
 use futures_lite::{AsyncRead, AsyncWrite, StreamExt};
 use hypercore_protocol::{Event, Protocol};
 use random_access_storage::RandomAccess;
 use std::fmt::Debug;
-#[cfg(target_arch = "wasm32")]
-use wasm_bindgen_futures::spawn_local;
+use std::io::ErrorKind;
 
-use super::common::PeerEvent;
-use crate::common::storage::DocStateWrapper;
-use crate::common::SynchronizeEvent;
+use crate::common::{PeerEvent, SynchronizeEvent};
 use crate::store::HypercoreStore;
 
 pub(crate) async fn on_protocol<T, IO>(
     protocol: &mut Protocol<IO>,
     hypercore_store: &mut HypercoreStore<T>,
+    peer_event_sender: &mut Sender<PeerEvent>,
     sync_event_sender: &mut Sender<SynchronizeEvent>,
+    is_initiator: bool,
 ) -> anyhow::Result<()>
 where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send + 'static,
     IO: AsyncWrite + AsyncRead + Send + Unpin + 'static,
 {
     let is_initiator = protocol.is_initiator();
-    let (mut peer_event_sender, peer_event_receiver): (Sender<PeerEvent>, Receiver<PeerEvent>) =
-        unbounded();
 
-    let sync_event_sender = sync_event_sender.clone();
-    let doc_state = hypercore_store.doc_state();
-    #[cfg(not(target_arch = "wasm32"))]
-    task::spawn(async move {
-        on_peer_event(peer_event_receiver, sync_event_sender, doc_state).await;
-    });
-    #[cfg(target_arch = "wasm32")]
-    spawn_local(async move {
-        on_peer_event(peer_event_receiver, sync_event_sender, doc_state).await;
-    });
-
+    println!(
+        "on_protocol({}): Begin listening to protocol events",
+        is_initiator
+    );
     while let Some(event) = protocol.next().await {
-        let event = event?;
+        println!(
+            "on_protocol({}): Got protocol event {:?}",
+            is_initiator, event,
+        );
         match event {
-            Event::Handshake(_) => {
-                if is_initiator {
-                    for hypercore in hypercore_store.hypercores.values() {
-                        let hypercore = hypercore.lock().await;
-                        protocol.open(hypercore.key().clone()).await?;
+            Err(err) => {
+                if err.kind() == ErrorKind::BrokenPipe {
+                    // Ignore broken pipe, can happen when the other end closes shop
+                    break;
+                }
+                return Err(anyhow::anyhow!(err));
+            }
+            Ok(event) => {
+                match event {
+                    Event::Handshake(_) => {
+                        if is_initiator {
+                            for hypercore in hypercore_store.hypercores().lock().await.values() {
+                                let hypercore = hypercore.lock().await;
+                                protocol.open(hypercore.key().clone()).await?;
+                            }
+                        }
                     }
+                    Event::DiscoveryKey(dkey) => {
+                        if let Some(hypercore) =
+                            hypercore_store.hypercores().lock().await.get(&dkey)
+                        {
+                            let hypercore = hypercore.lock().await;
+                            protocol.open(hypercore.key().clone()).await?;
+                        }
+                    }
+                    Event::Channel(channel) => {
+                        println!(
+                            "on_protocol({}): Event:Channel: id={}",
+                            is_initiator,
+                            channel.id()
+                        );
+                        if let Some(hypercore) = hypercore_store
+                            .hypercores()
+                            .lock()
+                            .await
+                            .get(channel.discovery_key())
+                        {
+                            let hypercore = hypercore.lock().await;
+                            println!(
+                                "on_protocol({}): reading public keys from store",
+                                is_initiator
+                            );
+                            hypercore.on_channel(
+                                channel,
+                                hypercore_store.public_keys().await,
+                                peer_event_sender,
+                                is_initiator,
+                            );
+                        }
+                    }
+                    Event::Close(_) => {
+                        // When a channel is closed, reopen all. Reopening is needed during initial
+                        // advertising of public keys.
+                        if is_initiator {
+                            for hypercore in hypercore_store.hypercores().lock().await.values() {
+                                let hypercore = hypercore.lock().await;
+                                protocol.open(hypercore.key().clone()).await?;
+                            }
+                        }
+                    }
+                    _ => {}
                 }
             }
-            Event::DiscoveryKey(dkey) => {
-                if let Some(hypercore) = hypercore_store.hypercores.get(&dkey) {
-                    let hypercore = hypercore.lock().await;
-                    protocol.open(hypercore.key().clone()).await?;
-                }
-            }
-            Event::Channel(channel) => {
-                if let Some(hypercore) = hypercore_store.hypercores.get(channel.discovery_key()) {
-                    let hypercore = hypercore.lock().await;
-                    hypercore.on_channel(
-                        channel,
-                        hypercore_store.peer_public_keys().await,
-                        &mut peer_event_sender,
-                    );
-                }
-            }
-            Event::Close(_dkey) => {
-                // When any channel is closed, stop listeningA
-                break;
-            }
-            _ => {}
         }
     }
-
+    println!("on_protocol({}): returning", is_initiator);
     Ok(())
-}
-
-async fn on_peer_event<T>(
-    mut peer_event_receiver: Receiver<PeerEvent>,
-    sync_event_sender: Sender<SynchronizeEvent>,
-    doc_state: Arc<Mutex<DocStateWrapper<T>>>,
-) where
-    T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send + 'static,
-{
-    while let Some(event) = peer_event_receiver.next().await {
-        println!("GOT NEW PEER EVENT {:?}", event);
-        match event {
-            PeerEvent::NewPeersAdvertised(public_keys) => {
-                {
-                    // Save new keys to state
-                    let mut doc_state = doc_state.lock().await;
-                    for public_key in &public_keys {
-                        doc_state.add_public_key_to_state(&public_key).await;
-                    }
-                }
-                sync_event_sender
-                    .send(SynchronizeEvent::NewPeersAdvertised(public_keys.len()))
-                    .await
-                    .unwrap();
-                // Stop listening
-                break;
-            }
-            PeerEvent::PeerSynced(_) => {
-                unimplemented!();
-            }
-        }
-    }
 }

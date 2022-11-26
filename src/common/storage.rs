@@ -62,8 +62,8 @@ impl<T> DocStateWrapper<T>
 where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send,
 {
-    pub async fn add_public_key_to_state(&mut self, public_key: &[u8; 32]) {
-        self.state.peer_public_keys.push(public_key.clone());
+    pub async fn add_public_keys_to_state(&mut self, public_keys: Vec<[u8; 32]>) {
+        self.state.peer_public_keys.extend(public_keys);
         write_doc_state(&self.state, &mut self.storage).await;
     }
 
@@ -73,8 +73,8 @@ where
 }
 
 impl DocStateWrapper<RandomAccessMemory> {
-    pub async fn new_memory() -> Self {
-        let state = DocState::default();
+    pub async fn new_memory(public_key: [u8; 32], peer_public_keys: Vec<[u8; 32]>) -> Self {
+        let state = DocState::new(public_key, peer_public_keys);
         let mut storage = RandomAccessMemory::default();
         write_doc_state(&state, &mut storage).await;
         Self { state, storage }
@@ -82,8 +82,12 @@ impl DocStateWrapper<RandomAccessMemory> {
 }
 
 impl DocStateWrapper<RandomAccessDisk> {
-    pub async fn new_disk(data_root_dir: &PathBuf) -> Self {
-        let state = DocState::default();
+    pub async fn new_disk(
+        public_key: [u8; 32],
+        peer_public_keys: Vec<[u8; 32]>,
+        data_root_dir: &PathBuf,
+    ) -> Self {
+        let state = DocState::new(public_key, peer_public_keys);
         let state_path = data_root_dir.join(PathBuf::from("hypermerge_state.bin"));
         let mut storage = RandomAccessDisk::builder(state_path).build().await.unwrap();
         write_doc_state(&state, &mut storage).await;

@@ -19,13 +19,15 @@ impl Default for RepoState {
 #[derive(Debug)]
 pub(crate) struct DocState {
     pub(crate) version: u8,
+    pub(crate) public_key: [u8; 32],
     pub(crate) peer_public_keys: Vec<[u8; 32]>,
 }
-impl Default for DocState {
-    fn default() -> Self {
+impl DocState {
+    pub fn new(public_key: [u8; 32], peer_public_keys: Vec<[u8; 32]>) -> Self {
         Self {
             version: 1,
-            peer_public_keys: Vec::new(),
+            public_key,
+            peer_public_keys,
         }
     }
 }

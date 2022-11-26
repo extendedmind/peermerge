@@ -6,4 +6,4 @@ pub(crate) mod message;
 pub(crate) mod state;
 pub(crate) mod storage;
 
-pub use event::{StateEvent, SynchronizeEvent};
+pub use event::{PeerEvent, StateEvent, SynchronizeEvent};

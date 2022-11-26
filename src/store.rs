@@ -13,8 +13,8 @@ use crate::hypercore::{
 use crate::{
     common::storage::{DocStateWrapper, RepoStateWrapper},
     hypercore::{
-        create_new_read_memory_hypercore, create_new_write_memory_hypercore, generate_keys,
-        keys_from_public_key, HypercoreWrapper,
+        create_new_read_memory_hypercore, create_new_write_memory_hypercore,
+        discovery_key_from_public_key, generate_keys, keys_from_public_key, HypercoreWrapper,
     },
 };
 
@@ -63,9 +63,12 @@ impl DocStore<RandomAccessMemory> {
         self.repo_state.add_public_key_to_state(&public_key).await;
 
         // Insert a hypercore store to the doc store
-        let hypercore_store =
-            HypercoreStore::new_memory(public_key, discovery_key.clone(), hypercore, Some(doc))
-                .await;
+        let hypercore_store = HypercoreStore::new_memory(
+            (public_key, discovery_key.clone(), hypercore),
+            vec![],
+            Some(doc),
+        )
+        .await;
         self.docs.insert(discovery_key, hypercore_store);
 
         // Return the doc url
@@ -74,19 +77,30 @@ impl DocStore<RandomAccessMemory> {
 
     pub async fn register_doc_memory(&mut self, doc_url: &str) {
         // Process keys from doc URL
-        let public_key = to_public_key(doc_url);
-        let (public_key, discovery_key) = keys_from_public_key(&public_key);
+        let doc_public_key = to_public_key(doc_url);
+        let (doc_public_key, doc_discovery_key) = keys_from_public_key(&doc_public_key);
 
-        // Create the memory hypercore
-        let hypercore = create_new_read_memory_hypercore(&public_key).await;
+        // Create the doc hypercore
+        let doc_hypercore = create_new_read_memory_hypercore(&doc_public_key).await;
+
+        // Create the write hypercore
+        let (write_key_pair, _, write_discovery_key) = generate_keys();
+        let write_public_key = *write_key_pair.public.as_bytes();
+        let write_hypercore = create_new_write_memory_hypercore(write_key_pair, vec![]).await;
 
         // Write the state
-        self.repo_state.add_public_key_to_state(&public_key).await;
+        self.repo_state
+            .add_public_key_to_state(&doc_public_key)
+            .await;
 
         // Insert a hypercore store to the doc store
-        let hypercore_store =
-            HypercoreStore::new_memory(public_key, discovery_key.clone(), hypercore, None).await;
-        self.docs.insert(discovery_key, hypercore_store);
+        let hypercore_store = HypercoreStore::new_memory(
+            (write_public_key, write_discovery_key, write_hypercore),
+            vec![(doc_public_key, doc_discovery_key.clone(), doc_hypercore)],
+            None,
+        )
+        .await;
+        self.docs.insert(doc_discovery_key, hypercore_store);
     }
 }
 
@@ -117,9 +131,8 @@ impl DocStore<RandomAccessDisk> {
 
         // Insert a hypercore store to the doc store
         let hypercore_store = HypercoreStore::new_disk(
-            public_key,
-            discovery_key.clone(),
-            hypercore,
+            (public_key, discovery_key.clone(), hypercore),
+            vec![],
             Some(doc),
             &get_path_from_discovery_key(&self.prefix, &discovery_key),
         )
@@ -132,26 +145,38 @@ impl DocStore<RandomAccessDisk> {
 
     pub async fn register_doc_disk(&mut self, doc_url: &str) {
         // Process keys from doc URL
-        let public_key = to_public_key(doc_url);
-        let (public_key, discovery_key) = keys_from_public_key(&public_key);
+        let doc_public_key = to_public_key(doc_url);
+        let (doc_public_key, doc_discovery_key) = keys_from_public_key(&doc_public_key);
 
-        // Create the disk hypercore
-        let hypercore =
-            create_new_read_disk_hypercore(&self.prefix, &public_key, &discovery_key).await;
+        // Create the doc hypercore
+        let doc_hypercore =
+            create_new_read_disk_hypercore(&self.prefix, &doc_public_key, &doc_discovery_key).await;
+
+        // Create the write hypercore
+        let (write_key_pair, write_encoded_public_key, write_discovery_key) = generate_keys();
+        let write_public_key = *write_key_pair.public.as_bytes();
+        let write_hypercore = create_new_write_disk_hypercore(
+            &self.prefix,
+            write_key_pair,
+            &write_discovery_key,
+            vec![],
+        )
+        .await;
 
         // Write the state
-        self.repo_state.add_public_key_to_state(&public_key).await;
+        self.repo_state
+            .add_public_key_to_state(&doc_public_key)
+            .await;
 
         // Insert a hypercore store to the doc store
         let hypercore_store = HypercoreStore::new_disk(
-            public_key,
-            discovery_key.clone(),
-            hypercore,
+            (write_public_key, write_discovery_key, write_hypercore),
+            vec![(doc_public_key, doc_discovery_key.clone(), doc_hypercore)],
             None,
-            &get_path_from_discovery_key(&self.prefix, &discovery_key),
+            &get_path_from_discovery_key(&self.prefix, &doc_discovery_key),
         )
         .await;
-        self.docs.insert(discovery_key, hypercore_store);
+        self.docs.insert(doc_discovery_key, hypercore_store);
     }
 }
 
@@ -160,8 +185,8 @@ pub(crate) struct HypercoreStore<T>
 where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send,
 {
-    pub(crate) doc: Option<Automerge>,
-    pub(crate) hypercores: HashMap<[u8; 32], Arc<Mutex<HypercoreWrapper<T>>>>,
+    doc: Option<Automerge>,
+    hypercores: Arc<Mutex<HashMap<[u8; 32], Arc<Mutex<HypercoreWrapper<T>>>>>>,
     doc_state: Arc<Mutex<DocStateWrapper<T>>>,
 }
 
@@ -169,31 +194,42 @@ impl<T> HypercoreStore<T>
 where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send,
 {
-    pub async fn peer_public_keys(&self) -> Vec<[u8; 32]> {
-        self.doc_state.lock().await.state().peer_public_keys.clone()
+    pub async fn public_keys(&self) -> Vec<[u8; 32]> {
+        let state = self.doc_state.lock().await;
+        let state = state.state();
+        let mut public_keys = state.peer_public_keys.clone();
+        public_keys.push(state.public_key);
+        public_keys
     }
 
     pub fn doc_state(&self) -> Arc<Mutex<DocStateWrapper<T>>> {
         self.doc_state.clone()
     }
+
+    pub fn hypercores(&self) -> Arc<Mutex<HashMap<[u8; 32], Arc<Mutex<HypercoreWrapper<T>>>>>> {
+        self.hypercores.clone()
+    }
 }
 
 impl HypercoreStore<RandomAccessMemory> {
     pub async fn new_memory(
-        public_key: [u8; 32],
-        discovery_key: [u8; 32],
-        hypercore: HypercoreWrapper<RandomAccessMemory>,
+        write_hypercore: ([u8; 32], [u8; 32], HypercoreWrapper<RandomAccessMemory>),
+        peer_hypercores: Vec<([u8; 32], [u8; 32], HypercoreWrapper<RandomAccessMemory>)>,
         doc: Option<Automerge>,
     ) -> Self {
-        let mut hypercores: HashMap<[u8; 32], Arc<Mutex<HypercoreWrapper<RandomAccessMemory>>>> =
+        let mut hypercore_map: HashMap<[u8; 32], Arc<Mutex<HypercoreWrapper<RandomAccessMemory>>>> =
             HashMap::new();
-        hypercores.insert(discovery_key, Arc::new(Mutex::new(hypercore)));
-
-        let mut doc_state = DocStateWrapper::new_memory().await;
-        doc_state.add_public_key_to_state(&public_key).await;
+        let (write_public_key, write_discovery_key, write_hypercore) = write_hypercore;
+        hypercore_map.insert(write_discovery_key, Arc::new(Mutex::new(write_hypercore)));
+        let mut peer_public_keys = vec![];
+        for (peer_public_key, peer_discovery_key, peer_hypercore) in peer_hypercores {
+            peer_public_keys.push(peer_public_key);
+            hypercore_map.insert(peer_discovery_key, Arc::new(Mutex::new(peer_hypercore)));
+        }
+        let doc_state = DocStateWrapper::new_memory(write_public_key, peer_public_keys).await;
         Self {
             doc,
-            hypercores,
+            hypercores: Arc::new(Mutex::new(hypercore_map)),
             doc_state: Arc::new(Mutex::new(doc_state)),
         }
     }
@@ -202,23 +238,40 @@ impl HypercoreStore<RandomAccessMemory> {
 #[cfg(not(target_arch = "wasm32"))]
 impl HypercoreStore<RandomAccessDisk> {
     pub async fn new_disk(
-        public_key: [u8; 32],
-        discovery_key: [u8; 32],
-        hypercore: HypercoreWrapper<RandomAccessDisk>,
+        write_hypercore: ([u8; 32], [u8; 32], HypercoreWrapper<RandomAccessDisk>),
+        peer_hypercores: Vec<([u8; 32], [u8; 32], HypercoreWrapper<RandomAccessDisk>)>,
         doc: Option<Automerge>,
         data_root_dir: &PathBuf,
     ) -> Self {
-        let mut hypercores: HashMap<[u8; 32], Arc<Mutex<HypercoreWrapper<RandomAccessDisk>>>> =
+        let mut hypercore_map: HashMap<[u8; 32], Arc<Mutex<HypercoreWrapper<RandomAccessDisk>>>> =
             HashMap::new();
-        hypercores.insert(discovery_key, Arc::new(Mutex::new(hypercore)));
-        let mut doc_state = DocStateWrapper::new_disk(&data_root_dir).await;
-        doc_state.add_public_key_to_state(&public_key).await;
+        let (write_public_key, write_discovery_key, write_hypercore) = write_hypercore;
+        hypercore_map.insert(write_discovery_key, Arc::new(Mutex::new(write_hypercore)));
+        let mut peer_public_keys = vec![];
+        for (peer_public_key, peer_discovery_key, peer_hypercore) in peer_hypercores {
+            peer_public_keys.push(peer_public_key);
+            hypercore_map.insert(peer_discovery_key, Arc::new(Mutex::new(peer_hypercore)));
+        }
+        let doc_state =
+            DocStateWrapper::new_disk(write_public_key, peer_public_keys, &data_root_dir).await;
 
         Self {
             doc,
-            hypercores,
+            hypercores: Arc::new(Mutex::new(hypercore_map)),
             doc_state: Arc::new(Mutex::new(doc_state)),
         }
+    }
+}
+
+pub async fn create_and_insert_read_memory_hypercores(
+    public_keys: Vec<[u8; 32]>,
+    hypercores: Arc<Mutex<HashMap<[u8; 32], Arc<Mutex<HypercoreWrapper<RandomAccessMemory>>>>>>,
+) {
+    let mut hypercores = hypercores.lock().await;
+    for public_key in public_keys {
+        let discovery_key = discovery_key_from_public_key(&public_key);
+        let hypercore = create_new_read_memory_hypercore(&public_key).await;
+        hypercores.insert(discovery_key, Arc::new(Mutex::new(hypercore)));
     }
 }
 

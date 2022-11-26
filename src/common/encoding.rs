@@ -29,19 +29,23 @@ impl CompactEncoding<RepoState> for State {
 impl CompactEncoding<DocState> for State {
     fn preencode(&mut self, value: &DocState) {
         self.preencode(&value.version);
+        self.end += 32;
         preencode_fixed_32_byte_vec(self, &value.peer_public_keys);
     }
 
     fn encode(&mut self, value: &DocState, buffer: &mut [u8]) {
         self.encode(&value.version, buffer);
+        self.encode_fixed_32(&value.public_key, buffer);
         encode_fixed_32_byte_vec(self, &value.peer_public_keys, buffer);
     }
 
     fn decode(&mut self, buffer: &[u8]) -> DocState {
         let version: u8 = self.decode(buffer);
+        let public_key: [u8; 32] = self.decode_fixed_32(buffer).to_vec().try_into().unwrap();
         let peer_public_keys = decode_fixed_32_byte_vec(self, buffer);
         DocState {
             version,
+            public_key,
             peer_public_keys,
         }
     }
