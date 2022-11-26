@@ -2,6 +2,7 @@
 use hypercore_protocol::hypercore::compact_encoding::{CompactEncoding, State};
 use std::convert::TryInto;
 
+pub(crate) use crate::common::entry::{Entry, EntryType};
 pub(crate) use crate::common::message::AdvertiseMessage;
 pub(crate) use crate::common::state::{DocState, RepoState};
 
@@ -63,6 +64,31 @@ impl CompactEncoding<AdvertiseMessage> for State {
     fn decode(&mut self, buffer: &[u8]) -> AdvertiseMessage {
         let public_keys = decode_fixed_32_byte_vec(self, buffer);
         AdvertiseMessage { public_keys }
+    }
+}
+
+impl CompactEncoding<Entry> for State {
+    fn preencode(&mut self, value: &Entry) {
+        self.preencode(&value.version);
+        self.preencode(&(value.entry_type as u8));
+        self.preencode(&value.data);
+    }
+
+    fn encode(&mut self, value: &Entry, buffer: &mut [u8]) {
+        self.encode(&value.version, buffer);
+        self.encode(&(value.entry_type as u8), buffer);
+        self.encode(&value.data, buffer);
+    }
+
+    fn decode(&mut self, buffer: &[u8]) -> Entry {
+        let version: u8 = self.decode(buffer);
+        let entry_type: u8 = self.decode(buffer);
+        let data: Vec<u8> = self.decode(buffer);
+        Entry {
+            version,
+            entry_type: entry_type.try_into().unwrap(),
+            data,
+        }
     }
 }
 

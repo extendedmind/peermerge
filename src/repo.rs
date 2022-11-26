@@ -197,7 +197,7 @@ async fn on_peer_event_memory(
             PeerEvent::PeerDisconnected(_) => {
                 // This is an FYI message, just continue
             }
-            PeerEvent::PeerSynced(_) => {
+            PeerEvent::PeersSynced(_) => {
                 unimplemented!();
             }
         }

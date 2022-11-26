@@ -1,5 +1,6 @@
 use async_std::sync::{Arc, Mutex};
 use automerge::Automerge;
+use hypercore_protocol::hypercore::compact_encoding::{CompactEncoding, State};
 #[cfg(not(target_arch = "wasm32"))]
 use random_access_disk::RandomAccessDisk;
 use random_access_memory::RandomAccessMemory;
@@ -11,7 +12,10 @@ use crate::hypercore::{
     create_new_read_disk_hypercore, create_new_write_disk_hypercore, get_path_from_discovery_key,
 };
 use crate::{
-    common::storage::{DocStateWrapper, RepoStateWrapper},
+    common::{
+        entry::Entry,
+        storage::{DocStateWrapper, RepoStateWrapper},
+    },
     hypercore::{
         create_new_read_memory_hypercore, create_new_write_memory_hypercore,
         discovery_key_from_public_key, generate_keys, keys_from_public_key, HypercoreWrapper,
@@ -57,7 +61,11 @@ impl DocStore<RandomAccessMemory> {
         let public_key = *key_pair.public.as_bytes();
 
         // Create the memory hypercore
-        let hypercore = create_new_write_memory_hypercore(key_pair, doc.save()).await;
+        let hypercore = create_new_write_memory_hypercore(
+            key_pair,
+            serialize_entry(&Entry::new_init_doc(doc.save())),
+        )
+        .await;
 
         // Write the state
         self.repo_state.add_public_key_to_state(&public_key).await;
@@ -86,7 +94,11 @@ impl DocStore<RandomAccessMemory> {
         // Create the write hypercore
         let (write_key_pair, _, write_discovery_key) = generate_keys();
         let write_public_key = *write_key_pair.public.as_bytes();
-        let write_hypercore = create_new_write_memory_hypercore(write_key_pair, vec![]).await;
+        let write_hypercore = create_new_write_memory_hypercore(
+            write_key_pair,
+            serialize_entry(&Entry::new_init_peer(doc_discovery_key)),
+        )
+        .await;
 
         // Write the state
         self.repo_state
@@ -159,7 +171,7 @@ impl DocStore<RandomAccessDisk> {
             &self.prefix,
             write_key_pair,
             &write_discovery_key,
-            vec![],
+            serialize_entry(&Entry::new_init_peer(doc_discovery_key)),
         )
         .await;
 
@@ -273,6 +285,14 @@ pub async fn create_and_insert_read_memory_hypercores(
         let hypercore = create_new_read_memory_hypercore(&public_key).await;
         hypercores.insert(discovery_key, Arc::new(Mutex::new(hypercore)));
     }
+}
+
+fn serialize_entry(entry: &Entry) -> Vec<u8> {
+    let mut enc_state = State::new();
+    enc_state.preencode(entry);
+    let mut buffer = enc_state.create_buffer();
+    enc_state.encode(entry, &mut buffer);
+    buffer.to_vec()
 }
 
 fn to_doc_url(public_key: String) -> String {

@@ -14,6 +14,6 @@ pub enum SynchronizeEvent {
 #[derive(Clone, Debug)]
 pub enum PeerEvent {
     NewPeersAdvertised(Vec<[u8; 32]>),
-    PeerSynced([u8; 32]),
+    PeersSynced(Vec<[u8; 32]>),
     PeerDisconnected(u64),
 }
