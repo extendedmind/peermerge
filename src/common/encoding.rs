@@ -163,18 +163,18 @@ impl CompactEncoding<DocContent> for State {
 impl CompactEncoding<DocCursor> for State {
     fn preencode(&mut self, value: &DocCursor) {
         self.end += 32;
-        self.preencode(&value.index);
+        self.preencode(&value.length);
     }
 
     fn encode(&mut self, value: &DocCursor, buffer: &mut [u8]) {
         self.encode_fixed_32(&value.public_key, buffer);
-        self.encode(&value.index, buffer);
+        self.encode(&value.length, buffer);
     }
 
     fn decode(&mut self, buffer: &[u8]) -> DocCursor {
         let public_key: [u8; 32] = self.decode_fixed_32(buffer).to_vec().try_into().unwrap();
-        let index: u64 = self.decode(buffer);
-        DocCursor { public_key, index }
+        let length: u64 = self.decode(buffer);
+        DocCursor { public_key, length }
     }
 }
 

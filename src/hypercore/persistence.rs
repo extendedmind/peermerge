@@ -33,7 +33,7 @@ pub(crate) async fn create_new_write_disk_hypercore(
     key_pair: Keypair,
     discovery_key: &[u8; 32],
     init_data: Vec<u8>,
-) -> HypercoreWrapper<RandomAccessDisk> {
+) -> (u64, HypercoreWrapper<RandomAccessDisk>) {
     create_new_disk_hypercore(
         prefix,
         PartialKeypair {
@@ -51,7 +51,7 @@ pub(crate) async fn create_new_read_disk_hypercore(
     prefix: &PathBuf,
     public_key: &[u8; 32],
     discovery_key: &[u8; 32],
-) -> HypercoreWrapper<RandomAccessDisk> {
+) -> (u64, HypercoreWrapper<RandomAccessDisk>) {
     create_new_disk_hypercore(
         prefix,
         PartialKeypair {
@@ -70,16 +70,18 @@ async fn create_new_disk_hypercore(
     key_pair: PartialKeypair,
     discovery_key: &[u8; 32],
     init_data: Option<Vec<u8>>,
-) -> HypercoreWrapper<RandomAccessDisk> {
+) -> (u64, HypercoreWrapper<RandomAccessDisk>) {
     let hypercore_dir = get_path_from_discovery_key(prefix, discovery_key);
     let storage = Storage::new_disk(&hypercore_dir, true).await.unwrap();
     let mut hypercore = Hypercore::new_with_key_pair(storage, key_pair)
         .await
         .unwrap();
-    if let Some(init_data) = init_data {
-        hypercore.append(&init_data).await.unwrap();
-    }
-    HypercoreWrapper::from_disk_hypercore(hypercore)
+    let len = if let Some(init_data) = init_data {
+        hypercore.append(&init_data).await.unwrap().length
+    } else {
+        0
+    };
+    (len, HypercoreWrapper::from_disk_hypercore(hypercore))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -90,7 +92,7 @@ pub(crate) fn get_path_from_discovery_key(prefix: &PathBuf, discovery_key: &[u8;
 pub(crate) async fn create_new_write_memory_hypercore(
     key_pair: Keypair,
     init_data: Vec<u8>,
-) -> HypercoreWrapper<RandomAccessMemory> {
+) -> (u64, HypercoreWrapper<RandomAccessMemory>) {
     create_new_memory_hypercore(
         PartialKeypair {
             public: key_pair.public,
@@ -103,7 +105,7 @@ pub(crate) async fn create_new_write_memory_hypercore(
 
 pub(crate) async fn create_new_read_memory_hypercore(
     public_key: &[u8; 32],
-) -> HypercoreWrapper<RandomAccessMemory> {
+) -> (u64, HypercoreWrapper<RandomAccessMemory>) {
     create_new_memory_hypercore(
         PartialKeypair {
             public: PublicKey::from_bytes(public_key).unwrap(),
@@ -117,13 +119,15 @@ pub(crate) async fn create_new_read_memory_hypercore(
 async fn create_new_memory_hypercore(
     key_pair: PartialKeypair,
     init_data: Option<Vec<u8>>,
-) -> HypercoreWrapper<RandomAccessMemory> {
+) -> (u64, HypercoreWrapper<RandomAccessMemory>) {
     let storage = Storage::new_memory().await.unwrap();
     let mut hypercore = Hypercore::new_with_key_pair(storage, key_pair)
         .await
         .unwrap();
-    if let Some(init_data) = init_data {
-        hypercore.append(&init_data).await.unwrap();
-    }
-    HypercoreWrapper::from_memory_hypercore(hypercore)
+    let len = if let Some(init_data) = init_data {
+        hypercore.append(&init_data).await.unwrap().length
+    } else {
+        0
+    };
+    (len, HypercoreWrapper::from_memory_hypercore(hypercore))
 }

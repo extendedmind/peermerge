@@ -7,7 +7,7 @@ use std::{fmt::Debug, path::PathBuf};
 
 use crate::common::state::{DocState, RepoState};
 
-use super::state::DocPeerState;
+use super::state::{DocContent, DocPeerState};
 
 #[derive(Debug)]
 pub(crate) struct RepoStateWrapper<T>
@@ -82,7 +82,11 @@ where
 }
 
 impl DocStateWrapper<RandomAccessMemory> {
-    pub async fn new_memory(public_key: [u8; 32], peer_public_keys: Vec<[u8; 32]>) -> Self {
+    pub async fn new_memory(
+        public_key: [u8; 32],
+        peer_public_keys: Vec<[u8; 32]>,
+        content: Option<DocContent>,
+    ) -> Self {
         let peers: Vec<DocPeerState> = peer_public_keys
             .iter()
             .map(|public_key| DocPeerState {
@@ -90,7 +94,7 @@ impl DocStateWrapper<RandomAccessMemory> {
                 synced: false,
             })
             .collect();
-        let state = DocState::new(peers, Some(public_key), None);
+        let state = DocState::new(peers, Some(public_key), content);
         let mut storage = RandomAccessMemory::default();
         write_doc_state(&state, &mut storage).await;
         Self { state, storage }
@@ -101,6 +105,7 @@ impl DocStateWrapper<RandomAccessDisk> {
     pub async fn new_disk(
         public_key: [u8; 32],
         peer_public_keys: Vec<[u8; 32]>,
+        content: Option<DocContent>,
         data_root_dir: &PathBuf,
     ) -> Self {
         let peers: Vec<DocPeerState> = peer_public_keys
@@ -110,7 +115,7 @@ impl DocStateWrapper<RandomAccessDisk> {
                 synced: false,
             })
             .collect();
-        let state = DocState::new(peers, Some(public_key), None);
+        let state = DocState::new(peers, Some(public_key), content);
         let state_path = data_root_dir.join(PathBuf::from("hypermerge_state.bin"));
         let mut storage = RandomAccessDisk::builder(state_path).build().await.unwrap();
         write_doc_state(&state, &mut storage).await;

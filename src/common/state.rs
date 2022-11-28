@@ -55,11 +55,11 @@ impl DocPeerState {
 #[derive(Debug)]
 pub(crate) struct DocCursor {
     pub(crate) public_key: [u8; 32],
-    pub(crate) index: u64,
+    pub(crate) length: u64,
 }
 impl DocCursor {
-    pub fn new(public_key: [u8; 32], index: u64) -> Self {
-        Self { public_key, index }
+    pub fn new(public_key: [u8; 32], length: u64) -> Self {
+        Self { public_key, length }
     }
 }
 
