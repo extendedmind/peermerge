@@ -214,7 +214,9 @@ where
             .iter()
             .map(|peer| peer.public_key.clone())
             .collect();
-        public_keys.push(state.public_key);
+        if let Some(public_key) = state.public_key {
+            public_keys.push(public_key);
+        }
         public_keys
     }
 

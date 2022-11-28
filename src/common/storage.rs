@@ -90,7 +90,7 @@ impl DocStateWrapper<RandomAccessMemory> {
                 synced: false,
             })
             .collect();
-        let state = DocState::new(public_key, peers);
+        let state = DocState::new(peers, Some(public_key), None);
         let mut storage = RandomAccessMemory::default();
         write_doc_state(&state, &mut storage).await;
         Self { state, storage }
@@ -110,7 +110,7 @@ impl DocStateWrapper<RandomAccessDisk> {
                 synced: false,
             })
             .collect();
-        let state = DocState::new(public_key, peers);
+        let state = DocState::new(peers, Some(public_key), None);
         let state_path = data_root_dir.join(PathBuf::from("hypermerge_state.bin"));
         let mut storage = RandomAccessDisk::builder(state_path).build().await.unwrap();
         write_doc_state(&state, &mut storage).await;

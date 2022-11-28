@@ -19,15 +19,24 @@ impl Default for RepoState {
 #[derive(Debug)]
 pub(crate) struct DocState {
     pub(crate) version: u8,
-    pub(crate) public_key: [u8; 32], // Public key of personal writeable hypercore
     pub(crate) peers: Vec<DocPeerState>,
+    /// Public key of personal writeable hypercore. None means the
+    /// document is read-only.
+    pub(crate) public_key: Option<[u8; 32]>,
+    /// Content of the document. None means content hasn't been synced yet.
+    pub(crate) content: Option<DocContent>,
 }
 impl DocState {
-    pub fn new(public_key: [u8; 32], peers: Vec<DocPeerState>) -> Self {
+    pub fn new(
+        peers: Vec<DocPeerState>,
+        public_key: Option<[u8; 32]>,
+        content: Option<DocContent>,
+    ) -> Self {
         Self {
             version: 1,
-            public_key,
             peers,
+            public_key,
+            content,
         }
     }
 }
@@ -40,5 +49,27 @@ pub(crate) struct DocPeerState {
 impl DocPeerState {
     pub fn new(public_key: [u8; 32], synced: bool) -> Self {
         Self { public_key, synced }
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct DocCursor {
+    pub(crate) public_key: [u8; 32],
+    pub(crate) index: u64,
+}
+impl DocCursor {
+    pub fn new(public_key: [u8; 32], index: u64) -> Self {
+        Self { public_key, index }
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct DocContent {
+    pub(crate) doc: Vec<u8>,
+    pub(crate) cursors: Vec<DocCursor>,
+}
+impl DocContent {
+    pub fn new(doc: Vec<u8>, cursors: Vec<DocCursor>) -> Self {
+        Self { doc, cursors }
     }
 }

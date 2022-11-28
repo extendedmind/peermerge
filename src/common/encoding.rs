@@ -2,11 +2,11 @@
 use hypercore_protocol::hypercore::compact_encoding::{CompactEncoding, State};
 use std::convert::TryInto;
 
-pub(crate) use crate::common::entry::{Entry, EntryType};
+pub(crate) use crate::common::entry::Entry;
 pub(crate) use crate::common::message::AdvertiseMessage;
 pub(crate) use crate::common::state::{DocState, RepoState};
 
-use super::state::DocPeerState;
+use super::state::{DocContent, DocCursor, DocPeerState};
 
 impl CompactEncoding<RepoState> for State {
     fn preencode(&mut self, value: &RepoState) {
@@ -32,37 +32,78 @@ impl CompactEncoding<RepoState> for State {
 impl CompactEncoding<DocState> for State {
     fn preencode(&mut self, value: &DocState) {
         self.preencode(&value.version);
-        self.end += 32;
+        self.end += 1; // flags
         let len = value.peers.len();
-        self.preencode(&len);
-        for peer in &value.peers {
-            self.preencode(peer);
+        if len > 0 {
+            self.preencode(&len);
+            for peer in &value.peers {
+                self.preencode(peer);
+            }
+        }
+        if value.public_key.is_some() {
+            self.end += 32;
+        }
+        if let Some(content) = &value.content {
+            self.preencode(content);
         }
     }
 
     fn encode(&mut self, value: &DocState, buffer: &mut [u8]) {
         self.encode(&value.version, buffer);
-        self.encode_fixed_32(&value.public_key, buffer);
+        let flags_index = self.start;
+        let mut flags: u8 = 0;
+        self.start += 1;
         let len = value.peers.len();
-        self.encode(&len, buffer);
-        for peer in &value.peers {
-            self.encode(peer, buffer);
+        if len > 0 {
+            flags = flags | 1;
+            self.encode(&len, buffer);
+            for peer in &value.peers {
+                self.encode(peer, buffer);
+            }
         }
+        if let Some(public_key) = &value.public_key {
+            flags = flags | 2;
+            self.encode_fixed_32(public_key, buffer);
+        }
+        if let Some(content) = &value.content {
+            flags = flags | 4;
+            self.encode(content, buffer);
+        }
+
+        buffer[flags_index] = flags;
     }
 
     fn decode(&mut self, buffer: &[u8]) -> DocState {
         let version: u8 = self.decode(buffer);
-        let public_key: [u8; 32] = self.decode_fixed_32(buffer).to_vec().try_into().unwrap();
-        let len: usize = self.decode(buffer);
-        let mut peers: Vec<DocPeerState> = Vec::with_capacity(len);
-        for _ in 0..len {
-            let peer: DocPeerState = self.decode(buffer);
-            peers.push(peer);
-        }
+        let flags: u8 = self.decode(buffer);
+        let peers: Vec<DocPeerState> = if flags & 1 != 0 {
+            let len: usize = self.decode(buffer);
+            let mut peers: Vec<DocPeerState> = Vec::with_capacity(len);
+            for _ in 0..len {
+                let peer: DocPeerState = self.decode(buffer);
+                peers.push(peer);
+            }
+            peers
+        } else {
+            vec![]
+        };
+
+        let public_key: Option<[u8; 32]> = if flags & 2 != 0 {
+            Some(self.decode_fixed_32(buffer).to_vec().try_into().unwrap())
+        } else {
+            None
+        };
+
+        let content: Option<DocContent> = if flags & 4 != 0 {
+            Some(self.decode(buffer))
+        } else {
+            None
+        };
         DocState {
             version,
-            public_key,
             peers,
+            public_key,
+            content,
         }
     }
 }
@@ -85,6 +126,55 @@ impl CompactEncoding<DocPeerState> for State {
             public_key,
             synced: synced != 0,
         }
+    }
+}
+
+impl CompactEncoding<DocContent> for State {
+    fn preencode(&mut self, value: &DocContent) {
+        self.preencode(&value.doc);
+        let len = value.cursors.len();
+        self.preencode(&len);
+        for cursor in &value.cursors {
+            self.preencode(cursor);
+        }
+    }
+
+    fn encode(&mut self, value: &DocContent, buffer: &mut [u8]) {
+        self.encode(&value.doc, buffer);
+        let len = value.cursors.len();
+        self.encode(&len, buffer);
+        for cursor in &value.cursors {
+            self.encode(cursor, buffer);
+        }
+    }
+
+    fn decode(&mut self, buffer: &[u8]) -> DocContent {
+        let doc: Vec<u8> = self.decode(buffer);
+        let len: usize = self.decode(buffer);
+        let mut cursors: Vec<DocCursor> = Vec::with_capacity(len);
+        for _ in 0..len {
+            let cursor: DocCursor = self.decode(buffer);
+            cursors.push(cursor);
+        }
+        DocContent { doc, cursors }
+    }
+}
+
+impl CompactEncoding<DocCursor> for State {
+    fn preencode(&mut self, value: &DocCursor) {
+        self.end += 32;
+        self.preencode(&value.index);
+    }
+
+    fn encode(&mut self, value: &DocCursor, buffer: &mut [u8]) {
+        self.encode_fixed_32(&value.public_key, buffer);
+        self.encode(&value.index, buffer);
+    }
+
+    fn decode(&mut self, buffer: &[u8]) -> DocCursor {
+        let public_key: [u8; 32] = self.decode_fixed_32(buffer).to_vec().try_into().unwrap();
+        let index: u64 = self.decode(buffer);
+        DocCursor { public_key, index }
     }
 }
 
