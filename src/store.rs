@@ -1,5 +1,5 @@
 use async_std::sync::{Arc, Mutex};
-use automerge::Automerge;
+use automerge::{Automerge, Prop};
 use hypercore_protocol::hypercore::compact_encoding::{CompactEncoding, State};
 #[cfg(not(target_arch = "wasm32"))]
 use random_access_disk::RandomAccessDisk;
@@ -42,6 +42,22 @@ where
         let public_key = to_public_key(doc_url);
         let (_, discovery_key) = keys_from_public_key(&public_key);
         self.docs.get_mut(&discovery_key)
+    }
+
+    pub async fn watch_root_props<P: Into<Prop>>(&mut self, doc_url: &str, root_props: Vec<P>) {
+        if let Some(hypercore_store) = self.get_mut(doc_url) {
+            {
+                let mut watch_root_props: Vec<Prop> = Vec::with_capacity(root_props.len());
+                for root_prop in root_props {
+                    watch_root_props.push(root_prop.into());
+                }
+                let doc_state = hypercore_store.doc_state();
+                {
+                    let mut doc_state = doc_state.lock().await;
+                    doc_state.watch_root_props(watch_root_props);
+                }
+            }
+        }
     }
 }
 

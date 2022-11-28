@@ -1,3 +1,4 @@
+use automerge::Prop;
 use hypercore_protocol::hypercore::compact_encoding::{CompactEncoding, State};
 #[cfg(not(target_arch = "wasm32"))]
 use random_access_disk::RandomAccessDisk;
@@ -76,8 +77,36 @@ where
         write_doc_state(&self.state, &mut self.storage).await;
     }
 
+    pub async fn set_synced_to_state(&mut self, public_key: [u8; 32], synced: bool) -> bool {
+        if let Some(peer) = self
+            .state
+            .peers
+            .iter_mut()
+            .find(|peer| peer.public_key == public_key)
+        {
+            let changed = peer.synced != synced;
+            peer.synced = synced;
+            write_doc_state(&self.state, &mut self.storage).await;
+            changed
+        } else {
+            panic!("Could not find peer based on public key from in peers");
+        }
+    }
+
+    pub fn peers_synced(&self) -> Option<usize> {
+        if self.state.peers.iter().all(|peer| peer.synced) {
+            Some(self.state.peers.len())
+        } else {
+            None
+        }
+    }
+
     pub fn state(&self) -> &DocState {
         &self.state
+    }
+
+    pub fn watch_root_props(&mut self, root_props: Vec<Prop>) {
+        self.state.watched_root_props = root_props;
     }
 }
 
@@ -89,10 +118,7 @@ impl DocStateWrapper<RandomAccessMemory> {
     ) -> Self {
         let peers: Vec<DocPeerState> = peer_public_keys
             .iter()
-            .map(|public_key| DocPeerState {
-                public_key: public_key.clone(),
-                synced: false,
-            })
+            .map(|public_key| DocPeerState::new(public_key.clone(), false))
             .collect();
         let state = DocState::new(peers, Some(public_key), content);
         let mut storage = RandomAccessMemory::default();
@@ -110,10 +136,7 @@ impl DocStateWrapper<RandomAccessDisk> {
     ) -> Self {
         let peers: Vec<DocPeerState> = peer_public_keys
             .iter()
-            .map(|public_key| DocPeerState {
-                public_key: public_key.clone(),
-                synced: false,
-            })
+            .map(|public_key| DocPeerState::new(public_key.clone(), false))
             .collect();
         let state = DocState::new(peers, Some(public_key), content);
         let state_path = data_root_dir.join(PathBuf::from("hypermerge_state.bin"));

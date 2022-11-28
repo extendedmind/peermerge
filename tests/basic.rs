@@ -32,6 +32,11 @@ async fn basic_two_writers() -> anyhow::Result<()> {
         Receiver<StateEvent>,
     ) = unbounded();
     let doc_url = repo_creator.create_doc_memory(vec![("version", 1)]).await;
+
+    // Set watching for the same props
+    repo_creator.watch_root_props(&doc_url, vec!["text"]).await;
+    repo_joiner.watch_root_props(&doc_url, vec!["text"]).await;
+
     let doc_url_for_task = doc_url.clone();
     task::spawn(async move {
         connect_repo(
@@ -44,12 +49,13 @@ async fn basic_two_writers() -> anyhow::Result<()> {
         .unwrap();
     });
 
+    let doc_url_for_task = doc_url.clone();
     task::spawn(async move {
-        repo_joiner.register_doc_memory(&doc_url).await;
+        repo_joiner.register_doc_memory(&doc_url_for_task).await;
         connect_repo(
             repo_joiner,
             proto_initiator,
-            doc_url,
+            doc_url_for_task,
             creator_state_event_sender,
         )
         .await

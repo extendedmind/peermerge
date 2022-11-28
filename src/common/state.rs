@@ -1,3 +1,4 @@
+use automerge::Prop;
 use std::fmt::Debug;
 
 /// A RepoState stores serialized information about the Repo.
@@ -25,6 +26,8 @@ pub(crate) struct DocState {
     pub(crate) public_key: Option<[u8; 32]>,
     /// Content of the document. None means content hasn't been synced yet.
     pub(crate) content: Option<DocContent>,
+    /// Transient watch variable
+    pub(crate) watched_root_props: Vec<Prop>,
 }
 impl DocState {
     pub fn new(
@@ -37,6 +40,7 @@ impl DocState {
             peers,
             public_key,
             content,
+            watched_root_props: vec![],
         }
     }
 }

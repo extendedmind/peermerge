@@ -45,9 +45,11 @@ where
         Message::Synchronize(message) => {
             let length_changed = message.length != peer_state.remote_length;
             let first_sync = !peer_state.remote_synced;
-            let info = {
+            let (info, public_key) = {
                 let hypercore = hypercore.lock().await;
-                hypercore.info()
+                let info = hypercore.info();
+                let public_key: [u8; 32] = *hypercore.key_pair().public.as_bytes();
+                (info, public_key)
             };
             let same_fork = message.fork == info.fork;
 
@@ -75,7 +77,7 @@ where
                 messages.push(Message::Synchronize(msg));
             }
 
-            if peer_state.remote_length > info.length
+            let peer_sync_started: Option<PeerEvent> = if peer_state.remote_length > info.length
                 && peer_state.length_acked == info.length
                 && length_changed
             {
@@ -91,9 +93,13 @@ where
                     }),
                 };
                 messages.push(Message::Request(msg));
-            }
+                Some(PeerEvent::PeerSyncStarted(public_key))
+            } else {
+                None
+            };
 
             channel.send_batch(&messages).await?;
+            return Ok(peer_sync_started);
         }
         Message::Request(message) => {
             let (info, proof) = {
@@ -118,7 +124,7 @@ where
             }
         }
         Message::Data(message) => {
-            let (old_info, applied, new_info, request_block, synced) = {
+            let (old_info, applied, new_info, request_block, peer_synced) = {
                 let mut hypercore = hypercore.lock().await;
                 let old_info = hypercore.info();
                 let proof = message.clone().into_proof();
@@ -151,10 +157,17 @@ where
                 } else {
                     None
                 };
-                let synced = new_info.contiguous_length == new_info.length;
-                (old_info, applied, new_info, request_block, synced)
+                let peer_synced: Option<PeerEvent> =
+                    if new_info.contiguous_length == new_info.length {
+                        let public_key: [u8; 32] = *hypercore.key_pair().public.as_bytes();
+                        Some(PeerEvent::PeerSynced(public_key))
+                    } else {
+                        None
+                    };
+                (old_info, applied, new_info, request_block, peer_synced)
             };
             assert!(applied, "Could not apply proof");
+
             let mut messages: Vec<Message> = vec![];
             if let Some(upgrade) = &message.upgrade {
                 let new_length = upgrade.length;
@@ -202,7 +215,8 @@ where
                     upgrade: None,
                 }));
             }
-            channel.send_batch(&messages).await.unwrap();
+            channel.send_batch(&messages).await?;
+            return Ok(peer_synced);
         }
         Message::Range(message) => {
             let info = {

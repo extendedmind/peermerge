@@ -8,12 +8,13 @@ pub enum StateEvent {
 #[derive(Clone, Debug)]
 pub enum SynchronizeEvent {
     NewPeersAdvertised(usize),
-    DocumentCreated(),
+    PeersSynced(usize),
 }
 
 #[derive(Clone, Debug)]
 pub enum PeerEvent {
     NewPeersAdvertised(Vec<[u8; 32]>),
-    PeersSynced(Vec<[u8; 32]>),
+    PeerSyncStarted([u8; 32]),
+    PeerSynced([u8; 32]),
     PeerDisconnected(u64),
 }

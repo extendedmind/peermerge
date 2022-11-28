@@ -16,7 +16,7 @@ use std::{collections::HashMap, fmt::Debug};
 use wasm_bindgen_futures::spawn_local;
 
 use crate::{
-    automerge::init_doc_with_root_props,
+    automerge::init_doc_with_root_scalars,
     common::{storage::DocStateWrapper, PeerEvent, SynchronizeEvent},
     hypercore::{on_protocol, HypercoreWrapper},
     store::{create_and_insert_read_memory_hypercores, DocStore},
@@ -45,9 +45,18 @@ where
         sync_event_receiver: &mut Receiver<SynchronizeEvent>,
     ) -> anyhow::Result<()> {
         while let Some(event) = sync_event_receiver.next().await {
+            println!("connect_document: received sync event: {:?}", event);
             // TODO: Do something here with sync event to trigger state event
         }
         Ok(())
+    }
+
+    pub async fn watch_root_props<P: Into<Prop>>(&mut self, doc_url: &str, root_props: Vec<P>) {
+        self.store
+            .lock()
+            .await
+            .watch_root_props(doc_url, root_props)
+            .await;
     }
 }
 
@@ -65,9 +74,9 @@ impl Repo<RandomAccessDisk> {
 
     pub async fn create_document_disk<P: Into<Prop>, V: Into<ScalarValue>>(
         &mut self,
-        root_props: Vec<(P, V)>,
+        root_scalars: Vec<(P, V)>,
     ) -> String {
-        let doc = init_doc_with_root_props(root_props);
+        let doc = init_doc_with_root_scalars(root_scalars);
         self.store.lock().await.add_doc_disk(doc).await
     }
 
@@ -101,9 +110,9 @@ impl Repo<RandomAccessMemory> {
 
     pub async fn create_doc_memory<P: Into<Prop>, V: Into<ScalarValue>>(
         &mut self,
-        root_props: Vec<(P, V)>,
+        root_scalars: Vec<(P, V)>,
     ) -> String {
-        let doc = init_doc_with_root_props(root_props);
+        let doc = init_doc_with_root_scalars(root_scalars);
         self.store.lock().await.add_doc_memory(doc).await
     }
 
@@ -195,10 +204,35 @@ async fn on_peer_event_memory(
                     .unwrap();
             }
             PeerEvent::PeerDisconnected(_) => {
-                // This is an FYI message, just continue
+                // This is an FYI message, just continue for now
             }
-            PeerEvent::PeersSynced(_) => {
-                unimplemented!();
+            PeerEvent::PeerSyncStarted(public_key) => {
+                {
+                    // Set peer to not-synced
+                    let mut doc_state = doc_state.lock().await;
+                    doc_state.set_synced_to_state(public_key, false).await;
+                }
+            }
+            PeerEvent::PeerSynced(public_key) => {
+                let peers_synced: Option<usize> = {
+                    // Set peer to synced
+                    let mut doc_state = doc_state.lock().await;
+                    let sync_status_changed = doc_state.set_synced_to_state(public_key, true).await;
+                    if sync_status_changed {
+                        // Find out if now all peers are synced
+                        doc_state.peers_synced()
+                    } else {
+                        // If nothing changed, don't reannounce
+                        None
+                    }
+                };
+
+                if let Some(len) = peers_synced {
+                    sync_event_sender
+                        .send(SynchronizeEvent::PeersSynced(len))
+                        .await
+                        .unwrap();
+                }
             }
         }
     }
