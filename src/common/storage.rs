@@ -7,6 +7,8 @@ use std::{fmt::Debug, path::PathBuf};
 
 use crate::common::state::{DocState, RepoState};
 
+use super::state::DocPeerState;
+
 #[derive(Debug)]
 pub(crate) struct RepoStateWrapper<T>
 where
@@ -62,8 +64,15 @@ impl<T> DocStateWrapper<T>
 where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send,
 {
-    pub async fn add_public_keys_to_state(&mut self, public_keys: Vec<[u8; 32]>) {
-        self.state.peer_public_keys.extend(public_keys);
+    pub async fn add_peer_public_keys_to_state(&mut self, public_keys: Vec<[u8; 32]>) {
+        let new_peers: Vec<DocPeerState> = public_keys
+            .iter()
+            .map(|public_key| DocPeerState {
+                public_key: public_key.clone(),
+                synced: false,
+            })
+            .collect();
+        self.state.peers.extend(new_peers);
         write_doc_state(&self.state, &mut self.storage).await;
     }
 
@@ -74,7 +83,14 @@ where
 
 impl DocStateWrapper<RandomAccessMemory> {
     pub async fn new_memory(public_key: [u8; 32], peer_public_keys: Vec<[u8; 32]>) -> Self {
-        let state = DocState::new(public_key, peer_public_keys);
+        let peers: Vec<DocPeerState> = peer_public_keys
+            .iter()
+            .map(|public_key| DocPeerState {
+                public_key: public_key.clone(),
+                synced: false,
+            })
+            .collect();
+        let state = DocState::new(public_key, peers);
         let mut storage = RandomAccessMemory::default();
         write_doc_state(&state, &mut storage).await;
         Self { state, storage }
@@ -87,7 +103,14 @@ impl DocStateWrapper<RandomAccessDisk> {
         peer_public_keys: Vec<[u8; 32]>,
         data_root_dir: &PathBuf,
     ) -> Self {
-        let state = DocState::new(public_key, peer_public_keys);
+        let peers: Vec<DocPeerState> = peer_public_keys
+            .iter()
+            .map(|public_key| DocPeerState {
+                public_key: public_key.clone(),
+                synced: false,
+            })
+            .collect();
+        let state = DocState::new(public_key, peers);
         let state_path = data_root_dir.join(PathBuf::from("hypermerge_state.bin"));
         let mut storage = RandomAccessDisk::builder(state_path).build().await.unwrap();
         write_doc_state(&state, &mut storage).await;

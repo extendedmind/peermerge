@@ -209,7 +209,11 @@ where
     pub async fn public_keys(&self) -> Vec<[u8; 32]> {
         let state = self.doc_state.lock().await;
         let state = state.state();
-        let mut public_keys = state.peer_public_keys.clone();
+        let mut public_keys: Vec<[u8; 32]> = state
+            .peers
+            .iter()
+            .map(|peer| peer.public_key.clone())
+            .collect();
         public_keys.push(state.public_key);
         public_keys
     }

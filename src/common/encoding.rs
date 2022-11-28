@@ -6,6 +6,8 @@ pub(crate) use crate::common::entry::{Entry, EntryType};
 pub(crate) use crate::common::message::AdvertiseMessage;
 pub(crate) use crate::common::state::{DocState, RepoState};
 
+use super::state::DocPeerState;
+
 impl CompactEncoding<RepoState> for State {
     fn preencode(&mut self, value: &RepoState) {
         self.preencode(&value.version);
@@ -31,23 +33,57 @@ impl CompactEncoding<DocState> for State {
     fn preencode(&mut self, value: &DocState) {
         self.preencode(&value.version);
         self.end += 32;
-        preencode_fixed_32_byte_vec(self, &value.peer_public_keys);
+        let len = value.peers.len();
+        self.preencode(&len);
+        for peer in &value.peers {
+            self.preencode(peer);
+        }
     }
 
     fn encode(&mut self, value: &DocState, buffer: &mut [u8]) {
         self.encode(&value.version, buffer);
         self.encode_fixed_32(&value.public_key, buffer);
-        encode_fixed_32_byte_vec(self, &value.peer_public_keys, buffer);
+        let len = value.peers.len();
+        self.encode(&len, buffer);
+        for peer in &value.peers {
+            self.encode(peer, buffer);
+        }
     }
 
     fn decode(&mut self, buffer: &[u8]) -> DocState {
         let version: u8 = self.decode(buffer);
         let public_key: [u8; 32] = self.decode_fixed_32(buffer).to_vec().try_into().unwrap();
-        let peer_public_keys = decode_fixed_32_byte_vec(self, buffer);
+        let len: usize = self.decode(buffer);
+        let mut peers: Vec<DocPeerState> = Vec::with_capacity(len);
+        for _ in 0..len {
+            let peer: DocPeerState = self.decode(buffer);
+            peers.push(peer);
+        }
         DocState {
             version,
             public_key,
-            peer_public_keys,
+            peers,
+        }
+    }
+}
+
+impl CompactEncoding<DocPeerState> for State {
+    fn preencode(&mut self, _value: &DocPeerState) {
+        self.end += 32 + 1;
+    }
+
+    fn encode(&mut self, value: &DocPeerState, buffer: &mut [u8]) {
+        self.encode_fixed_32(&value.public_key, buffer);
+        let synced: u8 = if value.synced { 1 } else { 0 };
+        self.encode(&synced, buffer);
+    }
+
+    fn decode(&mut self, buffer: &[u8]) -> DocPeerState {
+        let public_key: [u8; 32] = self.decode_fixed_32(buffer).to_vec().try_into().unwrap();
+        let synced: u8 = self.decode(buffer);
+        DocPeerState {
+            public_key,
+            synced: synced != 0,
         }
     }
 }

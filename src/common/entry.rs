@@ -1,6 +1,6 @@
 use std::convert::TryFrom;
 
-/// A document is stored in entries to a log. Wraps automerge data types.
+/// Type of entry stored to a hypercore.
 #[derive(Copy, Clone, Debug)]
 #[repr(u8)]
 pub(crate) enum EntryType {
@@ -21,6 +21,7 @@ impl TryFrom<u8> for EntryType {
     }
 }
 
+/// A document is stored in pieces to hypercores.
 #[derive(Debug)]
 pub(crate) struct Entry {
     pub(crate) version: u8,

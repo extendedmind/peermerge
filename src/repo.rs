@@ -181,7 +181,7 @@ async fn on_peer_event_memory(
                     // Save new keys to state
                     let mut doc_state = doc_state.lock().await;
                     doc_state
-                        .add_public_keys_to_state(public_keys.clone())
+                        .add_peer_public_keys_to_state(public_keys.clone())
                         .await;
                 }
                 {
