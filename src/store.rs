@@ -69,27 +69,24 @@ where
         if let Some(hypercore_store) = self.get_mut(&discovery_key.clone()) {
             {
                 let doc_state = hypercore_store.doc_state();
-                let (entry, write_discovery_key) = {
+                {
                     let mut doc_state = doc_state.lock().await;
                     let write_discovery_key = doc_state.write_discovery_key();
-                    if let Some(doc) = doc_state.doc_mut() {
-                        let entry = put_object_autocommit(doc, obj, prop, object).unwrap();
-
-                        (entry, write_discovery_key)
+                    let entry = if let Some(doc) = doc_state.doc_mut() {
+                        put_object_autocommit(doc, obj, prop, object).unwrap()
                     } else {
                         unimplemented!(
-                            "No proper error code for trying to change before a document is synced"
+                            "TODO: No proper error code for trying to change before a document is synced"
                         );
-                    }
-                };
-                let hypercores = hypercore_store.hypercores();
-                {
-                    let hypercores = hypercores.lock().await;
-                    {
+                    };
+                    let length = {
+                        let hypercore_map = hypercore_store.hypercores();
+                        let hypercores = hypercore_map.lock().await;
                         let mut write_hypercore =
                             hypercores.get(&write_discovery_key).unwrap().lock().await;
-                        write_hypercore.append(&serialize_entry(&entry)).await;
-                    }
+                        write_hypercore.append(&serialize_entry(&entry)).await?
+                    };
+                    doc_state.set_cursor(&write_discovery_key, length).await;
                 }
             }
         }
@@ -120,7 +117,7 @@ impl DocStore<RandomAccessMemory> {
             serialize_entry(&Entry::new_init_doc(doc.clone())),
         )
         .await;
-        let content = DocContent::new(doc, vec![DocCursor::new(public_key.clone(), length)]);
+        let content = DocContent::new(doc, vec![DocCursor::new(discovery_key.clone(), length)]);
 
         // Write the state
         self.repo_state.add_public_key_to_state(&public_key).await;
@@ -198,7 +195,7 @@ impl DocStore<RandomAccessDisk> {
             serialize_entry(&Entry::new_init_doc(doc.clone())),
         )
         .await;
-        let content = DocContent::new(doc, vec![DocCursor::new(public_key.clone(), length)]);
+        let content = DocContent::new(doc, vec![DocCursor::new(discovery_key.clone(), length)]);
 
         // Write the state
         self.repo_state.add_public_key_to_state(&public_key).await;

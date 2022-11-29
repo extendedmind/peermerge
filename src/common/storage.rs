@@ -1,4 +1,4 @@
-use automerge::{AutoCommit, Automerge, Prop};
+use automerge::{AutoCommit, Prop};
 use hypercore_protocol::hypercore::compact_encoding::{CompactEncoding, State};
 #[cfg(not(target_arch = "wasm32"))]
 use random_access_disk::RandomAccessDisk;
@@ -109,6 +109,25 @@ where
             .content
             .as_ref()
             .map(|content| content.cursors.clone())
+    }
+
+    pub async fn set_cursor(&mut self, discovery_key: &[u8; 32], length: u64) {
+        if let Some(content) = self.state.content.as_mut() {
+            if let Some(cursor) = content
+                .cursors
+                .iter_mut()
+                .find(|cursor| &cursor.discovery_key == discovery_key)
+            {
+                cursor.length = length;
+            } else {
+                content
+                    .cursors
+                    .push(DocCursor::new(discovery_key.clone(), length));
+            }
+            write_doc_state(&self.state, &mut self.storage).await;
+        } else {
+            unimplemented!("This shouldn't happen")
+        }
     }
 
     pub fn write_discovery_key(&self) -> [u8; 32] {

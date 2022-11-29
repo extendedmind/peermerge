@@ -34,7 +34,7 @@ async fn basic_two_writers() -> anyhow::Result<()> {
     ) = unbounded();
     let (discovery_key, doc_url) = repo_creator.create_doc_memory(vec![("version", 1)]).await;
 
-    // Insert a text field
+    // Insert a text field to the document
     repo_creator
         .put_object(&discovery_key, ROOT, "text", automerge::ObjType::Text)
         .await
