@@ -1,7 +1,7 @@
 use std::convert::TryFrom;
 
 /// Type of entry stored to a hypercore.
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 #[repr(u8)]
 pub(crate) enum EntryType {
     InitDoc = 0,

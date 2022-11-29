@@ -1,12 +1,14 @@
 use async_std::sync::{Arc, Mutex};
 use automerge::{Automerge, ObjId, ObjType, Prop};
 use hypercore_protocol::hypercore::compact_encoding::{CompactEncoding, State};
+use hypercore_protocol::hypercore::Keypair;
 #[cfg(not(target_arch = "wasm32"))]
 use random_access_disk::RandomAccessDisk;
 use random_access_memory::RandomAccessMemory;
 use random_access_storage::RandomAccess;
 use std::{collections::HashMap, fmt::Debug, path::PathBuf};
 
+use crate::automerge::init_doc_from_entries;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::hypercore::{
     create_new_read_disk_hypercore, create_new_write_disk_hypercore, get_path_from_discovery_key,
@@ -105,13 +107,17 @@ impl DocStore<RandomAccessMemory> {
         }
     }
 
-    pub async fn add_doc_memory(&mut self, mut doc: Automerge) -> ([u8; 32], String) {
+    pub async fn add_doc_memory(
+        &mut self,
+        key_pair: Keypair,
+        encoded_public_key: String,
+        discovery_key: [u8; 32],
+        doc: Vec<u8>,
+    ) -> ([u8; 32], String) {
         // Generate a key pair, its discovery key and the public key string
-        let (key_pair, encoded_public_key, discovery_key) = generate_keys();
         let public_key = *key_pair.public.as_bytes();
 
         // Create the memory hypercore
-        let doc = doc.save();
         let (length, hypercore) = create_new_write_memory_hypercore(
             key_pair,
             serialize_entry(&Entry::new_init_doc(doc.clone())),
@@ -181,13 +187,16 @@ impl DocStore<RandomAccessDisk> {
         }
     }
 
-    pub async fn add_doc_disk(&mut self, mut doc: Automerge) -> ([u8; 32], String) {
-        // Generate a key pair, its discovery key and the public key string
-        let (key_pair, encoded_public_key, discovery_key) = generate_keys();
+    pub async fn add_doc_disk(
+        &mut self,
+        key_pair: Keypair,
+        encoded_public_key: String,
+        discovery_key: [u8; 32],
+        doc: Vec<u8>,
+    ) -> ([u8; 32], String) {
         let public_key = *key_pair.public.as_bytes();
 
         // Create the disk hypercore with init data
-        let doc = doc.save();
         let (length, hypercore) = create_new_write_disk_hypercore(
             &self.prefix,
             key_pair,
@@ -340,7 +349,7 @@ impl HypercoreStore<RandomAccessDisk> {
     }
 }
 
-pub async fn create_and_insert_read_memory_hypercores(
+pub(crate) async fn create_and_insert_read_memory_hypercores(
     public_keys: Vec<[u8; 32]>,
     hypercores: Arc<Mutex<HashMap<[u8; 32], Arc<Mutex<HypercoreWrapper<RandomAccessMemory>>>>>>,
 ) {
@@ -350,6 +359,49 @@ pub async fn create_and_insert_read_memory_hypercores(
         let (_, hypercore) = create_new_read_memory_hypercore(&public_key).await;
         hypercores.insert(discovery_key, Arc::new(Mutex::new(hypercore)));
     }
+}
+
+pub(crate) async fn create_content<T>(
+    origin_discovery_key: &[u8; 32],
+    write_discovery_key: &[u8; 32],
+    hypercores: Arc<Mutex<HashMap<[u8; 32], Arc<Mutex<HypercoreWrapper<T>>>>>>,
+) -> anyhow::Result<DocContent>
+where
+    T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send + 'static,
+{
+    let hypercores = hypercores.lock().await;
+    // The document starts from the origin, so get that first
+    let mut origin_hypercore = hypercores.get(origin_discovery_key).unwrap().lock().await;
+    let mut entries = origin_hypercore.entries(0).await?;
+    let mut cursors = vec![DocCursor::new(
+        origin_discovery_key.clone(),
+        entries.len() as u64,
+    )];
+    for (discovery_key, hypercore) in &*hypercores {
+        if discovery_key != origin_discovery_key {
+            let mut hypercore = hypercore.lock().await;
+            let new_entries = hypercore.entries(0).await?;
+            cursors.push(DocCursor::new(
+                origin_discovery_key.clone(),
+                new_entries.len() as u64,
+            ));
+            entries.extend(new_entries);
+        }
+    }
+
+    // Create DocContent from the hypercore
+    let doc = init_doc_from_entries(write_discovery_key, entries);
+    Ok(DocContent::new(doc, cursors))
+}
+
+pub(crate) async fn update_content<T>(
+    discovery_key: &[u8; 32],
+    content: &mut DocContent,
+    hypercores: Arc<Mutex<HashMap<[u8; 32], Arc<Mutex<HypercoreWrapper<T>>>>>>,
+) where
+    T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send + 'static,
+{
+    let mut hypercores = hypercores.lock().await;
 }
 
 fn serialize_entry(entry: &Entry) -> Vec<u8> {

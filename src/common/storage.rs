@@ -104,11 +104,13 @@ where
         }
     }
 
-    pub fn cursors(&self) -> Option<Vec<DocCursor>> {
-        self.state
-            .content
-            .as_ref()
-            .map(|content| content.cursors.clone())
+    pub fn content_mut(&mut self) -> Option<&mut DocContent> {
+        self.state.content.as_mut()
+    }
+
+    pub async fn set_content(&mut self, content: DocContent) {
+        self.state.content = Some(content);
+        write_doc_state(&self.state, &mut self.storage).await;
     }
 
     pub async fn set_cursor(&mut self, discovery_key: &[u8; 32], length: u64) {

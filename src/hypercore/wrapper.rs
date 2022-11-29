@@ -2,7 +2,13 @@ use async_channel::Sender;
 use async_std::sync::{Arc, Mutex};
 #[cfg(not(target_arch = "wasm32"))]
 use async_std::task;
-use hypercore_protocol::{hypercore::Hypercore, Channel};
+use hypercore_protocol::{
+    hypercore::{
+        compact_encoding::{CompactEncoding, State},
+        Hypercore,
+    },
+    Channel,
+};
 #[cfg(not(target_arch = "wasm32"))]
 use random_access_disk::RandomAccessDisk;
 use random_access_memory::RandomAccessMemory;
@@ -11,7 +17,7 @@ use std::fmt::Debug;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_futures::spawn_local;
 
-use crate::common::PeerEvent;
+use crate::common::{entry::Entry, PeerEvent};
 
 use super::{on_peer, PeerState};
 
@@ -53,6 +59,19 @@ where
         let mut hypercore = self.hypercore.lock().await;
         hypercore.append(data).await?;
         Ok(hypercore.info().length)
+    }
+
+    pub(crate) async fn entries(&mut self, index: u64) -> anyhow::Result<Vec<Entry>> {
+        let mut hypercore = self.hypercore.lock().await;
+        let length = hypercore.info().contiguous_length;
+        let mut entries: Vec<Entry> = vec![];
+        for i in index..length {
+            let data = hypercore.get(i).await.unwrap().unwrap();
+            let mut dec_state = State::from_buffer(&data);
+            let entry: Entry = dec_state.decode(&data);
+            entries.push(entry);
+        }
+        Ok(entries)
     }
 
     pub(super) fn key(&self) -> &[u8; 32] {

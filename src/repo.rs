@@ -18,8 +18,8 @@ use wasm_bindgen_futures::spawn_local;
 use crate::{
     automerge::init_doc_with_root_scalars,
     common::{storage::DocStateWrapper, PeerEvent, SynchronizeEvent},
-    hypercore::{on_protocol, HypercoreWrapper},
-    store::{create_and_insert_read_memory_hypercores, DocStore},
+    hypercore::{generate_keys, on_protocol, HypercoreWrapper},
+    store::{create_and_insert_read_memory_hypercores, create_content, update_content, DocStore},
     StateEvent,
 };
 
@@ -98,8 +98,14 @@ impl Repo<RandomAccessDisk> {
         &mut self,
         root_scalars: Vec<(P, V)>,
     ) -> ([u8; 32], String) {
-        let doc = init_doc_with_root_scalars(root_scalars);
-        self.store.lock().await.add_doc_disk(doc).await
+        // Generate a key pair, its discovery key and the public key string
+        let (key_pair, encoded_public_key, discovery_key) = generate_keys();
+        let doc = init_doc_with_root_scalars(&discovery_key, root_scalars);
+        self.store
+            .lock()
+            .await
+            .add_doc_disk(key_pair, encoded_public_key, discovery_key, doc)
+            .await
     }
 
     pub async fn register_doc_disk(&mut self, doc_url: &str) -> [u8; 32] {
@@ -134,8 +140,14 @@ impl Repo<RandomAccessMemory> {
         &mut self,
         root_scalars: Vec<(P, V)>,
     ) -> ([u8; 32], String) {
-        let doc = init_doc_with_root_scalars(root_scalars);
-        self.store.lock().await.add_doc_memory(doc).await
+        // Generate a key pair, its discovery key and the public key string
+        let (key_pair, encoded_public_key, discovery_key) = generate_keys();
+        let doc = init_doc_with_root_scalars(&discovery_key, root_scalars);
+        self.store
+            .lock()
+            .await
+            .add_doc_memory(key_pair, encoded_public_key, discovery_key, doc)
+            .await
     }
 
     pub async fn register_doc_memory(&mut self, doc_url: &str) -> [u8; 32] {
@@ -161,9 +173,11 @@ impl Repo<RandomAccessMemory> {
             let doc_state = hypercore_store.doc_state();
             let hypercores = hypercore_store.hypercores();
             let is_initiator = protocol.is_initiator();
+            let discovery_key_for_task = discovery_key.clone();
             #[cfg(not(target_arch = "wasm32"))]
             task::spawn(async move {
                 on_peer_event_memory(
+                    &discovery_key_for_task,
                     peer_event_receiver,
                     sync_event_sender_for_task,
                     doc_state,
@@ -175,6 +189,7 @@ impl Repo<RandomAccessMemory> {
             #[cfg(target_arch = "wasm32")]
             spawn_local(async move {
                 on_peer_event_memory(
+                    &discovery_key_for_task,
                     peer_event_receiver,
                     sync_event_sender_for_task,
                     doc_state,
@@ -198,6 +213,7 @@ impl Repo<RandomAccessMemory> {
 }
 
 async fn on_peer_event_memory(
+    discovery_key: &[u8; 32],
     mut peer_event_receiver: Receiver<PeerEvent>,
     sync_event_sender: Sender<SynchronizeEvent>,
     doc_state: Arc<Mutex<DocStateWrapper<RandomAccessMemory>>>,
@@ -236,20 +252,39 @@ async fn on_peer_event_memory(
                 }
             }
             PeerEvent::PeerSynced(public_key) => {
-                let (peers_synced, cursors) = {
+                let peers_synced = {
                     // Set peer to synced
                     let mut doc_state = doc_state.lock().await;
                     let sync_status_changed = doc_state.set_synced_to_state(public_key, true).await;
                     if sync_status_changed {
                         // Find out if now all peers are synced
                         let peers_synced = doc_state.peers_synced();
-                        // Also return all of the current cursors to be able to read the changes
-                        let cursors = doc_state.cursors();
-
-                        (peers_synced, cursors)
+                        if peers_synced.is_some() {
+                            // All peers are synced, so it should be possible to create a coherent
+                            // document now.
+                            {
+                                // Create and insert all new hypercores
+                                //
+                                if let Some(content) = doc_state.content_mut() {
+                                    update_content(discovery_key, content, hypercores.clone())
+                                        .await;
+                                } else {
+                                    let write_discovery_key = doc_state.write_discovery_key();
+                                    let content = create_content(
+                                        discovery_key,
+                                        &write_discovery_key,
+                                        hypercores.clone(),
+                                    )
+                                    .await
+                                    .unwrap();
+                                    doc_state.set_content(content).await;
+                                }
+                            }
+                        }
+                        peers_synced
                     } else {
                         // If nothing changed, don't reannounce
-                        (None, None)
+                        None
                     }
                 };
 
