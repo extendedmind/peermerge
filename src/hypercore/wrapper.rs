@@ -49,6 +49,11 @@ impl<T> HypercoreWrapper<T>
 where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send + 'static,
 {
+    pub(crate) async fn append(&mut self, data: &[u8]) {
+        let mut hypercore = self.hypercore.lock().await;
+        hypercore.append(data).await;
+    }
+
     pub(super) fn key(&self) -> &[u8; 32] {
         &self.key
     }

@@ -1,5 +1,5 @@
 use async_std::sync::{Arc, Mutex};
-use automerge::{Automerge, Prop};
+use automerge::{Automerge, ObjId, ObjType, Prop};
 use hypercore_protocol::hypercore::compact_encoding::{CompactEncoding, State};
 #[cfg(not(target_arch = "wasm32"))]
 use random_access_disk::RandomAccessDisk;
@@ -12,6 +12,7 @@ use crate::hypercore::{
     create_new_read_disk_hypercore, create_new_write_disk_hypercore, get_path_from_discovery_key,
 };
 use crate::{
+    automerge::put_object_autocommit,
     common::{
         entry::Entry,
         state::{DocContent, DocCursor},
@@ -36,13 +37,17 @@ where
 
 impl<T> DocStore<T>
 where
-    T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send,
+    T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send + 'static,
 {
-    pub fn get_mut(&mut self, discovery_key: &[u8; 32]) -> Option<&mut HypercoreStore<T>> {
+    pub(crate) fn get_mut(&mut self, discovery_key: &[u8; 32]) -> Option<&mut HypercoreStore<T>> {
         self.docs.get_mut(discovery_key)
     }
 
-    pub async fn watch_root_props(&mut self, discovery_key: &[u8; 32], root_props: Vec<Prop>) {
+    pub(crate) async fn watch_root_props(
+        &mut self,
+        discovery_key: &[u8; 32],
+        root_props: Vec<Prop>,
+    ) {
         if let Some(hypercore_store) = self.get_mut(discovery_key) {
             {
                 let doc_state = hypercore_store.doc_state();
@@ -52,6 +57,43 @@ where
                 }
             }
         }
+    }
+
+    pub(crate) async fn put_object<O: AsRef<ObjId>, P: Into<Prop>>(
+        &mut self,
+        discovery_key: &[u8; 32],
+        obj: O,
+        prop: P,
+        object: ObjType,
+    ) -> anyhow::Result<()> {
+        if let Some(hypercore_store) = self.get_mut(&discovery_key.clone()) {
+            {
+                let doc_state = hypercore_store.doc_state();
+                let (entry, write_discovery_key) = {
+                    let mut doc_state = doc_state.lock().await;
+                    let write_discovery_key = doc_state.write_discovery_key();
+                    if let Some(doc) = doc_state.doc_mut() {
+                        let entry = put_object_autocommit(doc, obj, prop, object).unwrap();
+
+                        (entry, write_discovery_key)
+                    } else {
+                        unimplemented!(
+                            "No proper error code for trying to change before a document is synced"
+                        );
+                    }
+                };
+                let hypercores = hypercore_store.hypercores();
+                {
+                    let hypercores = hypercores.lock().await;
+                    {
+                        let mut write_hypercore =
+                            hypercores.get(&write_discovery_key).unwrap().lock().await;
+                        write_hypercore.append(&serialize_entry(&entry)).await;
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 }
 

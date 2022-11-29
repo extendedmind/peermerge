@@ -4,6 +4,7 @@ use async_channel::{unbounded, Receiver, Sender};
 use async_std::net::TcpStream;
 use async_std::prelude::*;
 use async_std::task;
+use automerge::ROOT;
 use futures_lite::io::{AsyncRead, AsyncWrite};
 use futures_lite::stream::StreamExt;
 use hypercore_protocol::{discovery_key, Channel, Event, Message, Protocol, ProtocolBuilder};
@@ -32,6 +33,12 @@ async fn basic_two_writers() -> anyhow::Result<()> {
         Receiver<StateEvent>,
     ) = unbounded();
     let (discovery_key, doc_url) = repo_creator.create_doc_memory(vec![("version", 1)]).await;
+
+    // Insert a text field
+    repo_creator
+        .put_object(&discovery_key, ROOT, "text", automerge::ObjType::Text)
+        .await
+        .unwrap();
 
     // Set watching for the same props
     repo_creator

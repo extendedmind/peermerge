@@ -1,4 +1,4 @@
-use automerge::Prop;
+use automerge::{AutoCommit, Automerge, Prop};
 use hypercore_protocol::hypercore::compact_encoding::{CompactEncoding, State};
 #[cfg(not(target_arch = "wasm32"))]
 use random_access_disk::RandomAccessDisk;
@@ -6,7 +6,10 @@ use random_access_memory::RandomAccessMemory;
 use random_access_storage::RandomAccess;
 use std::{fmt::Debug, path::PathBuf};
 
-use crate::common::state::{DocState, RepoState};
+use crate::{
+    common::state::{DocState, RepoState},
+    hypercore::discovery_key_from_public_key,
+};
 
 use super::state::{DocContent, DocCursor, DocPeerState};
 
@@ -108,8 +111,22 @@ where
             .map(|content| content.cursors.clone())
     }
 
+    pub fn write_discovery_key(&self) -> [u8; 32] {
+        discovery_key_from_public_key(&self.state.public_key.expect("TODO: read-only hypercore"))
+    }
+
     pub fn state(&self) -> &DocState {
         &self.state
+    }
+
+    pub fn doc_mut(&mut self) -> Option<&mut AutoCommit> {
+        self.state.content.as_mut().and_then(|content| {
+            if content.doc.is_none() {
+                let doc = AutoCommit::load(&content.data).unwrap();
+                content.doc = Some(doc);
+            }
+            content.doc.as_mut()
+        })
     }
 
     pub fn watch_root_props(&mut self, root_props: Vec<Prop>) {

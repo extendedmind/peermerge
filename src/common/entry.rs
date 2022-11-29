@@ -43,4 +43,11 @@ impl Entry {
             data: discovery_key.to_vec(),
         }
     }
+    pub fn new_change(data: Vec<u8>) -> Self {
+        Self {
+            version: 1,
+            entry_type: EntryType::Change,
+            data,
+        }
+    }
 }

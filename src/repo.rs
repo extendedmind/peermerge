@@ -53,12 +53,16 @@ where
 
     pub async fn put_object<O: AsRef<ObjId>, P: Into<Prop>>(
         &mut self,
-        discovery_key: [u8; 32],
+        discovery_key: &[u8; 32],
         obj: O,
         prop: P,
         object: ObjType,
     ) -> anyhow::Result<()> {
-        unimplemented!();
+        self.store
+            .lock()
+            .await
+            .put_object(discovery_key, obj, prop, object)
+            .await
     }
 
     pub async fn watch_root_props<P: Into<Prop>>(

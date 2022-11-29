@@ -1,4 +1,4 @@
-use automerge::Prop;
+use automerge::{AutoCommit, Prop};
 use std::fmt::Debug;
 
 /// A RepoState stores serialized information about the Repo.
@@ -69,11 +69,18 @@ impl DocCursor {
 
 #[derive(Debug)]
 pub(crate) struct DocContent {
-    pub(crate) doc: Vec<u8>,
+    pub(crate) data: Vec<u8>,
     pub(crate) cursors: Vec<DocCursor>,
+    /// Transient reflection of the saved state, created from
+    /// data the first time it is accessed.
+    pub(crate) doc: Option<AutoCommit>,
 }
 impl DocContent {
-    pub fn new(doc: Vec<u8>, cursors: Vec<DocCursor>) -> Self {
-        Self { doc, cursors }
+    pub fn new(data: Vec<u8>, cursors: Vec<DocCursor>) -> Self {
+        Self {
+            data,
+            cursors,
+            doc: None,
+        }
     }
 }

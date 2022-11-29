@@ -132,7 +132,7 @@ impl CompactEncoding<DocPeerState> for State {
 
 impl CompactEncoding<DocContent> for State {
     fn preencode(&mut self, value: &DocContent) {
-        self.preencode(&value.doc);
+        self.preencode(&value.data);
         let len = value.cursors.len();
         self.preencode(&len);
         for cursor in &value.cursors {
@@ -141,7 +141,7 @@ impl CompactEncoding<DocContent> for State {
     }
 
     fn encode(&mut self, value: &DocContent, buffer: &mut [u8]) {
-        self.encode(&value.doc, buffer);
+        self.encode(&value.data, buffer);
         let len = value.cursors.len();
         self.encode(&len, buffer);
         for cursor in &value.cursors {
@@ -150,14 +150,18 @@ impl CompactEncoding<DocContent> for State {
     }
 
     fn decode(&mut self, buffer: &[u8]) -> DocContent {
-        let doc: Vec<u8> = self.decode(buffer);
+        let data: Vec<u8> = self.decode(buffer);
         let len: usize = self.decode(buffer);
         let mut cursors: Vec<DocCursor> = Vec::with_capacity(len);
         for _ in 0..len {
             let cursor: DocCursor = self.decode(buffer);
             cursors.push(cursor);
         }
-        DocContent { doc, cursors }
+        DocContent {
+            data,
+            cursors,
+            doc: None,
+        }
     }
 }
 
