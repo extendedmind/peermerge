@@ -45,7 +45,7 @@ impl DocState {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct DocPeerState {
     pub(crate) public_key: [u8; 32],
     pub(crate) synced: bool,
@@ -56,7 +56,7 @@ impl DocPeerState {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct DocCursor {
     pub(crate) public_key: [u8; 32],
     pub(crate) length: u64,

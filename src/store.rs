@@ -38,23 +38,17 @@ impl<T> DocStore<T>
 where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send,
 {
-    pub fn get_mut(&mut self, doc_url: &str) -> Option<&mut HypercoreStore<T>> {
-        let public_key = to_public_key(doc_url);
-        let (_, discovery_key) = keys_from_public_key(&public_key);
-        self.docs.get_mut(&discovery_key)
+    pub fn get_mut(&mut self, discovery_key: &[u8; 32]) -> Option<&mut HypercoreStore<T>> {
+        self.docs.get_mut(discovery_key)
     }
 
-    pub async fn watch_root_props<P: Into<Prop>>(&mut self, doc_url: &str, root_props: Vec<P>) {
-        if let Some(hypercore_store) = self.get_mut(doc_url) {
+    pub async fn watch_root_props(&mut self, discovery_key: &[u8; 32], root_props: Vec<Prop>) {
+        if let Some(hypercore_store) = self.get_mut(discovery_key) {
             {
-                let mut watch_root_props: Vec<Prop> = Vec::with_capacity(root_props.len());
-                for root_prop in root_props {
-                    watch_root_props.push(root_prop.into());
-                }
                 let doc_state = hypercore_store.doc_state();
                 {
                     let mut doc_state = doc_state.lock().await;
-                    doc_state.watch_root_props(watch_root_props);
+                    doc_state.watch_root_props(root_props);
                 }
             }
         }
@@ -72,7 +66,7 @@ impl DocStore<RandomAccessMemory> {
         }
     }
 
-    pub async fn add_doc_memory(&mut self, mut doc: Automerge) -> String {
+    pub async fn add_doc_memory(&mut self, mut doc: Automerge) -> ([u8; 32], String) {
         // Generate a key pair, its discovery key and the public key string
         let (key_pair, encoded_public_key, discovery_key) = generate_keys();
         let public_key = *key_pair.public.as_bytes();
@@ -96,13 +90,13 @@ impl DocStore<RandomAccessMemory> {
             Some(content),
         )
         .await;
-        self.docs.insert(discovery_key, hypercore_store);
+        self.docs.insert(discovery_key.clone(), hypercore_store);
 
-        // Return the doc url
-        to_doc_url(encoded_public_key)
+        // Return the doc discovery key and url
+        (discovery_key, to_doc_url(encoded_public_key))
     }
 
-    pub async fn register_doc_memory(&mut self, doc_url: &str) {
+    pub async fn register_doc_memory(&mut self, doc_url: &str) -> [u8; 32] {
         // Process keys from doc URL
         let doc_public_key = to_public_key(doc_url);
         let (doc_public_key, doc_discovery_key) = keys_from_public_key(&doc_public_key);
@@ -131,7 +125,8 @@ impl DocStore<RandomAccessMemory> {
             None,
         )
         .await;
-        self.docs.insert(doc_discovery_key, hypercore_store);
+        self.docs.insert(doc_discovery_key.clone(), hypercore_store);
+        doc_discovery_key
     }
 }
 
@@ -147,7 +142,7 @@ impl DocStore<RandomAccessDisk> {
         }
     }
 
-    pub async fn add_doc_disk(&mut self, mut doc: Automerge) -> String {
+    pub async fn add_doc_disk(&mut self, mut doc: Automerge) -> ([u8; 32], String) {
         // Generate a key pair, its discovery key and the public key string
         let (key_pair, encoded_public_key, discovery_key) = generate_keys();
         let public_key = *key_pair.public.as_bytes();
@@ -174,13 +169,13 @@ impl DocStore<RandomAccessDisk> {
             &get_path_from_discovery_key(&self.prefix, &discovery_key),
         )
         .await;
-        self.docs.insert(discovery_key, hypercore_store);
+        self.docs.insert(discovery_key.clone(), hypercore_store);
 
-        // Return the doc url
-        to_doc_url(encoded_public_key)
+        // Return the doc discovery key and url
+        (discovery_key, to_doc_url(encoded_public_key))
     }
 
-    pub async fn register_doc_disk(&mut self, doc_url: &str) {
+    pub async fn register_doc_disk(&mut self, doc_url: &str) -> [u8; 32] {
         // Process keys from doc URL
         let doc_public_key = to_public_key(doc_url);
         let (doc_public_key, doc_discovery_key) = keys_from_public_key(&doc_public_key);
@@ -213,7 +208,8 @@ impl DocStore<RandomAccessDisk> {
             &get_path_from_discovery_key(&self.prefix, &doc_discovery_key),
         )
         .await;
-        self.docs.insert(doc_discovery_key, hypercore_store);
+        self.docs.insert(doc_discovery_key.clone(), hypercore_store);
+        doc_discovery_key
     }
 }
 

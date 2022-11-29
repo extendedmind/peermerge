@@ -8,7 +8,7 @@ use std::{fmt::Debug, path::PathBuf};
 
 use crate::common::state::{DocState, RepoState};
 
-use super::state::{DocContent, DocPeerState};
+use super::state::{DocContent, DocCursor, DocPeerState};
 
 #[derive(Debug)]
 pub(crate) struct RepoStateWrapper<T>
@@ -99,6 +99,13 @@ where
         } else {
             None
         }
+    }
+
+    pub fn cursors(&self) -> Option<Vec<DocCursor>> {
+        self.state
+            .content
+            .as_ref()
+            .map(|content| content.cursors.clone())
     }
 
     pub fn state(&self) -> &DocState {

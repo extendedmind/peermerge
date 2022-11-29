@@ -31,31 +31,33 @@ async fn basic_two_writers() -> anyhow::Result<()> {
         Sender<StateEvent>,
         Receiver<StateEvent>,
     ) = unbounded();
-    let doc_url = repo_creator.create_doc_memory(vec![("version", 1)]).await;
+    let (discovery_key, doc_url) = repo_creator.create_doc_memory(vec![("version", 1)]).await;
 
     // Set watching for the same props
-    repo_creator.watch_root_props(&doc_url, vec!["text"]).await;
-    repo_joiner.watch_root_props(&doc_url, vec!["text"]).await;
+    repo_creator
+        .watch_root_props(&discovery_key, vec!["text"])
+        .await;
+    repo_joiner
+        .watch_root_props(&discovery_key, vec!["text"])
+        .await;
 
-    let doc_url_for_task = doc_url.clone();
     task::spawn(async move {
         connect_repo(
             repo_creator,
             proto_responder,
-            doc_url_for_task,
+            &discovery_key,
             joiner_state_event_sender,
         )
         .await
         .unwrap();
     });
 
-    let doc_url_for_task = doc_url.clone();
     task::spawn(async move {
-        repo_joiner.register_doc_memory(&doc_url_for_task).await;
+        let discovery_key = repo_joiner.register_doc_memory(&doc_url).await;
         connect_repo(
             repo_joiner,
             proto_initiator,
-            doc_url_for_task,
+            &discovery_key,
             creator_state_event_sender,
         )
         .await
@@ -73,26 +75,26 @@ async fn basic_two_writers() -> anyhow::Result<()> {
 async fn connect_repo(
     mut repo: Repo<RandomAccessMemory>,
     mut protocol: MemoryProtocol,
-    doc_url: String,
+    discovery_key: &[u8; 32],
     state_event_sender: Sender<StateEvent>,
 ) -> anyhow::Result<()> {
     let (mut sync_event_sender, mut sync_event_receiver): (
         Sender<SynchronizeEvent>,
         Receiver<SynchronizeEvent>,
     ) = unbounded();
-    let doc_url_for_task = doc_url.clone();
+    let discovery_key_for_task = discovery_key.clone();
     let mut repo_for_task = repo.clone();
     task::spawn(async move {
         repo_for_task
             .connect_document(
-                &doc_url_for_task,
+                discovery_key_for_task,
                 state_event_sender,
                 &mut sync_event_receiver,
             )
             .await
             .expect("Connect should not thorw error");
     });
-    repo.connect_protocol(&doc_url, &mut protocol, &mut sync_event_sender)
+    repo.connect_protocol(discovery_key, &mut protocol, &mut sync_event_sender)
         .await?;
     Ok(())
 }

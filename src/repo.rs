@@ -2,7 +2,7 @@ use async_channel::{unbounded, Receiver, Sender};
 use async_std::sync::{Arc, Mutex};
 #[cfg(not(target_arch = "wasm32"))]
 use async_std::task;
-use automerge::{Prop, ScalarValue};
+use automerge::{ObjId, ObjType, Prop, ScalarValue};
 use futures_lite::{AsyncRead, AsyncWrite, StreamExt};
 use hypercore_protocol::Protocol;
 #[cfg(not(target_arch = "wasm32"))]
@@ -40,7 +40,7 @@ where
 {
     pub async fn connect_document(
         &mut self,
-        doc_url: &str,
+        discovery_key: [u8; 32],
         state_event_sender: Sender<StateEvent>,
         sync_event_receiver: &mut Receiver<SynchronizeEvent>,
     ) -> anyhow::Result<()> {
@@ -51,11 +51,29 @@ where
         Ok(())
     }
 
-    pub async fn watch_root_props<P: Into<Prop>>(&mut self, doc_url: &str, root_props: Vec<P>) {
+    pub async fn put_object<O: AsRef<ObjId>, P: Into<Prop>>(
+        &mut self,
+        discovery_key: [u8; 32],
+        obj: O,
+        prop: P,
+        object: ObjType,
+    ) -> anyhow::Result<()> {
+        unimplemented!();
+    }
+
+    pub async fn watch_root_props<P: Into<Prop>>(
+        &mut self,
+        discovery_key: &[u8; 32],
+        root_props: Vec<P>,
+    ) {
+        let mut watch_root_props: Vec<Prop> = Vec::with_capacity(root_props.len());
+        for root_prop in root_props {
+            watch_root_props.push(root_prop.into());
+        }
         self.store
             .lock()
             .await
-            .watch_root_props(doc_url, root_props)
+            .watch_root_props(discovery_key, watch_root_props)
             .await;
     }
 }
@@ -75,18 +93,18 @@ impl Repo<RandomAccessDisk> {
     pub async fn create_document_disk<P: Into<Prop>, V: Into<ScalarValue>>(
         &mut self,
         root_scalars: Vec<(P, V)>,
-    ) -> String {
+    ) -> ([u8; 32], String) {
         let doc = init_doc_with_root_scalars(root_scalars);
         self.store.lock().await.add_doc_disk(doc).await
     }
 
-    pub async fn register_doc_disk(&mut self, doc_url: &str) {
+    pub async fn register_doc_disk(&mut self, doc_url: &str) -> [u8; 32] {
         self.store.lock().await.register_doc_disk(doc_url).await
     }
 
     pub async fn connect_protocol<IO>(
         &mut self,
-        doc_url: &str,
+        discovery_key: &[u8; 32],
         protocol: &mut Protocol<IO>,
         sync_event_sender: &mut Sender<SynchronizeEvent>,
     ) -> anyhow::Result<()>
@@ -111,25 +129,25 @@ impl Repo<RandomAccessMemory> {
     pub async fn create_doc_memory<P: Into<Prop>, V: Into<ScalarValue>>(
         &mut self,
         root_scalars: Vec<(P, V)>,
-    ) -> String {
+    ) -> ([u8; 32], String) {
         let doc = init_doc_with_root_scalars(root_scalars);
         self.store.lock().await.add_doc_memory(doc).await
     }
 
-    pub async fn register_doc_memory(&mut self, doc_url: &str) {
+    pub async fn register_doc_memory(&mut self, doc_url: &str) -> [u8; 32] {
         self.store.lock().await.register_doc_memory(doc_url).await
     }
 
     pub async fn connect_protocol<IO>(
         &mut self,
-        doc_url: &str,
+        discovery_key: &[u8; 32],
         protocol: &mut Protocol<IO>,
         sync_event_sender: &mut Sender<SynchronizeEvent>,
     ) -> anyhow::Result<()>
     where
         IO: AsyncWrite + AsyncRead + Send + Unpin + 'static,
     {
-        if let Some(hypercore_store) = self.store.lock().await.get_mut(doc_url) {
+        if let Some(hypercore_store) = self.store.lock().await.get_mut(discovery_key) {
             let (mut peer_event_sender, peer_event_receiver): (
                 Sender<PeerEvent>,
                 Receiver<PeerEvent>,
@@ -214,16 +232,20 @@ async fn on_peer_event_memory(
                 }
             }
             PeerEvent::PeerSynced(public_key) => {
-                let peers_synced: Option<usize> = {
+                let (peers_synced, cursors) = {
                     // Set peer to synced
                     let mut doc_state = doc_state.lock().await;
                     let sync_status_changed = doc_state.set_synced_to_state(public_key, true).await;
                     if sync_status_changed {
                         // Find out if now all peers are synced
-                        doc_state.peers_synced()
+                        let peers_synced = doc_state.peers_synced();
+                        // Also return all of the current cursors to be able to read the changes
+                        let cursors = doc_state.cursors();
+
+                        (peers_synced, cursors)
                     } else {
                         // If nothing changed, don't reannounce
-                        None
+                        (None, None)
                     }
                 };
 
