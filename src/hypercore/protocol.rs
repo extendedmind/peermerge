@@ -44,7 +44,7 @@ where
                         if is_initiator {
                             for hypercore in hypercore_store.hypercores().lock().await.values() {
                                 let hypercore = hypercore.lock().await;
-                                protocol.open(hypercore.key().clone()).await?;
+                                protocol.open(hypercore.public_key().clone()).await?;
                             }
                         }
                     }
@@ -53,7 +53,7 @@ where
                             hypercore_store.hypercores().lock().await.get(&dkey)
                         {
                             let hypercore = hypercore.lock().await;
-                            protocol.open(hypercore.key().clone()).await?;
+                            protocol.open(hypercore.public_key().clone()).await?;
                         }
                     }
                     Event::Channel(channel) => {
@@ -87,7 +87,7 @@ where
                         if is_initiator {
                             for hypercore in hypercore_store.hypercores().lock().await.values() {
                                 let hypercore = hypercore.lock().await;
-                                protocol.open(hypercore.key().clone()).await?;
+                                protocol.open(hypercore.public_key().clone()).await?;
                             }
                         }
                     }

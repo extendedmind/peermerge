@@ -26,16 +26,16 @@ pub struct HypercoreWrapper<T>
 where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send,
 {
-    pub(super) key: [u8; 32],
+    pub(super) public_key: [u8; 32],
     pub(super) hypercore: Arc<Mutex<Hypercore<T>>>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 impl HypercoreWrapper<RandomAccessDisk> {
     pub fn from_disk_hypercore(hypercore: Hypercore<RandomAccessDisk>) -> Self {
-        let key = hypercore.key_pair().public.to_bytes();
+        let public_key = hypercore.key_pair().public.to_bytes();
         HypercoreWrapper {
-            key,
+            public_key,
             hypercore: Arc::new(Mutex::new(hypercore)),
         }
     }
@@ -43,9 +43,9 @@ impl HypercoreWrapper<RandomAccessDisk> {
 
 impl HypercoreWrapper<RandomAccessMemory> {
     pub fn from_memory_hypercore(hypercore: Hypercore<RandomAccessMemory>) -> Self {
-        let key = hypercore.key_pair().public.to_bytes();
+        let public_key = hypercore.key_pair().public.to_bytes();
         HypercoreWrapper {
-            key,
+            public_key,
             hypercore: Arc::new(Mutex::new(hypercore)),
         }
     }
@@ -74,8 +74,8 @@ where
         Ok(entries)
     }
 
-    pub(super) fn key(&self) -> &[u8; 32] {
-        &self.key
+    pub(super) fn public_key(&self) -> &[u8; 32] {
+        &self.public_key
     }
 
     pub(super) fn on_channel(

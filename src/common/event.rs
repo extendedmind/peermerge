@@ -1,8 +1,6 @@
-use automerge::Automerge;
-
 #[derive(Clone, Debug)]
 pub enum StateEvent {
-    DocumentLoaded(Automerge),
+    DocumentLoaded([u8; 32]),
 }
 
 #[derive(Clone, Debug)]
@@ -17,4 +15,9 @@ pub enum PeerEvent {
     PeerSyncStarted([u8; 32]),
     PeerSynced([u8; 32]),
     PeerDisconnected(u64),
+}
+
+#[derive(Clone, Debug)]
+pub enum HypercoreEvent {
+    EntryAppended(u64),
 }
