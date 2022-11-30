@@ -1,5 +1,5 @@
 use async_std::sync::{Arc, Mutex};
-use automerge::{Automerge, ObjId, ObjType, Prop};
+use automerge::{AutoCommit, Automerge, ObjId, ObjType, Prop};
 use hypercore_protocol::hypercore::compact_encoding::{CompactEncoding, State};
 use hypercore_protocol::hypercore::Keypair;
 #[cfg(not(target_arch = "wasm32"))]
@@ -112,7 +112,8 @@ impl DocStore<RandomAccessMemory> {
         key_pair: Keypair,
         encoded_public_key: String,
         discovery_key: [u8; 32],
-        doc: Vec<u8>,
+        doc: AutoCommit,
+        data: Vec<u8>,
     ) -> ([u8; 32], String) {
         // Generate a key pair, its discovery key and the public key string
         let public_key = *key_pair.public.as_bytes();
@@ -120,10 +121,14 @@ impl DocStore<RandomAccessMemory> {
         // Create the memory hypercore
         let (length, hypercore) = create_new_write_memory_hypercore(
             key_pair,
-            serialize_entry(&Entry::new_init_doc(doc.clone())),
+            serialize_entry(&Entry::new_init_doc(data.clone())),
         )
         .await;
-        let content = DocContent::new(doc, vec![DocCursor::new(discovery_key.clone(), length)]);
+        let content = DocContent::new(
+            data,
+            vec![DocCursor::new(discovery_key.clone(), length)],
+            doc,
+        );
 
         // Write the state
         self.repo_state.add_public_key_to_state(&public_key).await;
@@ -192,7 +197,8 @@ impl DocStore<RandomAccessDisk> {
         key_pair: Keypair,
         encoded_public_key: String,
         discovery_key: [u8; 32],
-        doc: Vec<u8>,
+        doc: AutoCommit,
+        data: Vec<u8>,
     ) -> ([u8; 32], String) {
         let public_key = *key_pair.public.as_bytes();
 
@@ -201,10 +207,14 @@ impl DocStore<RandomAccessDisk> {
             &self.prefix,
             key_pair,
             &discovery_key,
-            serialize_entry(&Entry::new_init_doc(doc.clone())),
+            serialize_entry(&Entry::new_init_doc(data.clone())),
         )
         .await;
-        let content = DocContent::new(doc, vec![DocCursor::new(discovery_key.clone(), length)]);
+        let content = DocContent::new(
+            data,
+            vec![DocCursor::new(discovery_key.clone(), length)],
+            doc,
+        );
 
         // Write the state
         self.repo_state.add_public_key_to_state(&public_key).await;
@@ -390,8 +400,8 @@ where
     }
 
     // Create DocContent from the hypercore
-    let doc = init_doc_from_entries(write_discovery_key, entries);
-    Ok(DocContent::new(doc, cursors))
+    let (doc, data) = init_doc_from_entries(write_discovery_key, entries);
+    Ok(DocContent::new(data, cursors, doc))
 }
 
 pub(crate) async fn update_content<T>(

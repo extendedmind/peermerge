@@ -79,11 +79,11 @@ pub(crate) struct DocContent {
     pub(crate) doc: Option<AutoCommit>,
 }
 impl DocContent {
-    pub fn new(data: Vec<u8>, cursors: Vec<DocCursor>) -> Self {
+    pub fn new(data: Vec<u8>, cursors: Vec<DocCursor>, doc: AutoCommit) -> Self {
         Self {
             data,
             cursors,
-            doc: None,
+            doc: Some(doc),
         }
     }
 }

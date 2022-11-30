@@ -100,11 +100,11 @@ impl Repo<RandomAccessDisk> {
     ) -> ([u8; 32], String) {
         // Generate a key pair, its discovery key and the public key string
         let (key_pair, encoded_public_key, discovery_key) = generate_keys();
-        let doc = init_doc_with_root_scalars(&discovery_key, root_scalars);
+        let (doc, data) = init_doc_with_root_scalars(&discovery_key, root_scalars);
         self.store
             .lock()
             .await
-            .add_doc_disk(key_pair, encoded_public_key, discovery_key, doc)
+            .add_doc_disk(key_pair, encoded_public_key, discovery_key, doc, data)
             .await
     }
 
@@ -142,11 +142,11 @@ impl Repo<RandomAccessMemory> {
     ) -> ([u8; 32], String) {
         // Generate a key pair, its discovery key and the public key string
         let (key_pair, encoded_public_key, discovery_key) = generate_keys();
-        let doc = init_doc_with_root_scalars(&discovery_key, root_scalars);
+        let (doc, data) = init_doc_with_root_scalars(&discovery_key, root_scalars);
         self.store
             .lock()
             .await
-            .add_doc_memory(key_pair, encoded_public_key, discovery_key, doc)
+            .add_doc_memory(key_pair, encoded_public_key, discovery_key, doc, data)
             .await
     }
 

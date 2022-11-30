@@ -9,7 +9,7 @@ use crate::common::entry::{Entry, EntryType};
 pub fn init_doc_with_root_scalars<P: Into<Prop>, V: Into<ScalarValue>>(
     discovery_key: &[u8; 32],
     root_props: Vec<(P, V)>,
-) -> Vec<u8> {
+) -> (AutoCommit, Vec<u8>) {
     let mut doc = Automerge::new();
     doc.set_actor(ActorId::from(discovery_key));
     doc.transact_with::<_, _, AutomergeError, _>(
@@ -22,10 +22,15 @@ pub fn init_doc_with_root_scalars<P: Into<Prop>, V: Into<ScalarValue>>(
         },
     )
     .unwrap();
-    doc.save()
+    let data = doc.save();
+    let doc: AutoCommit = AutoCommit::load(&data).unwrap();
+    (doc, data)
 }
 
-pub(crate) fn init_doc_from_entries(discovery_key: &[u8; 32], entries: Vec<Entry>) -> Vec<u8> {
+pub(crate) fn init_doc_from_entries(
+    discovery_key: &[u8; 32],
+    entries: Vec<Entry>,
+) -> (AutoCommit, Vec<u8>) {
     let mut doc = AutoCommit::load(&entries[0].data).unwrap();
     doc.set_actor(ActorId::from(discovery_key));
     let changes: Vec<Change> = entries
@@ -35,5 +40,6 @@ pub(crate) fn init_doc_from_entries(discovery_key: &[u8; 32], entries: Vec<Entry
         .map(|entry| Change::from_bytes(entry.data.clone()).unwrap())
         .collect();
     doc.apply_changes(changes).unwrap();
-    doc.save()
+    let data = doc.save();
+    (doc, data)
 }
