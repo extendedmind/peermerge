@@ -20,7 +20,7 @@ pub(super) async fn on_peer<T>(
 where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send + 'static,
 {
-    // Immediately broadcast peers to the other end
+    // Immediately broadcast hypercores to the other end
     let message = create_broadcast_message(&peer_state);
     channel.send(message).await.unwrap();
 

@@ -188,16 +188,48 @@ impl CompactEncoding<DocCursor> for State {
 
 impl CompactEncoding<BroadcastMessage> for State {
     fn preencode(&mut self, value: &BroadcastMessage) {
-        preencode_fixed_32_byte_vec(self, &value.public_keys);
+        self.end += 1; // flags
+        if value.public_key.is_some() {
+            self.end += 32;
+        }
+        let len = value.peer_public_keys.len();
+        if len > 0 {
+            preencode_fixed_32_byte_vec(self, &value.peer_public_keys);
+        }
     }
 
     fn encode(&mut self, value: &BroadcastMessage, buffer: &mut [u8]) {
-        encode_fixed_32_byte_vec(self, &value.public_keys, buffer);
+        let flags_index = self.start;
+        let mut flags: u8 = 0;
+        self.start += 1;
+        if let Some(public_key) = &value.public_key {
+            flags = flags | 1;
+            self.encode_fixed_32(public_key, buffer);
+        }
+        let len = value.peer_public_keys.len();
+        if len > 0 {
+            flags = flags | 2;
+            encode_fixed_32_byte_vec(self, &value.peer_public_keys, buffer);
+        }
+        buffer[flags_index] = flags;
     }
 
     fn decode(&mut self, buffer: &[u8]) -> BroadcastMessage {
-        let public_keys = decode_fixed_32_byte_vec(self, buffer);
-        BroadcastMessage { public_keys }
+        let flags: u8 = self.decode(buffer);
+        let public_key: Option<[u8; 32]> = if flags & 1 != 0 {
+            Some(self.decode_fixed_32(buffer).to_vec().try_into().unwrap())
+        } else {
+            None
+        };
+        let peer_public_keys: Vec<[u8; 32]> = if flags & 2 != 0 {
+            decode_fixed_32_byte_vec(self, buffer)
+        } else {
+            vec![]
+        };
+        BroadcastMessage {
+            public_key,
+            peer_public_keys,
+        }
     }
 }
 

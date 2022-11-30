@@ -284,18 +284,15 @@ impl<T> HypercoreStore<T>
 where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send,
 {
-    pub async fn public_keys(&self) -> Vec<[u8; 32]> {
+    pub async fn public_keys(&self) -> (Option<[u8; 32]>, Vec<[u8; 32]>) {
         let state = self.doc_state.lock().await;
         let state = state.state();
-        let mut public_keys: Vec<[u8; 32]> = state
+        let peer_public_keys: Vec<[u8; 32]> = state
             .peers
             .iter()
             .map(|peer| peer.public_key.clone())
             .collect();
-        if let Some(public_key) = state.public_key {
-            public_keys.push(public_key);
-        }
-        public_keys
+        (state.public_key, peer_public_keys)
     }
 
     pub fn doc_state(&self) -> Arc<Mutex<DocStateWrapper<T>>> {

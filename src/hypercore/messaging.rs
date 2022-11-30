@@ -19,7 +19,8 @@ const HYPERMERGE_INTERNAL_APPEND_MSG: &str = "hypermerge/__append";
 
 pub(super) fn create_broadcast_message(peer_state: &PeerState) -> Message {
     let broadcast_message: BroadcastMessage = BroadcastMessage {
-        public_keys: peer_state.public_keys.clone(),
+        public_key: peer_state.public_key.clone(),
+        peer_public_keys: peer_state.peer_public_keys.clone(),
     };
     let mut enc_state = State::new();
     enc_state.preencode(&broadcast_message);
@@ -56,7 +57,7 @@ where
     match message {
         Message::Synchronize(message) => {
             let length_changed = message.length != peer_state.remote_length;
-            let first_sync = !peer_state.remote_synced;
+            let first_sync = !peer_state.remote_sync_received;
             let (info, public_key) = {
                 let hypercore = hypercore.lock().await;
                 let info = hypercore.info();
@@ -70,7 +71,7 @@ where
             peer_state.remote_can_upgrade = message.can_upgrade;
             peer_state.remote_uploading = message.uploading;
             peer_state.remote_downloading = message.downloading;
-            peer_state.remote_synced = true;
+            peer_state.remote_sync_received = true;
 
             peer_state.length_acked = if same_fork { message.remote_length } else { 0 };
 
@@ -244,10 +245,12 @@ where
             HYPERMERGE_BROADCAST_MSG => {
                 let mut dec_state = State::from_buffer(&message.message);
                 let broadcast_message: BroadcastMessage = dec_state.decode(&message.message);
-                let new_peers =
-                    peer_state.filter_new_peer_public_keys(&broadcast_message.public_keys);
+                let new_remote_public_keys = peer_state.filter_new_peer_public_keys(
+                    &broadcast_message.public_key,
+                    &broadcast_message.peer_public_keys,
+                );
 
-                if new_peers.is_empty() {
+                if new_remote_public_keys.is_empty() {
                     // There are no new peers, start sync
                     let info = {
                         let hypercore = hypercore.lock().await;
@@ -287,10 +290,25 @@ where
                     } else {
                         channel.send(Message::Synchronize(sync_msg)).await?;
                     }
-                }
-                if !new_peers.is_empty() {
+                } else {
                     // New peers found, return a peer event
-                    return Ok(Some(PeerEvent::NewPeersAdvertised(new_peers)));
+                    return Ok(Some(PeerEvent::NewPeersAdvertised(new_remote_public_keys)));
+                }
+            }
+            HYPERMERGE_INTERNAL_APPEND_MSG => {
+                let mut dec_state = State::from_buffer(&message.message);
+                let length: u64 = dec_state.decode(&message.message);
+                let info = {
+                    let hypercore = hypercore.lock().await;
+                    hypercore.info()
+                };
+                if info.contiguous_length >= length {
+                    let range_msg = Range {
+                        drop: false,
+                        start: 0,
+                        length,
+                    };
+                    channel.send(Message::Range(range_msg)).await?;
                 }
             }
             _ => {

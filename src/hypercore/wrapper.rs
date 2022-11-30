@@ -96,18 +96,13 @@ where
     pub(super) fn on_channel(
         &mut self,
         channel: Channel,
-        public_keys: Vec<[u8; 32]>,
+        public_key: Option<[u8; 32]>,
+        peer_public_keys: Vec<[u8; 32]>,
         peer_event_sender: &mut Sender<PeerEvent>,
         is_initiator: bool,
     ) {
-        println!(
-            "on_channel({}): id={}, len={}: {:?}",
-            is_initiator,
-            channel.id(),
-            public_keys.len(),
-            public_keys
-        );
-        let peer_state = PeerState::new(public_keys);
+        println!("on_channel({}): id={}", is_initiator, channel.id(),);
+        let peer_state = PeerState::new(public_key, peer_public_keys, None);
         let hypercore = self.hypercore.clone();
         let mut peer_event_sender_for_task = peer_event_sender.clone();
         let internal_message_receiver = self.listen();

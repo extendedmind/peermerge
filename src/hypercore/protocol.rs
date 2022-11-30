@@ -73,9 +73,12 @@ where
                                 "on_protocol({}): reading public keys from store",
                                 is_initiator
                             );
+                            let (public_key, peer_public_keys) =
+                                hypercore_store.public_keys().await;
                             hypercore.on_channel(
                                 channel,
-                                hypercore_store.public_keys().await,
+                                public_key,
+                                peer_public_keys,
                                 peer_event_sender,
                                 is_initiator,
                             );
