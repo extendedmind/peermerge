@@ -102,7 +102,7 @@ where
         is_initiator: bool,
     ) {
         println!("on_channel({}): id={}", is_initiator, channel.id(),);
-        let peer_state = PeerState::new(public_key, peer_public_keys, None);
+        let peer_state = PeerState::new(public_key, peer_public_keys);
         let hypercore = self.hypercore.clone();
         let mut peer_event_sender_for_task = peer_event_sender.clone();
         let internal_message_receiver = self.listen();

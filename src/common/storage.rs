@@ -81,7 +81,7 @@ where
     }
 
     pub async fn set_synced_to_state(&mut self, public_key: [u8; 32], synced: bool) -> bool {
-        if let Some(peer) = self
+        let changed = if let Some(peer) = self
             .state
             .peers
             .iter_mut()
@@ -89,11 +89,13 @@ where
         {
             let changed = peer.synced != synced;
             peer.synced = synced;
-            write_doc_state(&self.state, &mut self.storage).await;
             changed
         } else {
-            panic!("Could not find peer based on public key from in peers");
-        }
+            self.state.peers.push(DocPeerState { public_key, synced });
+            true
+        };
+        write_doc_state(&self.state, &mut self.storage).await;
+        changed
     }
 
     pub fn peers_synced(&self) -> Option<usize> {

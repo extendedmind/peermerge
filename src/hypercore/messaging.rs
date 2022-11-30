@@ -232,14 +232,21 @@ where
             return Ok(peer_synced);
         }
         Message::Range(message) => {
-            let info = {
+            let peer_synced = {
                 let hypercore = hypercore.lock().await;
-                hypercore.info()
+                let info = hypercore.info();
+                let peer_synced: Option<PeerEvent> = if message.start == 0
+                    && info.contiguous_length == message.length
+                    && peer_state.remote_length == message.length
+                {
+                    let public_key: [u8; 32] = *hypercore.key_pair().public.as_bytes();
+                    Some(PeerEvent::PeerSynced(public_key))
+                } else {
+                    None
+                };
+                peer_synced
             };
-            if message.start == 0 && message.length == info.contiguous_length {
-                // TODO: Ready with this core
-                return Ok(None);
-            }
+            return Ok(peer_synced);
         }
         Message::Extension(message) => match message.name.as_str() {
             HYPERMERGE_BROADCAST_MSG => {
@@ -250,8 +257,24 @@ where
                     &broadcast_message.peer_public_keys,
                 );
 
-                if new_remote_public_keys.is_empty() {
+                if new_remote_public_keys.is_empty()
+                    && peer_state.peer_public_keys_match(
+                        &broadcast_message.public_key,
+                        &broadcast_message.peer_public_keys,
+                    )
+                {
                     // There are no new peers, start sync
+                    //
+                    // Save information about if this peer can write to this hypercore: that
+                    // determines if we ask this peer for new data
+                    if let Some(remote_public_key) = broadcast_message.public_key {
+                        peer_state.remote_can_write = {
+                            let hypercore = hypercore.lock().await;
+                            let public_key: [u8; 32] = *hypercore.key_pair().public.as_bytes();
+                            public_key == remote_public_key
+                        };
+                    }
+
                     let info = {
                         let hypercore = hypercore.lock().await;
                         hypercore.info()
