@@ -1,4 +1,4 @@
-use automerge::{AutoCommit, Prop};
+use automerge::Prop;
 use hypercore_protocol::hypercore::compact_encoding::{CompactEncoding, State};
 #[cfg(not(target_arch = "wasm32"))]
 use random_access_disk::RandomAccessDisk;
@@ -7,6 +7,7 @@ use random_access_storage::RandomAccess;
 use std::{fmt::Debug, path::PathBuf};
 
 use crate::{
+    automerge::{init_doc_from_data, AutomergeDoc},
     common::state::{DocState, RepoState},
     hypercore::discovery_key_from_public_key,
 };
@@ -142,10 +143,10 @@ where
         &self.state
     }
 
-    pub fn doc_mut(&mut self) -> Option<&mut AutoCommit> {
+    pub fn doc_mut(&mut self, write_discovery_key: &[u8; 32]) -> Option<&mut AutomergeDoc> {
         self.state.content.as_mut().and_then(|content| {
             if content.doc.is_none() {
-                let doc = AutoCommit::load(&content.data).unwrap();
+                let doc = init_doc_from_data(write_discovery_key, &content.data);
                 content.doc = Some(doc);
             }
             content.doc.as_mut()

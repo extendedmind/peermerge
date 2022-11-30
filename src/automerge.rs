@@ -2,8 +2,9 @@
 
 mod diff;
 mod init;
-mod materialize;
 
+use automerge::{transaction::Observed, AutoCommitWithObs, VecOpObserver};
 pub(crate) use diff::{apply_changes_autocommit, put_object_autocommit};
-pub(crate) use init::{init_doc_from_entries, init_doc_with_root_scalars};
-pub(crate) use materialize::materialize_root_property;
+pub(crate) use init::{init_doc_from_data, init_doc_from_entries, init_doc_with_root_scalars};
+
+pub(crate) type AutomergeDoc = AutoCommitWithObs<Observed<VecOpObserver>>;

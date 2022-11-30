@@ -1,15 +1,17 @@
 use automerge::{
     transaction::{CommitOptions, Transactable},
-    ActorId, AutoCommit, Automerge, AutomergeError, Change, Prop, ScalarValue, ROOT,
+    ActorId, AutoCommit, Automerge, AutomergeError, Change, Prop, ScalarValue, VecOpObserver, ROOT,
 };
 
 use crate::common::entry::{Entry, EntryType};
+
+use super::AutomergeDoc;
 
 /// Convenience method to initialize an Automerge document with root scalars
 pub fn init_doc_with_root_scalars<P: Into<Prop>, V: Into<ScalarValue>>(
     discovery_key: &[u8; 32],
     root_props: Vec<(P, V)>,
-) -> (AutoCommit, Vec<u8>) {
+) -> (AutomergeDoc, Vec<u8>) {
     let mut doc = Automerge::new();
     doc.set_actor(ActorId::from(discovery_key));
     doc.transact_with::<_, _, AutomergeError, _>(
@@ -24,22 +26,30 @@ pub fn init_doc_with_root_scalars<P: Into<Prop>, V: Into<ScalarValue>>(
     .unwrap();
     let data = doc.save();
     let doc: AutoCommit = AutoCommit::load(&data).unwrap();
+    let mut doc = doc.with_observer(VecOpObserver::default());
     (doc, data)
+}
+
+pub(crate) fn init_doc_from_data(discovery_key: &[u8; 32], data: &Vec<u8>) -> AutomergeDoc {
+    let mut doc = AutoCommit::load(data).unwrap();
+    let mut doc = doc.with_observer(VecOpObserver::default());
+    doc.set_actor(ActorId::from(discovery_key));
+    doc
 }
 
 pub(crate) fn init_doc_from_entries(
     discovery_key: &[u8; 32],
     entries: Vec<Entry>,
-) -> (AutoCommit, Vec<u8>) {
-    let mut doc = AutoCommit::load(&entries[0].data).unwrap();
-    doc.set_actor(ActorId::from(discovery_key));
+) -> (AutomergeDoc, Vec<u8>) {
+    let mut doc = init_doc_from_data(discovery_key, &entries[0].data);
     let changes: Vec<Change> = entries
         .iter()
         .skip(1)
         .filter(|entry| entry.entry_type != EntryType::InitPeer)
         .map(|entry| Change::from_bytes(entry.data.clone()).unwrap())
         .collect();
-    doc.apply_changes(changes).unwrap();
+
+    let result = doc.apply_changes(changes).unwrap();
     let data = doc.save();
     (doc, data)
 }

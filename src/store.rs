@@ -1,5 +1,5 @@
 use async_std::sync::{Arc, Mutex};
-use automerge::{AutoCommit, Automerge, ObjId, ObjType, Prop};
+use automerge::{ObjId, ObjType, Prop};
 use hypercore_protocol::hypercore::compact_encoding::{CompactEncoding, State};
 use hypercore_protocol::hypercore::Keypair;
 #[cfg(not(target_arch = "wasm32"))]
@@ -8,7 +8,7 @@ use random_access_memory::RandomAccessMemory;
 use random_access_storage::RandomAccess;
 use std::{collections::HashMap, fmt::Debug, path::PathBuf};
 
-use crate::automerge::init_doc_from_entries;
+use crate::automerge::{init_doc_from_entries, AutomergeDoc};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::hypercore::{
     create_new_read_disk_hypercore, create_new_write_disk_hypercore, get_path_from_discovery_key,
@@ -74,7 +74,7 @@ where
                 {
                     let mut doc_state = doc_state.lock().await;
                     let write_discovery_key = doc_state.write_discovery_key();
-                    let entry = if let Some(doc) = doc_state.doc_mut() {
+                    let entry = if let Some(doc) = doc_state.doc_mut(&write_discovery_key) {
                         put_object_autocommit(doc, obj, prop, object).unwrap()
                     } else {
                         unimplemented!(
@@ -112,7 +112,7 @@ impl DocStore<RandomAccessMemory> {
         key_pair: Keypair,
         encoded_public_key: String,
         discovery_key: [u8; 32],
-        doc: AutoCommit,
+        doc: AutomergeDoc,
         data: Vec<u8>,
     ) -> ([u8; 32], String) {
         // Generate a key pair, its discovery key and the public key string
@@ -197,7 +197,7 @@ impl DocStore<RandomAccessDisk> {
         key_pair: Keypair,
         encoded_public_key: String,
         discovery_key: [u8; 32],
-        doc: AutoCommit,
+        doc: AutomergeDoc,
         data: Vec<u8>,
     ) -> ([u8; 32], String) {
         let public_key = *key_pair.public.as_bytes();

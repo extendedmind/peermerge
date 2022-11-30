@@ -1,13 +1,14 @@
-use automerge::{transaction::Transactable, AutoCommit, ObjId, ObjType, Prop};
+use automerge::{transaction::Transactable, ObjId, ObjType, Prop};
 
+use super::AutomergeDoc;
 use crate::common::entry::Entry;
 
-pub(crate) fn apply_changes_autocommit(doc: &mut AutoCommit, changes: Vec<Entry>) {
+pub(crate) fn apply_changes_autocommit(doc: &mut AutomergeDoc, changes: Vec<Entry>) {
     // doc.apply_changes();
 }
 
 pub(crate) fn put_object_autocommit<O: AsRef<ObjId>, P: Into<Prop>>(
-    doc: &mut AutoCommit,
+    doc: &mut AutomergeDoc,
     obj: O,
     prop: P,
     object: ObjType,

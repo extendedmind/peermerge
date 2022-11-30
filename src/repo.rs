@@ -45,6 +45,8 @@ where
         sync_event_receiver: &mut Receiver<SynchronizeEvent>,
     ) -> anyhow::Result<()> {
         while let Some(event) = sync_event_receiver.next().await {
+            let store = self.store.lock().await;
+
             println!("connect_document: received sync event: {:?}", event);
             // TODO: Do something here with sync event to trigger state event
         }
