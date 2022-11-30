@@ -1,30 +1,35 @@
 use anyhow::Result;
-use async_channel::Sender;
+use async_channel::{Receiver, Sender};
 use async_std::sync::{Arc, Mutex};
 use futures_lite::stream::StreamExt;
-use hypercore_protocol::{hypercore::Hypercore, Channel};
+use hypercore_protocol::{hypercore::Hypercore, Channel, Message};
 use random_access_storage::RandomAccess;
 use std::fmt::Debug;
 
-use super::{messaging::create_advertise_message, on_message, PeerState};
+use super::{messaging::create_broadcast_message, on_message, PeerState};
 use crate::common::PeerEvent;
 
 pub(super) async fn on_peer<T>(
     mut hypercore: Arc<Mutex<Hypercore<T>>>,
     mut peer_state: PeerState,
     mut channel: Channel,
+    mut internal_message_receiver: Receiver<Message>,
     peer_event_sender: &mut Sender<PeerEvent>,
     is_initiator: bool,
 ) -> Result<()>
 where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send + 'static,
 {
-    // Immediately advertise peers to the other end
-    let message = create_advertise_message(&peer_state);
+    // Immediately broadcast peers to the other end
+    let message = create_broadcast_message(&peer_state);
     channel.send(message).await.unwrap();
 
-    // Start listening on incoming messages
-    while let Some(message) = channel.next().await {
+    // Start listening on incoming messages or internal messages
+    while let Some(message) =
+        futures_lite::stream::race(&mut channel, &mut internal_message_receiver)
+            .next()
+            .await
+    {
         let event = on_message(
             &mut hypercore,
             &mut peer_state,

@@ -16,8 +16,3 @@ pub enum PeerEvent {
     PeerSynced([u8; 32]),
     PeerDisconnected(u64),
 }
-
-#[derive(Clone, Debug)]
-pub enum HypercoreEvent {
-    EntryAppended(u64),
-}

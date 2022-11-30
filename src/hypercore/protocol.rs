@@ -68,7 +68,7 @@ where
                             .await
                             .get(channel.discovery_key())
                         {
-                            let hypercore = hypercore.lock().await;
+                            let mut hypercore = hypercore.lock().await;
                             println!(
                                 "on_protocol({}): reading public keys from store",
                                 is_initiator

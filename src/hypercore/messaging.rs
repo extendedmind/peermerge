@@ -12,20 +12,32 @@ use random_access_storage::RandomAccess;
 use std::fmt::Debug;
 
 use super::PeerState;
-use crate::common::{message::AdvertiseMessage, PeerEvent};
+use crate::common::{message::BroadcastMessage, PeerEvent};
 
-const HYPERMERGE_ADVERTISE_MSG: &str = "hypermerge/v1/advertise";
+const HYPERMERGE_BROADCAST_MSG: &str = "hypermerge/v1/broadcast";
+const HYPERMERGE_INTERNAL_APPEND_MSG: &str = "hypermerge/__append";
 
-pub(super) fn create_advertise_message(peer_state: &PeerState) -> Message {
-    let advertise_message: AdvertiseMessage = AdvertiseMessage {
+pub(super) fn create_broadcast_message(peer_state: &PeerState) -> Message {
+    let broadcast_message: BroadcastMessage = BroadcastMessage {
         public_keys: peer_state.public_keys.clone(),
     };
     let mut enc_state = State::new();
-    enc_state.preencode(&advertise_message);
+    enc_state.preencode(&broadcast_message);
     let mut buffer = enc_state.create_buffer();
-    enc_state.encode(&advertise_message, &mut buffer);
+    enc_state.encode(&broadcast_message, &mut buffer);
     Message::Extension(Extension {
-        name: HYPERMERGE_ADVERTISE_MSG.to_string(),
+        name: HYPERMERGE_BROADCAST_MSG.to_string(),
+        message: buffer.to_vec(),
+    })
+}
+
+pub(super) fn create_internal_append_message(length: u64) -> Message {
+    let mut enc_state = State::new();
+    enc_state.preencode(&length);
+    let mut buffer = enc_state.create_buffer();
+    enc_state.encode(&length, &mut buffer);
+    Message::Extension(Extension {
+        name: HYPERMERGE_INTERNAL_APPEND_MSG.to_string(),
         message: buffer.to_vec(),
     })
 }
@@ -229,11 +241,11 @@ where
             }
         }
         Message::Extension(message) => match message.name.as_str() {
-            HYPERMERGE_ADVERTISE_MSG => {
+            HYPERMERGE_BROADCAST_MSG => {
                 let mut dec_state = State::from_buffer(&message.message);
-                let advertise_message: AdvertiseMessage = dec_state.decode(&message.message);
+                let broadcast_message: BroadcastMessage = dec_state.decode(&message.message);
                 let new_peers =
-                    peer_state.filter_new_peer_public_keys(&advertise_message.public_keys);
+                    peer_state.filter_new_peer_public_keys(&broadcast_message.public_keys);
 
                 if new_peers.is_empty() {
                     // There are no new peers, start sync

@@ -3,7 +3,7 @@ use hypercore_protocol::hypercore::compact_encoding::{CompactEncoding, State};
 use std::convert::TryInto;
 
 pub(crate) use crate::common::entry::Entry;
-pub(crate) use crate::common::message::AdvertiseMessage;
+pub(crate) use crate::common::message::BroadcastMessage;
 pub(crate) use crate::common::state::{DocState, RepoState};
 
 use super::state::{DocContent, DocCursor, DocPeerState};
@@ -186,18 +186,18 @@ impl CompactEncoding<DocCursor> for State {
     }
 }
 
-impl CompactEncoding<AdvertiseMessage> for State {
-    fn preencode(&mut self, value: &AdvertiseMessage) {
+impl CompactEncoding<BroadcastMessage> for State {
+    fn preencode(&mut self, value: &BroadcastMessage) {
         preencode_fixed_32_byte_vec(self, &value.public_keys);
     }
 
-    fn encode(&mut self, value: &AdvertiseMessage, buffer: &mut [u8]) {
+    fn encode(&mut self, value: &BroadcastMessage, buffer: &mut [u8]) {
         encode_fixed_32_byte_vec(self, &value.public_keys, buffer);
     }
 
-    fn decode(&mut self, buffer: &[u8]) -> AdvertiseMessage {
+    fn decode(&mut self, buffer: &[u8]) -> BroadcastMessage {
         let public_keys = decode_fixed_32_byte_vec(self, buffer);
-        AdvertiseMessage { public_keys }
+        BroadcastMessage { public_keys }
     }
 }
 
