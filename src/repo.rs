@@ -44,9 +44,26 @@ where
         state_event_sender: Sender<StateEvent>,
         sync_event_receiver: &mut Receiver<SynchronizeEvent>,
     ) -> anyhow::Result<()> {
+        println!("connect_document: start listening");
         while let Some(event) = sync_event_receiver.next().await {
-            let store = self.store.lock().await;
-            println!("connect_document: received sync event: {:?}", event);
+            match event {
+                SynchronizeEvent::DocumentChanged(patches) => {
+                    state_event_sender
+                        .send(StateEvent::DocumentChanged(patches))
+                        .await
+                        .unwrap();
+                }
+                SynchronizeEvent::NewPeersAdvertised(_) => {
+                    // TODO: ignore for now
+                }
+                SynchronizeEvent::PeersSynced(len) => {
+                    state_event_sender
+                        .send(StateEvent::PeersSynced(len))
+                        .await
+                        .unwrap();
+                }
+            }
+            // let store = self.store.lock().await;
 
             // TODO: Do something here with sync event to trigger state event
         }
@@ -249,12 +266,13 @@ async fn on_peer_event_memory(
             PeerEvent::PeerDisconnected(_) => {
                 // This is an FYI message, just continue for now
             }
+            PeerEvent::RemotePeerSynced(_) => {
+                // This is an FYI message, just continue for now
+            }
             PeerEvent::PeerSyncStarted(public_key) => {
-                {
-                    // Set peer to not-synced
-                    let mut doc_state = doc_state.lock().await;
-                    doc_state.set_synced_to_state(public_key, false).await;
-                }
+                // Set peer to not-synced
+                let mut doc_state = doc_state.lock().await;
+                doc_state.set_synced_to_state(public_key, false).await;
             }
             PeerEvent::PeerSynced(public_key) => {
                 let peers_synced = {
@@ -264,60 +282,56 @@ async fn on_peer_event_memory(
                     if sync_status_changed {
                         // Find out if now all peers are synced
                         let peers_synced = doc_state.peers_synced();
-                        if peers_synced.is_some() {
+                        if let Some(peers_synced) = peers_synced {
                             // All peers are synced, so it should be possible to create a coherent
                             // document now.
-                            {
-                                // Process all new events and take patches
-                                let mut patches = if let Some(content) = doc_state.content_mut() {
-                                    update_content(discovery_key, content, hypercores.clone())
-                                        .await
-                                        .unwrap()
-                                } else {
-                                    let write_discovery_key = doc_state.write_discovery_key();
-                                    let (content, patches) = create_content(
-                                        discovery_key,
-                                        &write_discovery_key,
-                                        hypercores.clone(),
-                                    )
+                            // Process all new events and take patches
+                            let mut patches = if let Some(content) = doc_state.content_mut() {
+                                update_content(discovery_key, content, hypercores.clone())
                                     .await
-                                    .unwrap();
-                                    doc_state.set_content(content).await;
-                                    patches
-                                };
+                                    .unwrap()
+                            } else {
+                                let write_discovery_key = doc_state.write_discovery_key();
+                                let (content, patches) = create_content(
+                                    discovery_key,
+                                    &write_discovery_key,
+                                    hypercores.clone(),
+                                )
+                                .await
+                                .unwrap();
+                                doc_state.set_content(content).await;
+                                patches
+                            };
 
-                                // Filter out unwatched patches
-                                patches.retain(|patch| {
-                                    match patch {
-                                        Patch::Put { obj, .. } => {
-                                            // TODO
-                                        }
-                                        Patch::Insert { obj, .. } => {
-                                            // TODO
-                                        }
-                                        Patch::Delete { obj, .. } => {
-                                            // TODO
-                                        }
-                                        Patch::Increment { obj, .. } => {
-                                            // TODO
-                                        }
-                                    }
-                                    true
-                                });
-                            }
+                            // Filter out unwatched patches
+                            let watched_ids = &doc_state.state().watched_ids;
+                            patches.retain(|patch| match patch {
+                                Patch::Put { obj, .. } => watched_ids.contains(obj),
+                                Patch::Insert { obj, .. } => watched_ids.contains(obj),
+                                Patch::Delete { obj, .. } => watched_ids.contains(obj),
+                                Patch::Increment { obj, .. } => watched_ids.contains(obj),
+                            });
+                            Some((peers_synced, patches))
+                        } else {
+                            None
                         }
-                        peers_synced
                     } else {
                         // If nothing changed, don't reannounce
                         None
                     }
                 };
 
-                if let Some(len) = peers_synced {
+                if let Some((peers_synced, patches)) = peers_synced {
                     sync_event_sender
-                        .send(SynchronizeEvent::PeersSynced(len))
+                        .send(SynchronizeEvent::PeersSynced(peers_synced))
                         .await
                         .unwrap();
+                    if patches.len() > 0 {
+                        sync_event_sender
+                            .send(SynchronizeEvent::DocumentChanged(patches))
+                            .await
+                            .unwrap();
+                    }
                 }
             }
         }

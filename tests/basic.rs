@@ -4,6 +4,7 @@ use async_channel::{unbounded, Receiver, Sender};
 use async_std::net::TcpStream;
 use async_std::prelude::*;
 use async_std::task;
+use automerge::ObjId;
 use automerge::ROOT;
 use futures_lite::io::{AsyncRead, AsyncWrite};
 use futures_lite::stream::StreamExt;
@@ -23,12 +24,12 @@ async fn basic_two_writers() -> anyhow::Result<()> {
     let (proto_responder, proto_initiator) = create_pair_memory().await?;
 
     let mut repo_creator = Repo::new_memory().await;
-    let (creator_state_event_sender, creator_state_event_receiver): (
+    let (creator_state_event_sender, mut creator_state_event_receiver): (
         Sender<StateEvent>,
         Receiver<StateEvent>,
     ) = unbounded();
     let mut repo_joiner = Repo::new_memory().await;
-    let (joiner_state_event_sender, joiner_state_event_receiver): (
+    let (joiner_state_event_sender, mut joiner_state_event_receiver): (
         Sender<StateEvent>,
         Receiver<StateEvent>,
     ) = unbounded();
@@ -47,9 +48,10 @@ async fn basic_two_writers() -> anyhow::Result<()> {
     // Set watching for the prop
     repo_creator.watch(&discovery_key, vec![&texts_id]).await;
 
+    let repo_creator_for_task = repo_creator.clone();
     task::spawn(async move {
         connect_repo(
-            repo_creator,
+            repo_creator_for_task,
             proto_responder,
             &discovery_key,
             joiner_state_event_sender,
@@ -58,22 +60,56 @@ async fn basic_two_writers() -> anyhow::Result<()> {
         .unwrap();
     });
 
+    let joiner_discovery_key = repo_joiner.register_doc_memory(&doc_url).await;
+    let joiner_discovery_key_for_task = joiner_discovery_key.clone();
+    let repo_joiner_for_task = repo_joiner.clone();
     task::spawn(async move {
-        let discovery_key = repo_joiner.register_doc_memory(&doc_url).await;
         connect_repo(
-            repo_joiner,
+            repo_joiner_for_task,
             proto_initiator,
-            &discovery_key,
+            &joiner_discovery_key_for_task,
             creator_state_event_sender,
         )
         .await
         .unwrap();
     });
 
-    let mut combined =
-        futures_lite::stream::race(creator_state_event_receiver, joiner_state_event_receiver);
-    while let Some(event) = combined.next().await {
-        // TODO: Assert state events
+    // Simulate UI threads here
+    task::spawn(async move {
+        let mut peers_synced = false;
+        let mut texts_id: Option<ObjId> = None;
+        while let Some(event) = joiner_state_event_receiver.next().await {
+            println!("TEST: JOINER got event {:?}", event);
+            match event {
+                StateEvent::PeersSynced(len) => {
+                    assert!(!peers_synced);
+                    assert_eq!(len, 1);
+                    peers_synced = true;
+                    println!("TEST: JOINER calling get()");
+                    let (value, id) = repo_joiner
+                        .get(&joiner_discovery_key, ROOT, "texts")
+                        .await
+                        .unwrap()
+                        .unwrap();
+                    println!("TEST: JOINER VALUE: {:?}", value);
+                    texts_id = Some(id);
+                }
+                StateEvent::DocumentChanged(_) => {}
+            }
+        }
+    });
+
+    while let Some(event) = creator_state_event_receiver.next().await {
+        println!("TEST: CREATOR got event {:?}", event);
+        let mut peers_synced = false;
+        match event {
+            StateEvent::PeersSynced(len) => {
+                assert!(!peers_synced);
+                assert_eq!(len, 1);
+                peers_synced = true;
+            }
+            StateEvent::DocumentChanged(_) => {}
+        }
     }
     Ok(())
 }

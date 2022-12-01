@@ -240,7 +240,7 @@ where
                     && peer_state.remote_length == message.length
                 {
                     let public_key: [u8; 32] = *hypercore.key_pair().public.as_bytes();
-                    Some(PeerEvent::PeerSynced(public_key))
+                    Some(PeerEvent::RemotePeerSynced(public_key))
                 } else {
                     None
                 };

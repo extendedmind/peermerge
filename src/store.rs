@@ -101,6 +101,7 @@ where
         obj: O,
         prop: P,
     ) -> anyhow::Result<Option<(Value, ObjId)>> {
+        println!("GETTING");
         if let Some(hypercore_store) = self.hypercore_store(&discovery_key.clone()) {
             let doc_state = hypercore_store.doc_state();
             let result = {
