@@ -26,7 +26,7 @@ pub fn init_doc_with_root_scalars<P: Into<Prop>, V: Into<ScalarValue>>(
     .unwrap();
     let data = doc.save();
     let doc: AutoCommit = AutoCommit::load(&data).unwrap();
-    let mut doc = doc.with_observer(VecOpObserver::default());
+    let doc = doc.with_observer(VecOpObserver::default());
     (doc, data)
 }
 

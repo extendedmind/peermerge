@@ -104,7 +104,7 @@ impl CompactEncoding<DocState> for State {
             peers,
             public_key,
             content,
-            watched_root_props: vec![],
+            watched_ids: vec![],
         }
     }
 }

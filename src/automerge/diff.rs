@@ -12,13 +12,13 @@ pub(crate) fn put_object_autocommit<O: AsRef<ObjId>, P: Into<Prop>>(
     obj: O,
     prop: P,
     object: ObjType,
-) -> anyhow::Result<Entry> {
-    doc.put_object(obj, prop, object).unwrap();
+) -> anyhow::Result<(Entry, ObjId)> {
+    let id = doc.put_object(obj, prop, object).unwrap();
     let change = doc
         .get_last_local_change()
         .unwrap()
         .clone()
         .bytes()
         .to_vec();
-    Ok(Entry::new_change(change))
+    Ok((Entry::new_change(change), id))
 }

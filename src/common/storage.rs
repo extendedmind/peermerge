@@ -1,4 +1,4 @@
-use automerge::Prop;
+use automerge::ObjId;
 use hypercore_protocol::hypercore::compact_encoding::{CompactEncoding, State};
 #[cfg(not(target_arch = "wasm32"))]
 use random_access_disk::RandomAccessDisk;
@@ -143,6 +143,13 @@ where
         &self.state
     }
 
+    pub fn doc(&self) -> Option<&AutomergeDoc> {
+        self.state
+            .content
+            .as_ref()
+            .and_then(|content| content.doc.as_ref())
+    }
+
     pub fn doc_mut(&mut self, write_discovery_key: &[u8; 32]) -> Option<&mut AutomergeDoc> {
         self.state.content.as_mut().and_then(|content| {
             if content.doc.is_none() {
@@ -153,8 +160,8 @@ where
         })
     }
 
-    pub fn watch_root_props(&mut self, root_props: Vec<Prop>) {
-        self.state.watched_root_props = root_props;
+    pub fn watch(&mut self, ids: Vec<ObjId>) {
+        self.state.watched_ids = ids;
     }
 }
 

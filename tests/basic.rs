@@ -34,19 +34,18 @@ async fn basic_two_writers() -> anyhow::Result<()> {
     ) = unbounded();
     let (discovery_key, doc_url) = repo_creator.create_doc_memory(vec![("version", 1)]).await;
 
-    // Insert a text field to the document
+    // Insert a map with a text field to the document
+    let texts_id = repo_creator
+        .put_object(&discovery_key, ROOT, "texts", automerge::ObjType::Map)
+        .await
+        .unwrap();
     repo_creator
-        .put_object(&discovery_key, ROOT, "text", automerge::ObjType::Text)
+        .put_object(&discovery_key, &texts_id, "text", automerge::ObjType::Text)
         .await
         .unwrap();
 
-    // Set watching for the same props
-    repo_creator
-        .watch_root_props(&discovery_key, vec!["text"])
-        .await;
-    repo_joiner
-        .watch_root_props(&discovery_key, vec!["text"])
-        .await;
+    // Set watching for the prop
+    repo_creator.watch(&discovery_key, vec![&texts_id]).await;
 
     task::spawn(async move {
         connect_repo(

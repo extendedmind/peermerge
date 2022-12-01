@@ -1,4 +1,4 @@
-use automerge::Prop;
+use automerge::ObjId;
 use std::fmt::Debug;
 
 use crate::automerge::AutomergeDoc;
@@ -29,7 +29,7 @@ pub(crate) struct DocState {
     /// Content of the document. None means content hasn't been synced yet.
     pub(crate) content: Option<DocContent>,
     /// Transient watch variable
-    pub(crate) watched_root_props: Vec<Prop>,
+    pub(crate) watched_ids: Vec<ObjId>,
 }
 impl DocState {
     pub fn new(
@@ -42,7 +42,7 @@ impl DocState {
             peers,
             public_key,
             content,
-            watched_root_props: vec![],
+            watched_ids: vec![],
         }
     }
 }

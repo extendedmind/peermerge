@@ -1,5 +1,6 @@
 use async_std::sync::{Arc, Mutex};
-use automerge::{ObjId, ObjType, Prop};
+use automerge::transaction::Transactable;
+use automerge::{ObjId, ObjType, Patch, Prop, Value};
 use hypercore_protocol::hypercore::compact_encoding::{CompactEncoding, State};
 use hypercore_protocol::hypercore::Keypair;
 #[cfg(not(target_arch = "wasm32"))]
@@ -41,23 +42,22 @@ impl<T> DocStore<T>
 where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send + 'static,
 {
-    pub(crate) fn get_mut(&mut self, discovery_key: &[u8; 32]) -> Option<&mut HypercoreStore<T>> {
+    pub(crate) fn hypercore_store_mut(
+        &mut self,
+        discovery_key: &[u8; 32],
+    ) -> Option<&mut HypercoreStore<T>> {
         self.docs.get_mut(discovery_key)
     }
 
-    pub(crate) async fn watch_root_props(
-        &mut self,
-        discovery_key: &[u8; 32],
-        root_props: Vec<Prop>,
-    ) {
-        if let Some(hypercore_store) = self.get_mut(discovery_key) {
-            {
-                let doc_state = hypercore_store.doc_state();
-                {
-                    let mut doc_state = doc_state.lock().await;
-                    doc_state.watch_root_props(root_props);
-                }
-            }
+    pub(crate) fn hypercore_store(&self, discovery_key: &[u8; 32]) -> Option<&HypercoreStore<T>> {
+        self.docs.get(discovery_key)
+    }
+
+    pub(crate) async fn watch(&mut self, discovery_key: &[u8; 32], ids: Vec<ObjId>) {
+        if let Some(hypercore_store) = self.hypercore_store_mut(discovery_key) {
+            let doc_state = hypercore_store.doc_state();
+            let mut doc_state = doc_state.lock().await;
+            doc_state.watch(ids);
         }
     }
 
@@ -67,32 +67,70 @@ where
         obj: O,
         prop: P,
         object: ObjType,
-    ) -> anyhow::Result<()> {
-        if let Some(hypercore_store) = self.get_mut(&discovery_key.clone()) {
-            {
-                let doc_state = hypercore_store.doc_state();
-                {
-                    let mut doc_state = doc_state.lock().await;
-                    let write_discovery_key = doc_state.write_discovery_key();
-                    let entry = if let Some(doc) = doc_state.doc_mut(&write_discovery_key) {
-                        put_object_autocommit(doc, obj, prop, object).unwrap()
-                    } else {
-                        unimplemented!(
-                            "TODO: No proper error code for trying to change before a document is synced"
-                        );
-                    };
-                    let length = {
-                        let hypercore_map = hypercore_store.hypercores();
-                        let hypercores = hypercore_map.lock().await;
-                        let mut write_hypercore =
-                            hypercores.get(&write_discovery_key).unwrap().lock().await;
-                        write_hypercore.append(&serialize_entry(&entry)).await?
-                    };
-                    doc_state.set_cursor(&write_discovery_key, length).await;
-                }
-            }
+    ) -> anyhow::Result<ObjId> {
+        if let Some(hypercore_store) = self.hypercore_store_mut(&discovery_key.clone()) {
+            let doc_state = hypercore_store.doc_state();
+            let mut doc_state = doc_state.lock().await;
+            let write_discovery_key = doc_state.write_discovery_key();
+            let (entry, id) = if let Some(doc) = doc_state.doc_mut(&write_discovery_key) {
+                put_object_autocommit(doc, obj, prop, object).unwrap()
+            } else {
+                unimplemented!(
+                    "TODO: No proper error code for trying to change before a document is synced"
+                );
+            };
+            let length = {
+                let hypercore_map = hypercore_store.hypercores();
+                let hypercores = hypercore_map.lock().await;
+                let mut write_hypercore =
+                    hypercores.get(&write_discovery_key).unwrap().lock().await;
+                write_hypercore.append(&serialize_entry(&entry)).await?
+            };
+            doc_state.set_cursor(&write_discovery_key, length).await;
+            Ok(id)
+        } else {
+            Err(anyhow::anyhow!(
+                "Could not find hypercore with given discovery_id"
+            ))
         }
-        Ok(())
+    }
+
+    pub(crate) async fn get<O: AsRef<ObjId>, P: Into<Prop>>(
+        &self,
+        discovery_key: &[u8; 32],
+        obj: O,
+        prop: P,
+    ) -> anyhow::Result<Option<(Value, ObjId)>> {
+        if let Some(hypercore_store) = self.hypercore_store(&discovery_key.clone()) {
+            let doc_state = hypercore_store.doc_state();
+            let result = {
+                let doc_state = doc_state.lock().await;
+                if let Some(doc) = doc_state.doc() {
+                    match doc.get(obj, prop) {
+                        Ok(result) => {
+                            if let Some(result) = result {
+                                let value = result.0.to_owned();
+                                let id = result.1.to_owned();
+                                Some((value, id))
+                            } else {
+                                None
+                            }
+                        }
+                        Err(_err) => {
+                            // TODO: Some errors should probably be errors
+                            None
+                        }
+                    }
+                } else {
+                    unimplemented!("TODO: No proper error code for trying to get from doc before a document is synced");
+                }
+            };
+            Ok(result)
+        } else {
+            Err(anyhow::anyhow!(
+                "Could not find hypercore with given discovery_id"
+            ))
+        }
     }
 }
 
@@ -372,7 +410,7 @@ pub(crate) async fn create_content<T>(
     origin_discovery_key: &[u8; 32],
     write_discovery_key: &[u8; 32],
     hypercores: Arc<Mutex<HashMap<[u8; 32], Arc<Mutex<HypercoreWrapper<T>>>>>>,
-) -> anyhow::Result<DocContent>
+) -> anyhow::Result<(DocContent, Vec<Patch>)>
 where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send + 'static,
 {
@@ -397,18 +435,22 @@ where
     }
 
     // Create DocContent from the hypercore
-    let (doc, data) = init_doc_from_entries(write_discovery_key, entries);
-    Ok(DocContent::new(data, cursors, doc))
+    let (mut doc, data) = init_doc_from_entries(write_discovery_key, entries);
+    let patches = doc.observer().take_patches();
+    Ok((DocContent::new(data, cursors, doc), patches))
 }
 
 pub(crate) async fn update_content<T>(
     discovery_key: &[u8; 32],
     content: &mut DocContent,
     hypercores: Arc<Mutex<HashMap<[u8; 32], Arc<Mutex<HypercoreWrapper<T>>>>>>,
-) where
+) -> anyhow::Result<Vec<Patch>>
+where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send + 'static,
 {
     let mut hypercores = hypercores.lock().await;
+    // TODO:
+    Ok(content.doc.as_mut().unwrap().observer().take_patches())
 }
 
 fn serialize_entry(entry: &Entry) -> Vec<u8> {

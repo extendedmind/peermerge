@@ -2,7 +2,7 @@ use async_channel::{unbounded, Receiver, Sender};
 use async_std::sync::{Arc, Mutex};
 #[cfg(not(target_arch = "wasm32"))]
 use async_std::task;
-use automerge::{ObjId, ObjType, Prop, ScalarValue};
+use automerge::{ObjId, ObjType, Patch, Prop, ScalarValue, Value};
 use futures_lite::{AsyncRead, AsyncWrite, StreamExt};
 use hypercore_protocol::Protocol;
 #[cfg(not(target_arch = "wasm32"))]
@@ -46,8 +46,8 @@ where
     ) -> anyhow::Result<()> {
         while let Some(event) = sync_event_receiver.next().await {
             let store = self.store.lock().await;
-
             println!("connect_document: received sync event: {:?}", event);
+
             // TODO: Do something here with sync event to trigger state event
         }
         Ok(())
@@ -59,7 +59,7 @@ where
         obj: O,
         prop: P,
         object: ObjType,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<ObjId> {
         self.store
             .lock()
             .await
@@ -67,20 +67,23 @@ where
             .await
     }
 
-    pub async fn watch_root_props<P: Into<Prop>>(
-        &mut self,
+    pub async fn get<O: AsRef<ObjId>, P: Into<Prop>>(
+        &self,
         discovery_key: &[u8; 32],
-        root_props: Vec<P>,
-    ) {
-        let mut watch_root_props: Vec<Prop> = Vec::with_capacity(root_props.len());
-        for root_prop in root_props {
-            watch_root_props.push(root_prop.into());
+        obj: O,
+        prop: P,
+    ) -> anyhow::Result<Option<(Value, ObjId)>> {
+        let store = self.store.lock().await;
+        if let Some((value, id)) = store.get(discovery_key, obj, prop).await? {
+            Ok(Some((value.to_owned(), id.to_owned())))
+        } else {
+            Ok(None)
         }
-        self.store
-            .lock()
-            .await
-            .watch_root_props(discovery_key, watch_root_props)
-            .await;
+    }
+
+    pub async fn watch(&mut self, discovery_key: &[u8; 32], ids: Vec<&ObjId>) {
+        let ids = ids.iter().map(|id| id.clone().to_owned()).collect();
+        self.store.lock().await.watch(discovery_key, ids).await;
     }
 }
 
@@ -165,7 +168,7 @@ impl Repo<RandomAccessMemory> {
     where
         IO: AsyncWrite + AsyncRead + Send + Unpin + 'static,
     {
-        if let Some(hypercore_store) = self.store.lock().await.get_mut(discovery_key) {
+        if let Some(hypercore_store) = self.store.lock().await.hypercore_store_mut(discovery_key) {
             let (mut peer_event_sender, peer_event_receiver): (
                 Sender<PeerEvent>,
                 Receiver<PeerEvent>,
@@ -265,14 +268,14 @@ async fn on_peer_event_memory(
                             // All peers are synced, so it should be possible to create a coherent
                             // document now.
                             {
-                                // Create and insert all new hypercores
-                                //
-                                if let Some(content) = doc_state.content_mut() {
+                                // Process all new events and take patches
+                                let mut patches = if let Some(content) = doc_state.content_mut() {
                                     update_content(discovery_key, content, hypercores.clone())
-                                        .await;
+                                        .await
+                                        .unwrap()
                                 } else {
                                     let write_discovery_key = doc_state.write_discovery_key();
-                                    let content = create_content(
+                                    let (content, patches) = create_content(
                                         discovery_key,
                                         &write_discovery_key,
                                         hypercores.clone(),
@@ -280,7 +283,27 @@ async fn on_peer_event_memory(
                                     .await
                                     .unwrap();
                                     doc_state.set_content(content).await;
-                                }
+                                    patches
+                                };
+
+                                // Filter out unwatched patches
+                                patches.retain(|patch| {
+                                    match patch {
+                                        Patch::Put { obj, .. } => {
+                                            // TODO
+                                        }
+                                        Patch::Insert { obj, .. } => {
+                                            // TODO
+                                        }
+                                        Patch::Delete { obj, .. } => {
+                                            // TODO
+                                        }
+                                        Patch::Increment { obj, .. } => {
+                                            // TODO
+                                        }
+                                    }
+                                    true
+                                });
                             }
                         }
                         peers_synced
