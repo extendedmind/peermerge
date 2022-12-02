@@ -51,7 +51,7 @@ async fn protocol_two_writers() -> anyhow::Result<()> {
         connect(
             hypermerge_creator_for_task,
             proto_responder,
-            joiner_state_event_sender,
+            creator_state_event_sender,
         )
         .await
         .unwrap();
@@ -63,7 +63,7 @@ async fn protocol_two_writers() -> anyhow::Result<()> {
         connect(
             hypermerge_joiner_for_task,
             proto_initiator,
-            creator_state_event_sender,
+            joiner_state_event_sender,
         )
         .await
         .unwrap();
