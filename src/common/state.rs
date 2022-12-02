@@ -90,11 +90,15 @@ impl DocContent {
     }
 
     pub fn cursor_length(&self, discovery_key: &[u8; 32]) -> u64 {
-        self.cursors
+        if let Some(cursor) = self
+            .cursors
             .iter()
             .find(|cursor| &cursor.discovery_key == discovery_key)
-            .unwrap()
-            .length
+        {
+            cursor.length
+        } else {
+            0
+        }
     }
 
     pub fn set_cursor(&mut self, discovery_key: &[u8; 32], length: u64) {

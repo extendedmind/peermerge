@@ -95,7 +95,6 @@ async fn protocol_two_writers() -> anyhow::Result<()> {
                             .unwrap()
                             .unwrap();
                         text_id = Some(local_text_id.clone());
-                        println!("TEST: JOINER text_id {:?}", text_id);
                         assert!(value.is_object());
                         hypermerge_joiner
                             .watch(vec![texts_id.clone().unwrap(), text_id.clone().unwrap()])
@@ -105,15 +104,15 @@ async fn protocol_two_writers() -> anyhow::Result<()> {
                 }
                 StateEvent::RemotePeerSynced() => {}
                 StateEvent::DocumentChanged(patches) => {
-                    println!("JOINER NUMBER {}", document_changes.len());
                     if document_changes.len() == 0 {
                         assert_eq!(patches.len(), 5); // "Hello" has 5 chars
                         document_changes.push(patches);
-                        println!("JOINER SPLICING TEXT with world");
                         hypermerge_joiner
                             .splice_text(text_id.clone().unwrap(), 5, 0, ", world!")
                             .await
                             .unwrap();
+                    } else if document_changes.len() == 1 {
+                        assert_eq!(patches.len(), 8); // ", world!" has 8 chars
                     }
                 }
             }
@@ -133,7 +132,6 @@ async fn protocol_two_writers() -> anyhow::Result<()> {
             }
             StateEvent::RemotePeerSynced() => {
                 if !remote_peer_synced {
-                    println!("TEST: CREATOR text_id {:?}", text_id);
                     hypermerge_creator
                         .splice_text(text_id, 0, 0, "Hello")
                         .await
@@ -142,7 +140,6 @@ async fn protocol_two_writers() -> anyhow::Result<()> {
                 }
             }
             StateEvent::DocumentChanged(patches) => {
-                println!("CREATOR NUMBER {}", document_changes.len());
                 if document_changes.len() == 0 {
                     assert_eq!(patches.len(), 2); // Original creation of "texts" and "text";
                 } else if document_changes.len() == 1 {

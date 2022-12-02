@@ -351,7 +351,7 @@ impl Hypermerge<RandomAccessMemory> {
 }
 
 async fn on_peer_event_memory(
-    discovery_key: &[u8; 32],
+    doc_discovery_key: &[u8; 32],
     mut peer_event_receiver: Receiver<PeerEvent>,
     sync_event_sender: Sender<SynchronizeEvent>,
     doc_state: Arc<Mutex<DocStateWrapper<RandomAccessMemory>>>,
@@ -407,15 +407,13 @@ async fn on_peer_event_memory(
                             // Process all new events and take patches
                             let mut patches = if let Some(content) = doc_state.content_mut() {
                                 let patches =
-                                    update_content(discovery_key, content, hypercores.clone())
-                                        .await
-                                        .unwrap();
+                                    update_content(content, hypercores.clone()).await.unwrap();
                                 doc_state.persist_content().await;
                                 patches
                             } else {
                                 let write_discovery_key = doc_state.write_discovery_key();
                                 let (content, patches) = create_content(
-                                    discovery_key,
+                                    doc_discovery_key,
                                     &write_discovery_key,
                                     hypercores.clone(),
                                 )
@@ -427,14 +425,12 @@ async fn on_peer_event_memory(
 
                             // Filter out unwatched patches
                             let watched_ids = &doc_state.state().watched_ids;
-                            println!("PATCHES BEFORE FILTER({})= {:?}", is_initiator, patches);
                             patches.retain(|patch| match patch {
                                 Patch::Put { obj, .. } => watched_ids.contains(obj),
                                 Patch::Insert { obj, .. } => watched_ids.contains(obj),
                                 Patch::Delete { obj, .. } => watched_ids.contains(obj),
                                 Patch::Increment { obj, .. } => watched_ids.contains(obj),
                             });
-                            println!("PATCHES AFTER FILTER({})= {:?}", is_initiator, patches);
                             Some((peers_synced, patches))
                         } else {
                             None
@@ -475,7 +471,7 @@ async fn create_and_insert_read_memory_hypercores(
 }
 
 async fn create_content<T>(
-    origin_discovery_key: &[u8; 32],
+    doc_discovery_key: &[u8; 32],
     write_discovery_key: &[u8; 32],
     hypercores: Arc<DashMap<[u8; 32], Arc<Mutex<HypercoreWrapper<T>>>>>,
 ) -> anyhow::Result<(DocContent, Vec<Patch>)>
@@ -484,25 +480,25 @@ where
 {
     // The document starts from the origin, so get that first
     let (mut cursors, mut entries) = {
-        let origin_hypercore = hypercores.get(origin_discovery_key).unwrap();
+        let origin_hypercore = hypercores.get(doc_discovery_key).unwrap();
         let mut origin_hypercore = origin_hypercore.lock().await;
         let entries = origin_hypercore.entries(0).await?;
         (
             vec![DocCursor::new(
-                origin_discovery_key.clone(),
+                doc_discovery_key.clone(),
                 entries.len() as u64,
             )],
             entries,
         )
     };
-    for entry in hypercores.iter() {
-        let discovery_key = entry.key();
-        let hypercore = entry.value();
-        if discovery_key != origin_discovery_key {
+    for kv in hypercores.iter() {
+        let discovery_key = kv.key();
+        let hypercore = kv.value();
+        if discovery_key != doc_discovery_key {
             let mut hypercore = hypercore.lock().await;
             let new_entries = hypercore.entries(0).await?;
             cursors.push(DocCursor::new(
-                origin_discovery_key.clone(),
+                doc_discovery_key.clone(),
                 new_entries.len() as u64,
             ));
             entries.extend(new_entries);
@@ -516,23 +512,34 @@ where
 }
 
 async fn update_content<T>(
-    discovery_key: &[u8; 32],
     content: &mut DocContent,
     hypercores: Arc<DashMap<[u8; 32], Arc<Mutex<HypercoreWrapper<T>>>>>,
 ) -> anyhow::Result<Vec<Patch>>
 where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send + 'static,
 {
-    let old_length = content.cursor_length(discovery_key);
     let entries = {
-        let hypercore_wrapper = hypercores.get(discovery_key).unwrap();
-        let mut hypercore = hypercore_wrapper.lock().await;
-        hypercore.entries(old_length).await?
+        let mut entries = vec![];
+        // TODO: This is slightly inefficient because we now go through all peers even though
+        // it should be possible for the caller to know what changed.
+        for kv in hypercores.iter() {
+            let discovery_key = kv.key();
+            let hypercore_wrapper = kv.value();
+            let mut hypercore = hypercore_wrapper.lock().await;
+            let old_length = content.cursor_length(discovery_key);
+            let new_entries = hypercore.entries(old_length).await?;
+            if !new_entries.is_empty() {
+                content.set_cursor(&discovery_key, new_entries.len() as u64);
+                entries.extend(new_entries);
+            }
+        }
+        entries
     };
-    content.set_cursor(discovery_key, old_length + entries.len() as u64);
-    let doc = content.doc.as_mut().unwrap();
-    apply_changes_autocommit(doc, entries)?;
-    Ok(doc.observer().take_patches())
+    {
+        let doc = content.doc.as_mut().unwrap();
+        apply_changes_autocommit(doc, entries)?;
+        Ok(doc.observer().take_patches())
+    }
 }
 
 fn serialize_entry(entry: &Entry) -> Vec<u8> {

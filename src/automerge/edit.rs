@@ -3,7 +3,7 @@ use std::convert::TryFrom;
 use automerge::{transaction::Transactable, Change, ObjId, ObjType, Prop};
 
 use super::AutomergeDoc;
-use crate::common::entry::Entry;
+use crate::common::entry::{Entry, EntryType};
 
 pub(crate) fn apply_changes_autocommit(
     doc: &mut AutomergeDoc,
@@ -11,6 +11,7 @@ pub(crate) fn apply_changes_autocommit(
 ) -> anyhow::Result<()> {
     let changes: Vec<Change> = changes
         .iter()
+        .filter(|entry| entry.entry_type != EntryType::InitPeer)
         .map(|entry| Change::try_from(&entry.data[..]).unwrap())
         .collect();
     Ok(doc.apply_changes(changes).unwrap())
