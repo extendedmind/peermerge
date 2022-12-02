@@ -57,7 +57,8 @@ async fn protocol_two_writers() -> anyhow::Result<()> {
         .unwrap();
     });
 
-    let hypermerge_joiner = Hypermerge::register_doc_memory(&hypermerge_creator.doc_url()).await;
+    let mut hypermerge_joiner =
+        Hypermerge::register_doc_memory(&hypermerge_creator.doc_url()).await;
     let hypermerge_joiner_for_task = hypermerge_joiner.clone();
     task::spawn(async move {
         connect(
@@ -73,6 +74,7 @@ async fn protocol_two_writers() -> anyhow::Result<()> {
     task::spawn(async move {
         let mut peers_synced = false;
         let mut texts_id: Option<ObjId> = None;
+        let hypermerge_joiner_read = hypermerge_joiner.clone();
         while let Some(event) = joiner_state_event_receiver.next().await {
             println!("TEST: JOINER got event {:?}", event);
             match event {
@@ -80,9 +82,13 @@ async fn protocol_two_writers() -> anyhow::Result<()> {
                     assert!(!peers_synced);
                     assert_eq!(len, 1);
                     peers_synced = true;
-                    println!("TEST: JOINER calling get()");
-                    let (value, id) = hypermerge_joiner.get(ROOT, "texts").await.unwrap().unwrap();
-                    println!("TEST: JOINER VALUE: {:?}", value);
+                    let (value, id) = hypermerge_joiner_read
+                        .get(ROOT, "texts")
+                        .await
+                        .unwrap()
+                        .unwrap();
+                    assert!(value.is_object());
+                    hypermerge_joiner.watch(vec![id.clone()]).await;
                     texts_id = Some(id);
                 }
                 StateEvent::DocumentChanged(_) => {}
