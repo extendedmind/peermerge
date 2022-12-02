@@ -9,10 +9,11 @@
 
 mod automerge;
 mod common;
+mod core;
 mod hypercore;
-mod repo;
-mod store;
+mod repository;
 
-pub use ::automerge::Automerge;
-pub use common::{StateEvent, SynchronizeEvent};
-pub use repo::Repo;
+pub use crate::common::{StateEvent, SynchronizeEvent};
+pub use crate::core::Hypermerge;
+pub use crate::repository::Repository;
+pub use ::automerge::*;

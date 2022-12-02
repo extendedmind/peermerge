@@ -22,7 +22,7 @@ impl TryFrom<u8> for EntryType {
 }
 
 /// A document is stored in pieces to hypercores.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct Entry {
     pub(crate) version: u8,
     pub(crate) entry_type: EntryType,
