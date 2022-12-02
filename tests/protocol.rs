@@ -38,7 +38,7 @@ async fn protocol_two_writers() -> anyhow::Result<()> {
         .put_object(ROOT, "texts", automerge::ObjType::Map)
         .await
         .unwrap();
-    hypermerge_creator
+    let text_id = hypermerge_creator
         .put_object(&texts_id, "text", automerge::ObjType::Text)
         .await
         .unwrap();
@@ -74,7 +74,7 @@ async fn protocol_two_writers() -> anyhow::Result<()> {
     task::spawn(async move {
         let mut peers_synced = false;
         let mut texts_id: Option<ObjId> = None;
-        let hypermerge_joiner_read = hypermerge_joiner.clone();
+        let mut text_id: Option<ObjId> = None;
         while let Some(event) = joiner_state_event_receiver.next().await {
             println!("TEST: JOINER got event {:?}", event);
             match event {
@@ -82,15 +82,22 @@ async fn protocol_two_writers() -> anyhow::Result<()> {
                     assert!(!peers_synced);
                     assert_eq!(len, 1);
                     peers_synced = true;
-                    let (value, id) = hypermerge_joiner_read
-                        .get(ROOT, "texts")
+                    let (value, local_texts_id) =
+                        hypermerge_joiner.get(ROOT, "texts").await.unwrap().unwrap();
+                    texts_id = Some(local_texts_id.clone());
+                    assert!(value.is_object());
+                    let (value, local_text_id) = hypermerge_joiner
+                        .get(local_texts_id, "text")
                         .await
                         .unwrap()
                         .unwrap();
+                    text_id = Some(local_text_id.clone());
                     assert!(value.is_object());
-                    hypermerge_joiner.watch(vec![id.clone()]).await;
-                    texts_id = Some(id);
+                    hypermerge_joiner
+                        .watch(vec![texts_id.unwrap().clone(), text_id.unwrap().clone()])
+                        .await;
                 }
+                StateEvent::RemotePeerSynced() => {}
                 StateEvent::DocumentChanged(_) => {}
             }
         }
@@ -99,11 +106,22 @@ async fn protocol_two_writers() -> anyhow::Result<()> {
     while let Some(event) = creator_state_event_receiver.next().await {
         println!("TEST: CREATOR got event {:?}", event);
         let mut peers_synced = false;
+        let mut remote_peer_synced = false;
+        let text_id = text_id.clone();
         match event {
             StateEvent::PeersSynced(len) => {
                 assert!(!peers_synced);
                 assert_eq!(len, 1);
                 peers_synced = true;
+            }
+            StateEvent::RemotePeerSynced() => {
+                if !remote_peer_synced {
+                    hypermerge_creator
+                        .splice_text(text_id, 0, 0, "hello")
+                        .await
+                        .unwrap();
+                    remote_peer_synced = true;
+                }
             }
             StateEvent::DocumentChanged(_) => {}
         }

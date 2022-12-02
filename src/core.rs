@@ -13,7 +13,7 @@ use std::{fmt::Debug, path::PathBuf};
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_futures::spawn_local;
 
-use crate::automerge::init_doc_from_entries;
+use crate::automerge::{init_doc_from_entries, splice_text};
 use crate::common::PeerEvent;
 use crate::hypercore::{discovery_key_from_public_key, on_protocol};
 use crate::{
@@ -58,7 +58,6 @@ where
         obj: O,
         prop: P,
     ) -> anyhow::Result<Option<(Value, ObjId)>> {
-        println!("GETTING");
         let doc_state = &self.doc_state;
         let result = {
             let doc_state = doc_state.lock().await;
@@ -92,14 +91,15 @@ where
         object: ObjType,
     ) -> anyhow::Result<ObjId> {
         let mut doc_state = self.doc_state.lock().await;
-        let write_discovery_key = doc_state.write_discovery_key();
-        let (entry, id) = if let Some(doc) = doc_state.doc_mut(&write_discovery_key) {
+        let (entry, id) = if let Some(doc) = doc_state.doc_mut() {
             put_object_autocommit(doc, obj, prop, object).unwrap()
         } else {
             unimplemented!(
                 "TODO: No proper error code for trying to change before a document is synced"
             );
         };
+
+        let write_discovery_key = doc_state.write_discovery_key();
         let length = {
             let write_hypercore = self.hypercores.get_mut(&write_discovery_key).unwrap();
             let mut write_hypercore = write_hypercore.lock().await;
@@ -107,6 +107,31 @@ where
         };
         doc_state.set_cursor(&write_discovery_key, length).await;
         Ok(id)
+    }
+
+    pub async fn splice_text<O: AsRef<ObjId>>(
+        &mut self,
+        obj: O,
+        index: usize,
+        delete: usize,
+        text: &str,
+    ) -> anyhow::Result<()> {
+        let mut doc_state = self.doc_state.lock().await;
+        let entry = if let Some(doc) = doc_state.doc_mut() {
+            splice_text(doc, obj, index, delete, text)?
+        } else {
+            unimplemented!(
+                "TODO: No proper error code for trying to splice text before a document is synced"
+            );
+        };
+        let write_discovery_key = doc_state.write_discovery_key();
+        let length = {
+            let write_hypercore = self.hypercores.get_mut(&write_discovery_key).unwrap();
+            let mut write_hypercore = write_hypercore.lock().await;
+            write_hypercore.append(&serialize_entry(&entry)).await?
+        };
+        doc_state.set_cursor(&write_discovery_key, length).await;
+        Ok(())
     }
 
     pub async fn connect_document(
@@ -129,6 +154,12 @@ where
                 SynchronizeEvent::PeersSynced(len) => {
                     state_event_sender
                         .send(StateEvent::PeersSynced(len))
+                        .await
+                        .unwrap();
+                }
+                SynchronizeEvent::RemotePeerSynced() => {
+                    state_event_sender
+                        .send(StateEvent::RemotePeerSynced())
                         .await
                         .unwrap();
                 }
@@ -249,7 +280,6 @@ impl Hypermerge<RandomAccessMemory> {
             self.doc_state.clone(),
             self.hypercores.clone(),
             &mut peer_event_sender,
-            sync_event_sender,
             is_initiator,
         )
         .await?;
@@ -317,7 +347,10 @@ async fn on_peer_event_memory(
                 // This is an FYI message, just continue for now
             }
             PeerEvent::RemotePeerSynced(_) => {
-                // This is an FYI message, just continue for now
+                sync_event_sender
+                    .send(SynchronizeEvent::RemotePeerSynced())
+                    .await
+                    .unwrap();
             }
             PeerEvent::PeerSyncStarted(public_key) => {
                 // Set peer to not-synced

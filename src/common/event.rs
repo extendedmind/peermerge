@@ -3,6 +3,7 @@ use automerge::Patch;
 #[derive(Clone, Debug)]
 pub enum StateEvent {
     PeersSynced(usize),
+    RemotePeerSynced(),
     DocumentChanged(Vec<Patch>),
 }
 
@@ -10,6 +11,7 @@ pub enum StateEvent {
 pub enum SynchronizeEvent {
     NewPeersAdvertised(usize),
     PeersSynced(usize),
+    RemotePeerSynced(),
     DocumentChanged(Vec<Patch>),
 }
 

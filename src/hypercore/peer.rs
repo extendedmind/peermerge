@@ -51,10 +51,8 @@ where
                     channel.id()
                 );
             }
-            if let PeerEvent::PeerDisconnected(channel_id) = event {
-                if channel.id() == channel_id as usize {
-                    break;
-                }
+            if let PeerEvent::PeerDisconnected(_) = event {
+                break;
             }
         }
     }

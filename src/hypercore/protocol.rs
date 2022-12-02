@@ -8,14 +8,13 @@ use std::fmt::Debug;
 use std::io::ErrorKind;
 
 use super::HypercoreWrapper;
-use crate::common::{storage::DocStateWrapper, PeerEvent, SynchronizeEvent};
+use crate::common::{storage::DocStateWrapper, PeerEvent};
 
 pub(crate) async fn on_protocol<T, IO>(
     protocol: &mut Protocol<IO>,
     doc_state: Arc<Mutex<DocStateWrapper<T>>>,
     hypercores: Arc<DashMap<[u8; 32], Arc<Mutex<HypercoreWrapper<T>>>>>,
     peer_event_sender: &mut Sender<PeerEvent>,
-    sync_event_sender: &mut Sender<SynchronizeEvent>,
     is_initiator: bool,
 ) -> anyhow::Result<()>
 where
