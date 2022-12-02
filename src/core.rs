@@ -164,9 +164,6 @@ where
                         .unwrap();
                 }
             }
-            // let store = self.store.lock().await;
-
-            // TODO: Do something here with sync event to trigger state event
         }
         Ok(())
     }
