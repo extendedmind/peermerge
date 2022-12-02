@@ -31,7 +31,7 @@ pub fn init_doc_with_root_scalars<P: Into<Prop>, V: Into<ScalarValue>>(
 }
 
 pub(crate) fn init_doc_from_data(discovery_key: &[u8; 32], data: &Vec<u8>) -> AutomergeDoc {
-    let mut doc = AutoCommit::load(data).unwrap();
+    let doc = AutoCommit::load(data).unwrap();
     let mut doc = doc.with_observer(VecOpObserver::default());
     doc.set_actor(ActorId::from(discovery_key));
     doc
@@ -49,7 +49,7 @@ pub(crate) fn init_doc_from_entries(
         .map(|entry| Change::from_bytes(entry.data.clone()).unwrap())
         .collect();
 
-    let result = doc.apply_changes(changes).unwrap();
+    doc.apply_changes(changes).unwrap();
     let data = doc.save();
     (doc, data)
 }

@@ -116,19 +116,13 @@ where
         write_doc_state(&self.state, &mut self.storage).await;
     }
 
+    pub async fn persist_content(&mut self) {
+        write_doc_state(&self.state, &mut self.storage).await;
+    }
+
     pub async fn set_cursor(&mut self, discovery_key: &[u8; 32], length: u64) {
         if let Some(content) = self.state.content.as_mut() {
-            if let Some(cursor) = content
-                .cursors
-                .iter_mut()
-                .find(|cursor| &cursor.discovery_key == discovery_key)
-            {
-                cursor.length = length;
-            } else {
-                content
-                    .cursors
-                    .push(DocCursor::new(discovery_key.clone(), length));
-            }
+            content.set_cursor(discovery_key, length);
             write_doc_state(&self.state, &mut self.storage).await;
         } else {
             unimplemented!("This shouldn't happen")

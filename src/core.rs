@@ -13,7 +13,7 @@ use std::{fmt::Debug, path::PathBuf};
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_futures::spawn_local;
 
-use crate::automerge::{init_doc_from_entries, splice_text};
+use crate::automerge::{apply_changes_autocommit, init_doc_from_entries, splice_text};
 use crate::common::PeerEvent;
 use crate::hypercore::{discovery_key_from_public_key, on_protocol};
 use crate::{
@@ -367,9 +367,12 @@ async fn on_peer_event_memory(
                             // document now.
                             // Process all new events and take patches
                             let mut patches = if let Some(content) = doc_state.content_mut() {
-                                update_content(discovery_key, content, hypercores.clone())
-                                    .await
-                                    .unwrap()
+                                let patches =
+                                    update_content(discovery_key, content, hypercores.clone())
+                                        .await
+                                        .unwrap();
+                                doc_state.persist_content().await;
+                                patches
                             } else {
                                 let write_discovery_key = doc_state.write_discovery_key();
                                 let (content, patches) = create_content(
@@ -385,6 +388,7 @@ async fn on_peer_event_memory(
 
                             // Filter out unwatched patches
                             let watched_ids = &doc_state.state().watched_ids;
+                            println!("PATCHES BEFORE FILTER= {:?}", patches);
                             patches.retain(|patch| match patch {
                                 Patch::Put { obj, .. } => watched_ids.contains(obj),
                                 Patch::Insert { obj, .. } => watched_ids.contains(obj),
@@ -479,8 +483,16 @@ async fn update_content<T>(
 where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send + 'static,
 {
-    // TODO:
-    Ok(content.doc.as_mut().unwrap().observer().take_patches())
+    let old_length = content.cursor_length(discovery_key);
+    let entries = {
+        let hypercore_wrapper = hypercores.get(discovery_key).unwrap();
+        let mut hypercore = hypercore_wrapper.lock().await;
+        hypercore.entries(old_length).await?
+    };
+    content.set_cursor(discovery_key, old_length + entries.len() as u64);
+    let doc = content.doc.as_mut().unwrap();
+    apply_changes_autocommit(doc, entries)?;
+    Ok(doc.observer().take_patches())
 }
 
 fn serialize_entry(entry: &Entry) -> Vec<u8> {

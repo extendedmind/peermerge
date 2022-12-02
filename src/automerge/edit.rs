@@ -1,10 +1,19 @@
-use automerge::{transaction::Transactable, ObjId, ObjType, Prop};
+use std::convert::TryFrom;
+
+use automerge::{transaction::Transactable, Change, ObjId, ObjType, Prop};
 
 use super::AutomergeDoc;
 use crate::common::entry::Entry;
 
-pub(crate) fn apply_changes_autocommit(doc: &mut AutomergeDoc, changes: Vec<Entry>) {
-    // doc.apply_changes();
+pub(crate) fn apply_changes_autocommit(
+    doc: &mut AutomergeDoc,
+    changes: Vec<Entry>,
+) -> anyhow::Result<()> {
+    let changes: Vec<Change> = changes
+        .iter()
+        .map(|entry| Change::try_from(&entry.data[..]).unwrap())
+        .collect();
+    Ok(doc.apply_changes(changes).unwrap())
 }
 
 pub(crate) fn put_object_autocommit<O: AsRef<ObjId>, P: Into<Prop>>(

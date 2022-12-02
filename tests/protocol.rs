@@ -11,6 +11,7 @@ use futures_lite::stream::StreamExt;
 use hypercore_protocol::{discovery_key, Channel, Event, Message, Protocol, ProtocolBuilder};
 use hypercore_protocol::{schema::*, DiscoveryKey};
 use hypermerge::Hypermerge;
+use hypermerge::Patch;
 use hypermerge::StateEvent;
 use hypermerge::SynchronizeEvent;
 use random_access_memory::RandomAccessMemory;
@@ -44,7 +45,9 @@ async fn protocol_two_writers() -> anyhow::Result<()> {
         .unwrap();
 
     // Set watching for the prop
-    hypermerge_creator.watch(vec![texts_id]).await;
+    hypermerge_creator
+        .watch(vec![texts_id.clone(), text_id.clone()])
+        .await;
 
     let hypermerge_creator_for_task = hypermerge_creator.clone();
     task::spawn(async move {
@@ -75,6 +78,7 @@ async fn protocol_two_writers() -> anyhow::Result<()> {
         let mut peers_synced = false;
         let mut texts_id: Option<ObjId> = None;
         let mut text_id: Option<ObjId> = None;
+        let mut document_changes: Vec<Vec<Patch>> = vec![];
         while let Some(event) = joiner_state_event_receiver.next().await {
             println!("TEST: JOINER got event {:?}", event);
             match event {
@@ -91,40 +95,61 @@ async fn protocol_two_writers() -> anyhow::Result<()> {
                             .unwrap()
                             .unwrap();
                         text_id = Some(local_text_id.clone());
+                        println!("TEST: JOINER text_id {:?}", text_id);
                         assert!(value.is_object());
                         hypermerge_joiner
-                            .watch(vec![texts_id.unwrap().clone(), text_id.unwrap().clone()])
+                            .watch(vec![texts_id.clone().unwrap(), text_id.clone().unwrap()])
                             .await;
                     }
                     peers_synced = true;
                 }
                 StateEvent::RemotePeerSynced() => {}
-                StateEvent::DocumentChanged(_) => {}
+                StateEvent::DocumentChanged(patches) => {
+                    if document_changes.len() == 0 {
+                        assert_eq!(patches.len(), 5); // "Hello" has 5 chars
+                        document_changes.push(patches);
+                        hypermerge_joiner
+                            .splice_text(text_id.clone().unwrap(), 5, 0, ", world!")
+                            .await
+                            .unwrap();
+                    }
+                }
             }
         }
     });
 
+    let mut document_changes: Vec<Vec<Patch>> = vec![];
+    let mut peers_synced = false;
+    let mut remote_peer_synced = false;
     while let Some(event) = creator_state_event_receiver.next().await {
         println!("TEST: CREATOR got event {:?}", event);
-        let mut peers_synced = false;
-        let mut remote_peer_synced = false;
         let text_id = text_id.clone();
         match event {
             StateEvent::PeersSynced(len) => {
-                assert!(!peers_synced);
                 assert_eq!(len, 1);
                 peers_synced = true;
             }
             StateEvent::RemotePeerSynced() => {
                 if !remote_peer_synced {
+                    println!("TEST: CREATOR text_id {:?}", text_id);
                     hypermerge_creator
-                        .splice_text(text_id, 0, 0, "hello")
+                        .splice_text(text_id, 0, 0, "Hello")
                         .await
                         .unwrap();
                     remote_peer_synced = true;
                 }
             }
-            StateEvent::DocumentChanged(_) => {}
+            StateEvent::DocumentChanged(patches) => {
+                println!("CREATOR NUMBER {}", document_changes.len());
+                if document_changes.len() == 0 {
+                    assert_eq!(patches.len(), 1); // Original creation of "text"
+                } else if document_changes.len() == 1 {
+                    assert_eq!(patches.len(), 5); // "Hello" has 5 chars
+                } else if document_changes.len() == 2 {
+                    assert_eq!(patches.len(), 8); // ", world!" has 8 chars
+                }
+                document_changes.push(patches);
+            }
         }
     }
     Ok(())

@@ -88,4 +88,25 @@ impl DocContent {
             doc: Some(doc),
         }
     }
+
+    pub fn cursor_length(&self, discovery_key: &[u8; 32]) -> u64 {
+        self.cursors
+            .iter()
+            .find(|cursor| &cursor.discovery_key == discovery_key)
+            .unwrap()
+            .length
+    }
+
+    pub fn set_cursor(&mut self, discovery_key: &[u8; 32], length: u64) {
+        if let Some(cursor) = self
+            .cursors
+            .iter_mut()
+            .find(|cursor| &cursor.discovery_key == discovery_key)
+        {
+            cursor.length = length;
+        } else {
+            self.cursors
+                .push(DocCursor::new(discovery_key.clone(), length));
+        }
+    }
 }
