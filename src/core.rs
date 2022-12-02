@@ -39,6 +39,7 @@ where
 {
     hypercores: Arc<DashMap<[u8; 32], Arc<Mutex<HypercoreWrapper<T>>>>>,
     doc_state: Arc<Mutex<DocStateWrapper<T>>>,
+    state_event_sender: Arc<Mutex<Option<Sender<StateEvent>>>>,
     prefix: PathBuf,
     discovery_key: [u8; 32],
     doc_url: String,
@@ -90,22 +91,28 @@ where
         prop: P,
         object: ObjType,
     ) -> anyhow::Result<ObjId> {
-        let mut doc_state = self.doc_state.lock().await;
-        let (entry, id) = if let Some(doc) = doc_state.doc_mut() {
-            put_object_autocommit(doc, obj, prop, object).unwrap()
-        } else {
-            unimplemented!(
-                "TODO: No proper error code for trying to change before a document is synced"
-            );
-        };
+        let id = {
+            let mut doc_state = self.doc_state.lock().await;
+            let (entry, id) = if let Some(doc) = doc_state.doc_mut() {
+                put_object_autocommit(doc, obj, prop, object).unwrap()
+            } else {
+                unimplemented!(
+                    "TODO: No proper error code for trying to change before a document is synced"
+                );
+            };
 
-        let write_discovery_key = doc_state.write_discovery_key();
-        let length = {
-            let write_hypercore = self.hypercores.get_mut(&write_discovery_key).unwrap();
-            let mut write_hypercore = write_hypercore.lock().await;
-            write_hypercore.append(&serialize_entry(&entry)).await?
+            let write_discovery_key = doc_state.write_discovery_key();
+            let length = {
+                let write_hypercore = self.hypercores.get_mut(&write_discovery_key).unwrap();
+                let mut write_hypercore = write_hypercore.lock().await;
+                write_hypercore.append(&serialize_entry(&entry)).await?
+            };
+            doc_state.set_cursor(&write_discovery_key, length).await;
+            id
         };
-        doc_state.set_cursor(&write_discovery_key, length).await;
+        {
+            self.notify_of_document_changes().await;
+        }
         Ok(id)
     }
 
@@ -116,21 +123,26 @@ where
         delete: usize,
         text: &str,
     ) -> anyhow::Result<()> {
-        let mut doc_state = self.doc_state.lock().await;
-        let entry = if let Some(doc) = doc_state.doc_mut() {
-            splice_text(doc, obj, index, delete, text)?
-        } else {
-            unimplemented!(
+        {
+            let mut doc_state = self.doc_state.lock().await;
+            let entry = if let Some(doc) = doc_state.doc_mut() {
+                splice_text(doc, obj, index, delete, text)?
+            } else {
+                unimplemented!(
                 "TODO: No proper error code for trying to splice text before a document is synced"
             );
-        };
-        let write_discovery_key = doc_state.write_discovery_key();
-        let length = {
-            let write_hypercore = self.hypercores.get_mut(&write_discovery_key).unwrap();
-            let mut write_hypercore = write_hypercore.lock().await;
-            write_hypercore.append(&serialize_entry(&entry)).await?
-        };
-        doc_state.set_cursor(&write_discovery_key, length).await;
+            };
+            let write_discovery_key = doc_state.write_discovery_key();
+            let length = {
+                let write_hypercore = self.hypercores.get_mut(&write_discovery_key).unwrap();
+                let mut write_hypercore = write_hypercore.lock().await;
+                write_hypercore.append(&serialize_entry(&entry)).await?
+            };
+            doc_state.set_cursor(&write_discovery_key, length).await;
+        }
+        {
+            self.notify_of_document_changes().await;
+        }
         Ok(())
     }
 
@@ -139,6 +151,14 @@ where
         state_event_sender: Sender<StateEvent>,
         sync_event_receiver: &mut Receiver<SynchronizeEvent>,
     ) -> anyhow::Result<()> {
+        // First let's drain any patches that are not yet sent out, and push them out
+        {
+            *self.state_event_sender.lock().await = Some(state_event_sender.clone());
+        }
+        {
+            self.notify_of_document_changes().await;
+        }
+        // Then start listening for any sync events
         println!("connect_document: start listening");
         while let Some(event) = sync_event_receiver.next().await {
             match event {
@@ -170,6 +190,24 @@ where
 
     pub fn doc_url(&self) -> String {
         self.doc_url.clone()
+    }
+
+    async fn notify_of_document_changes(&mut self) {
+        let mut doc_state = self.doc_state.lock().await;
+        if let Some(doc) = doc_state.doc_mut() {
+            let mut state_event_sender = self.state_event_sender.lock().await;
+            if let Some(sender) = state_event_sender.as_mut() {
+                if sender.is_closed() {
+                    *state_event_sender = None;
+                } else {
+                    let patches = doc.observer().take_patches();
+                    sender
+                        .send(StateEvent::DocumentChanged(patches))
+                        .await
+                        .unwrap();
+                }
+            }
+        }
     }
 }
 
@@ -304,6 +342,7 @@ impl Hypermerge<RandomAccessMemory> {
         Self {
             hypercores: Arc::new(hypercores),
             doc_state: Arc::new(Mutex::new(doc_state)),
+            state_event_sender: Arc::new(Mutex::new(None)),
             prefix: PathBuf::new(),
             discovery_key,
             doc_url: doc_url.to_string(),
@@ -388,13 +427,14 @@ async fn on_peer_event_memory(
 
                             // Filter out unwatched patches
                             let watched_ids = &doc_state.state().watched_ids;
-                            println!("PATCHES BEFORE FILTER= {:?}", patches);
+                            println!("PATCHES BEFORE FILTER({})= {:?}", is_initiator, patches);
                             patches.retain(|patch| match patch {
                                 Patch::Put { obj, .. } => watched_ids.contains(obj),
                                 Patch::Insert { obj, .. } => watched_ids.contains(obj),
                                 Patch::Delete { obj, .. } => watched_ids.contains(obj),
                                 Patch::Increment { obj, .. } => watched_ids.contains(obj),
                             });
+                            println!("PATCHES AFTER FILTER({})= {:?}", is_initiator, patches);
                             Some((peers_synced, patches))
                         } else {
                             None

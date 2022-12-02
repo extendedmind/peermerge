@@ -105,9 +105,11 @@ async fn protocol_two_writers() -> anyhow::Result<()> {
                 }
                 StateEvent::RemotePeerSynced() => {}
                 StateEvent::DocumentChanged(patches) => {
+                    println!("JOINER NUMBER {}", document_changes.len());
                     if document_changes.len() == 0 {
                         assert_eq!(patches.len(), 5); // "Hello" has 5 chars
                         document_changes.push(patches);
+                        println!("JOINER SPLICING TEXT with world");
                         hypermerge_joiner
                             .splice_text(text_id.clone().unwrap(), 5, 0, ", world!")
                             .await
@@ -142,7 +144,7 @@ async fn protocol_two_writers() -> anyhow::Result<()> {
             StateEvent::DocumentChanged(patches) => {
                 println!("CREATOR NUMBER {}", document_changes.len());
                 if document_changes.len() == 0 {
-                    assert_eq!(patches.len(), 1); // Original creation of "text"
+                    assert_eq!(patches.len(), 2); // Original creation of "texts" and "text";
                 } else if document_changes.len() == 1 {
                     assert_eq!(patches.len(), 5); // "Hello" has 5 chars
                 } else if document_changes.len() == 2 {
