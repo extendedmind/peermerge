@@ -232,21 +232,57 @@ where
             return Ok(peer_synced);
         }
         Message::Range(message) => {
-            let peer_synced = {
-                let hypercore = hypercore.lock().await;
+            let event = {
+                let mut hypercore = hypercore.lock().await;
                 let info = hypercore.info();
-                let peer_synced: Option<PeerEvent> = if message.start == 0
+                let event: Option<PeerEvent> = if message.start == 0
                     && info.contiguous_length == message.length
                     && peer_state.remote_length == message.length
                 {
-                    let public_key: [u8; 32] = *hypercore.key_pair().public.as_bytes();
-                    Some(PeerEvent::RemotePeerSynced(public_key))
+                    Some(PeerEvent::RemotePeerSynced(
+                        *hypercore.key_pair().public.as_bytes(),
+                    ))
                 } else {
-                    None
+                    // If the other side advertises more than we have, and more than the peer length,
+                    // we have recorded, then we need to request the rest of the blocks.
+                    if message.start == 0
+                        && info.length < message.length
+                        && peer_state.remote_length < message.length
+                    {
+                        if peer_state.remote_length + 1 < message.length {
+                            unimplemented!(
+                                "Can't yet handle more than one extra block notified in range"
+                            );
+                        }
+                        peer_state.remote_length = message.length;
+                        let request_index = info.length;
+                        let nodes = hypercore.missing_nodes(request_index * 2).await?;
+                        let block = Some(RequestBlock {
+                            index: request_index,
+                            nodes,
+                        });
+                        let msg = Request {
+                            id: message.length,
+                            fork: info.fork,
+                            hash: None,
+                            block,
+                            seek: None,
+                            upgrade: Some(RequestUpgrade {
+                                start: info.length,
+                                length: peer_state.remote_length - info.length,
+                            }),
+                        };
+                        channel.send(Message::Request(msg)).await?;
+                        Some(PeerEvent::PeerSyncStarted(
+                            *hypercore.key_pair().public.as_bytes(),
+                        ))
+                    } else {
+                        None
+                    }
                 };
-                peer_synced
+                event
             };
-            return Ok(peer_synced);
+            return Ok(event);
         }
         Message::Extension(message) => match message.name.as_str() {
             HYPERMERGE_BROADCAST_MSG => {

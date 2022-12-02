@@ -79,23 +79,24 @@ async fn protocol_two_writers() -> anyhow::Result<()> {
             println!("TEST: JOINER got event {:?}", event);
             match event {
                 StateEvent::PeersSynced(len) => {
-                    assert!(!peers_synced);
                     assert_eq!(len, 1);
+                    if !peers_synced {
+                        let (value, local_texts_id) =
+                            hypermerge_joiner.get(ROOT, "texts").await.unwrap().unwrap();
+                        texts_id = Some(local_texts_id.clone());
+                        assert!(value.is_object());
+                        let (value, local_text_id) = hypermerge_joiner
+                            .get(local_texts_id, "text")
+                            .await
+                            .unwrap()
+                            .unwrap();
+                        text_id = Some(local_text_id.clone());
+                        assert!(value.is_object());
+                        hypermerge_joiner
+                            .watch(vec![texts_id.unwrap().clone(), text_id.unwrap().clone()])
+                            .await;
+                    }
                     peers_synced = true;
-                    let (value, local_texts_id) =
-                        hypermerge_joiner.get(ROOT, "texts").await.unwrap().unwrap();
-                    texts_id = Some(local_texts_id.clone());
-                    assert!(value.is_object());
-                    let (value, local_text_id) = hypermerge_joiner
-                        .get(local_texts_id, "text")
-                        .await
-                        .unwrap()
-                        .unwrap();
-                    text_id = Some(local_text_id.clone());
-                    assert!(value.is_object());
-                    hypermerge_joiner
-                        .watch(vec![texts_id.unwrap().clone(), text_id.unwrap().clone()])
-                        .await;
                 }
                 StateEvent::RemotePeerSynced() => {}
                 StateEvent::DocumentChanged(_) => {}
