@@ -3,6 +3,7 @@
 use async_channel::{unbounded, Receiver, Sender};
 use async_std::net::TcpStream;
 use async_std::prelude::*;
+use async_std::sync::{Arc, Condvar, Mutex};
 use async_std::task;
 use automerge::ObjId;
 use automerge::ROOT;
@@ -76,6 +77,9 @@ async fn protocol_two_writers() -> anyhow::Result<()> {
         .unwrap();
     });
 
+    let cork_sync_creator = Arc::new((Mutex::new(false), Condvar::new()));
+    let cork_sync_joiner = Arc::clone(&cork_sync_creator);
+
     // Simulate UI threads here
     task::spawn(async move {
         let mut peers_synced = false;
@@ -119,15 +123,21 @@ async fn protocol_two_writers() -> anyhow::Result<()> {
                             .splice_text(&text_id, 5, 0, ", world!")
                             .await
                             .unwrap();
-                        assert_text_equals(&hypermerge_joiner, &text_id, "Hello, world!").await;
                     } else if document_changes.len() == 1 {
                         assert_eq!(patches.len(), 8); // ", world!" has 8 chars
                         document_changes.push(patches);
-                        // Let's create a conflict here, cork to stop sending these to the peer
-                        // Need to trigger small sleep to get this current message sent to creator and not have the cork bite too soon.
-                        async_std::task::sleep(Duration::from_millis(1)).await;
-                        hypermerge_joiner.cork().await;
                         let text_id = text_id.clone().unwrap();
+                        assert_text_equals(&hypermerge_joiner, &text_id, "Hello, world!").await;
+
+                        // Let's make sure via variable that the other end is also ready to cork
+                        let (lock, cvar) = &*cork_sync_joiner;
+                        let mut started = lock.lock().await;
+                        while !*started {
+                            started = cvar.wait(started).await;
+                        }
+
+                        // Ok, ready to cork in unison
+                        hypermerge_joiner.cork().await;
                         hypermerge_joiner
                             .splice_text(&text_id, 5, 2, "")
                             .await
@@ -196,9 +206,18 @@ async fn protocol_two_writers() -> anyhow::Result<()> {
                     assert_eq!(patches.len(), 8); // ", world!" has 8 chars
                     document_changes.push(patches);
                     assert_text_equals(&hypermerge_creator, &text_id, "Hello, world!").await;
+
+                    // Ready to notify about cork
+                    let (lock, cvar) = &*cork_sync_creator;
+                    let mut started = lock.lock().await;
+                    *started = true;
+                    cvar.notify_one();
+
+                    // Ok, ready to cork
+                    hypermerge_creator.cork().await;
+
                     // Let's create a conflict here, cork to prevent sending these changes to the
                     // peer
-                    hypermerge_creator.cork().await;
                     hypermerge_creator
                         .splice_text(&text_id, 4, 2, "")
                         .await
