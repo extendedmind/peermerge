@@ -14,8 +14,10 @@ use hypermerge::Hypermerge;
 use hypermerge::Patch;
 use hypermerge::StateEvent;
 use hypermerge::SynchronizeEvent;
+use hypermerge::Value;
 use random_access_memory::RandomAccessMemory;
 use std::io;
+use std::time::Duration;
 
 mod common;
 use common::*;
@@ -32,7 +34,8 @@ async fn protocol_two_writers() -> anyhow::Result<()> {
         Sender<StateEvent>,
         Receiver<StateEvent>,
     ) = unbounded();
-    let mut hypermerge_creator = Hypermerge::create_doc_memory(vec![("version", 1)]).await;
+    let mut hypermerge_creator =
+        Hypermerge::create_doc_memory("creator", vec![("version", 1)]).await;
 
     // Insert a map with a text field to the document
     let texts_id = hypermerge_creator
@@ -61,7 +64,7 @@ async fn protocol_two_writers() -> anyhow::Result<()> {
     });
 
     let mut hypermerge_joiner =
-        Hypermerge::register_doc_memory(&hypermerge_creator.doc_url()).await;
+        Hypermerge::register_doc_memory("joiner", &hypermerge_creator.doc_url()).await;
     let hypermerge_joiner_for_task = hypermerge_joiner.clone();
     task::spawn(async move {
         connect(
@@ -85,17 +88,16 @@ async fn protocol_two_writers() -> anyhow::Result<()> {
                 StateEvent::PeersSynced(len) => {
                     assert_eq!(len, 1);
                     if !peers_synced {
-                        let (value, local_texts_id) =
+                        let (_value, local_texts_id) =
                             hypermerge_joiner.get(ROOT, "texts").await.unwrap().unwrap();
                         texts_id = Some(local_texts_id.clone());
-                        assert!(value.is_object());
-                        let (value, local_text_id) = hypermerge_joiner
+                        let (_value, local_text_id) = hypermerge_joiner
                             .get(local_texts_id, "text")
                             .await
                             .unwrap()
                             .unwrap();
+                        assert_text_equals(&hypermerge_joiner, &local_text_id, "").await;
                         text_id = Some(local_text_id.clone());
-                        assert!(value.is_object());
                         hypermerge_joiner
                             .watch(vec![texts_id.clone().unwrap(), text_id.clone().unwrap()])
                             .await;
@@ -104,15 +106,54 @@ async fn protocol_two_writers() -> anyhow::Result<()> {
                 }
                 StateEvent::RemotePeerSynced() => {}
                 StateEvent::DocumentChanged(patches) => {
+                    println!(
+                        "TEST: JOINER document_changes LEN {}",
+                        document_changes.len()
+                    );
                     if document_changes.len() == 0 {
                         assert_eq!(patches.len(), 5); // "Hello" has 5 chars
                         document_changes.push(patches);
+                        let text_id = text_id.clone().unwrap();
+                        assert_text_equals(&hypermerge_joiner, &text_id, "Hello").await;
                         hypermerge_joiner
-                            .splice_text(text_id.clone().unwrap(), 5, 0, ", world!")
+                            .splice_text(&text_id, 5, 0, ", world!")
                             .await
                             .unwrap();
+                        assert_text_equals(&hypermerge_joiner, &text_id, "Hello, world!").await;
                     } else if document_changes.len() == 1 {
                         assert_eq!(patches.len(), 8); // ", world!" has 8 chars
+                        document_changes.push(patches);
+                        // Let's create a conflict here, cork to stop sending these to the peer
+                        // Need to trigger small sleep to get this current message sent to creator and not have the cork bite too soon.
+                        async_std::task::sleep(Duration::from_millis(1)).await;
+                        hypermerge_joiner.cork().await;
+                        let text_id = text_id.clone().unwrap();
+                        hypermerge_joiner
+                            .splice_text(&text_id, 5, 2, "")
+                            .await
+                            .unwrap();
+                        hypermerge_joiner
+                            .splice_text(&text_id, 4, 0, "XX")
+                            .await
+                            .unwrap();
+                        assert_text_equals(&hypermerge_joiner, &text_id, "HellXXoworld!").await;
+                    } else if document_changes.len() == 2 {
+                        // This is the two local deletions
+                        assert_eq!(patches.len(), 2);
+                        document_changes.push(patches);
+                    } else if document_changes.len() == 3 {
+                        // This is the two local additions
+                        assert_eq!(patches.len(), 2);
+                        document_changes.push(patches);
+                    } else if document_changes.len() == 4 {
+                        assert_eq!(patches.len(), 3); // One overlapping delete, and two Y
+                        document_changes.push(patches);
+                        let text_id = text_id.clone().unwrap();
+                        assert_text_equals(&hypermerge_joiner, &text_id, "HellXXYYworld!").await;
+                        // These are the changes sent by the peer, uncork to send the changes to the peer now
+                        hypermerge_joiner.uncork().await.unwrap();
+                    } else {
+                        panic!("Did not expect more joiner document changes");
                     }
                 }
             }
@@ -133,21 +174,57 @@ async fn protocol_two_writers() -> anyhow::Result<()> {
             StateEvent::RemotePeerSynced() => {
                 if !remote_peer_synced {
                     hypermerge_creator
-                        .splice_text(text_id, 0, 0, "Hello")
+                        .splice_text(&text_id, 0, 0, "Hello")
                         .await
                         .unwrap();
+                    assert_text_equals(&hypermerge_creator, &text_id, "Hello").await;
                     remote_peer_synced = true;
                 }
             }
             StateEvent::DocumentChanged(patches) => {
+                println!(
+                    "TEST: CREATOR document_changes LEN {}",
+                    document_changes.len()
+                );
                 if document_changes.len() == 0 {
                     assert_eq!(patches.len(), 2); // Original creation of "texts" and "text";
+                    document_changes.push(patches);
                 } else if document_changes.len() == 1 {
                     assert_eq!(patches.len(), 5); // "Hello" has 5 chars
+                    document_changes.push(patches);
                 } else if document_changes.len() == 2 {
                     assert_eq!(patches.len(), 8); // ", world!" has 8 chars
+                    document_changes.push(patches);
+                    assert_text_equals(&hypermerge_creator, &text_id, "Hello, world!").await;
+                    // Let's create a conflict here, cork to prevent sending these changes to the
+                    // peer
+                    hypermerge_creator.cork().await;
+                    hypermerge_creator
+                        .splice_text(&text_id, 4, 2, "")
+                        .await
+                        .unwrap();
+                    hypermerge_creator
+                        .splice_text(&text_id, 4, 0, "YY")
+                        .await
+                        .unwrap();
+                    assert_text_equals(&hypermerge_creator, &text_id, "HellYY world!").await;
+                } else if document_changes.len() == 3 {
+                    // This is the two local deletions
+                    assert_eq!(patches.len(), 2);
+                    document_changes.push(patches);
+                } else if document_changes.len() == 4 {
+                    // This is the two local additions
+                    assert_eq!(patches.len(), 2);
+                    document_changes.push(patches);
+                    // Uncork to send the changes to the peer now
+                    hypermerge_creator.uncork().await?;
+                } else if document_changes.len() == 5 {
+                    assert_eq!(patches.len(), 3); // One deletion that wasn't joined and two X chars
+                    document_changes.push(patches);
+                    assert_text_equals(&hypermerge_creator, &text_id, "HellXXYYworld!").await;
+                } else if document_changes.len() == 6 {
+                    panic!("Did not expect more creator document changes");
                 }
-                document_changes.push(patches);
             }
         }
     }
@@ -174,4 +251,13 @@ async fn connect(
         .connect_protocol(&mut protocol, &mut sync_event_sender)
         .await?;
     Ok(())
+}
+
+async fn assert_text_equals(
+    hypermerge: &Hypermerge<RandomAccessMemory>,
+    obj: &ObjId,
+    expected: &str,
+) {
+    let result = hypermerge.realize_text(obj).await;
+    assert_eq!(result.unwrap().unwrap(), expected);
 }

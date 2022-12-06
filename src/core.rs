@@ -41,6 +41,7 @@ where
     doc_state: Arc<Mutex<DocStateWrapper<T>>>,
     state_event_sender: Arc<Mutex<Option<Sender<StateEvent>>>>,
     prefix: PathBuf,
+    peer_name: String,
     discovery_key: [u8; 32],
     doc_url: String,
 }
@@ -78,6 +79,42 @@ where
                         None
                     }
                 }
+            } else {
+                unimplemented!("TODO: No proper error code for trying to get from doc before a document is synced");
+            }
+        };
+        Ok(result)
+    }
+
+    pub async fn realize_text<O: AsRef<ObjId>>(&self, obj: O) -> anyhow::Result<Option<String>> {
+        let doc_state = &self.doc_state;
+        let result = {
+            let doc_state = doc_state.lock().await;
+            if let Some(doc) = doc_state.doc() {
+                let length = doc.length(obj.as_ref().clone());
+                let mut chars = Vec::with_capacity(length);
+                for i in 0..length {
+                    match doc.get(obj.as_ref().clone(), i) {
+                        Ok(result) => {
+                            if let Some(result) = result {
+                                let scalar = result.0.to_scalar().unwrap();
+                                match scalar {
+                                    ScalarValue::Str(character) => {
+                                        chars.push(character.to_string());
+                                    }
+                                    _ => {
+                                        panic!("Not a char")
+                                    }
+                                }
+                            }
+                        }
+                        Err(_err) => {
+                            panic!("Not a char")
+                        }
+                    };
+                }
+                let string: String = chars.into_iter().collect();
+                Some(string)
             } else {
                 unimplemented!("TODO: No proper error code for trying to get from doc before a document is synced");
             }
@@ -134,8 +171,9 @@ where
             };
             let write_discovery_key = doc_state.write_discovery_key();
             let length = {
-                let write_hypercore = self.hypercores.get_mut(&write_discovery_key).unwrap();
-                let mut write_hypercore = write_hypercore.lock().await;
+                let write_hypercore_wrapper =
+                    self.hypercores.get_mut(&write_discovery_key).unwrap();
+                let mut write_hypercore = write_hypercore_wrapper.lock().await;
                 write_hypercore.append(&serialize_entry(&entry)).await?
             };
             doc_state.set_cursor(&write_discovery_key, length).await;
@@ -143,6 +181,23 @@ where
         {
             self.notify_of_document_changes().await;
         }
+        Ok(())
+    }
+
+    pub async fn cork(&mut self) {
+        let doc_state = self.doc_state.lock().await;
+        let write_discovery_key = doc_state.write_discovery_key();
+        let write_hypercore_wrapper = self.hypercores.get_mut(&write_discovery_key).unwrap();
+        let mut write_hypercore = write_hypercore_wrapper.lock().await;
+        write_hypercore.cork();
+    }
+
+    pub async fn uncork(&mut self) -> anyhow::Result<()> {
+        let doc_state = self.doc_state.lock().await;
+        let write_discovery_key = doc_state.write_discovery_key();
+        let write_hypercore_wrapper = self.hypercores.get_mut(&write_discovery_key).unwrap();
+        let mut write_hypercore = write_hypercore_wrapper.lock().await;
+        write_hypercore.uncork().await?;
         Ok(())
     }
 
@@ -213,11 +268,12 @@ where
 
 impl Hypermerge<RandomAccessMemory> {
     pub async fn create_doc_memory<P: Into<Prop>, V: Into<ScalarValue>>(
+        peer_name: &str,
         root_scalars: Vec<(P, V)>,
     ) -> Self {
         // Generate a key pair, its discovery key and the public key string
         let (key_pair, encoded_public_key, discovery_key) = generate_keys();
-        let (doc, data) = init_doc_with_root_scalars(&discovery_key, root_scalars);
+        let (doc, data) = init_doc_with_root_scalars(peer_name, &discovery_key, root_scalars);
         let public_key = *key_pair.public.as_bytes();
 
         // Create the memory hypercore
@@ -237,12 +293,13 @@ impl Hypermerge<RandomAccessMemory> {
             vec![],
             Some(content),
             discovery_key,
+            peer_name,
             &to_doc_url(&encoded_public_key),
         )
         .await
     }
 
-    pub async fn register_doc_memory(doc_url: &str) -> Self {
+    pub async fn register_doc_memory(peer_name: &str, doc_url: &str) -> Self {
         // Process keys from doc URL
         let doc_public_key = to_public_key(doc_url);
         let (doc_public_key, doc_discovery_key) = keys_from_public_key(&doc_public_key);
@@ -264,6 +321,7 @@ impl Hypermerge<RandomAccessMemory> {
             vec![(doc_public_key, doc_discovery_key.clone(), doc_hypercore)],
             None,
             doc_discovery_key,
+            peer_name,
             doc_url,
         )
         .await
@@ -285,9 +343,11 @@ impl Hypermerge<RandomAccessMemory> {
         let is_initiator = protocol.is_initiator();
         let discovery_key_for_task = self.discovery_key.clone();
         let hypercores_for_task = self.hypercores.clone();
+        let peer_name = self.peer_name.clone();
         #[cfg(not(target_arch = "wasm32"))]
         task::spawn(async move {
             on_peer_event_memory(
+                &peer_name,
                 &discovery_key_for_task,
                 peer_event_receiver,
                 sync_event_sender_for_task,
@@ -300,6 +360,8 @@ impl Hypermerge<RandomAccessMemory> {
         #[cfg(target_arch = "wasm32")]
         spawn_local(async move {
             on_peer_event_memory(
+                &peer_name,
+                &discovery_key_for_task,
                 &discovery_key_for_task,
                 peer_event_receiver,
                 sync_event_sender_for_task,
@@ -326,6 +388,7 @@ impl Hypermerge<RandomAccessMemory> {
         peer_hypercores: Vec<([u8; 32], [u8; 32], HypercoreWrapper<RandomAccessMemory>)>,
         content: Option<DocContent>,
         discovery_key: [u8; 32],
+        peer_name: &str,
         doc_url: &str,
     ) -> Self {
         let hypercores: DashMap<[u8; 32], Arc<Mutex<HypercoreWrapper<RandomAccessMemory>>>> =
@@ -346,11 +409,13 @@ impl Hypermerge<RandomAccessMemory> {
             prefix: PathBuf::new(),
             discovery_key,
             doc_url: doc_url.to_string(),
+            peer_name: peer_name.to_string(),
         }
     }
 }
 
 async fn on_peer_event_memory(
+    peer_name: &str,
     doc_discovery_key: &[u8; 32],
     mut peer_event_receiver: Receiver<PeerEvent>,
     sync_event_sender: Sender<SynchronizeEvent>,
@@ -359,6 +424,7 @@ async fn on_peer_event_memory(
     is_initiator: bool,
 ) {
     while let Some(event) = peer_event_receiver.next().await {
+        println!("on_peer_event({}): Got event {:?}", is_initiator, event);
         match event {
             PeerEvent::NewPeersAdvertised(public_keys) => {
                 let len = public_keys.len();
@@ -414,6 +480,7 @@ async fn on_peer_event_memory(
                                 let write_discovery_key = doc_state.write_discovery_key();
                                 let (content, patches) = create_content(
                                     doc_discovery_key,
+                                    peer_name,
                                     &write_discovery_key,
                                     hypercores.clone(),
                                 )
@@ -472,6 +539,7 @@ async fn create_and_insert_read_memory_hypercores(
 
 async fn create_content<T>(
     doc_discovery_key: &[u8; 32],
+    write_peer_name: &str,
     write_discovery_key: &[u8; 32],
     hypercores: Arc<DashMap<[u8; 32], Arc<Mutex<HypercoreWrapper<T>>>>>,
 ) -> anyhow::Result<(DocContent, Vec<Patch>)>
@@ -506,7 +574,7 @@ where
     }
 
     // Create DocContent from the hypercore
-    let (mut doc, data) = init_doc_from_entries(write_discovery_key, entries);
+    let (mut doc, data) = init_doc_from_entries(write_peer_name, write_discovery_key, entries);
     let patches = doc.observer().take_patches();
     Ok((DocContent::new(data, cursors, doc), patches))
 }

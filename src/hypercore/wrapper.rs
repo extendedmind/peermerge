@@ -29,6 +29,8 @@ where
     pub(super) public_key: [u8; 32],
     pub(super) hypercore: Arc<Mutex<Hypercore<T>>>,
     pub(super) senders: Vec<Sender<Message>>,
+    corked: bool,
+    message_queue: Vec<Message>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -39,6 +41,8 @@ impl HypercoreWrapper<RandomAccessDisk> {
             public_key,
             hypercore: Arc::new(Mutex::new(hypercore)),
             senders: vec![],
+            corked: false,
+            message_queue: vec![],
         }
     }
 }
@@ -50,6 +54,8 @@ impl HypercoreWrapper<RandomAccessMemory> {
             public_key,
             hypercore: Arc::new(Mutex::new(hypercore)),
             senders: vec![],
+            corked: false,
+            message_queue: vec![],
         }
     }
 }
@@ -65,7 +71,8 @@ where
         };
         if self.senders.len() > 0 {
             let message = create_internal_append_message(outcome.length);
-            self.notify_listeners(message).await?;
+            self.notify_listeners(&message).await?;
+        } else {
         }
         Ok(outcome.length)
     }
@@ -74,6 +81,29 @@ where
         let (sender, receiver): (Sender<Message>, Receiver<Message>) = unbounded();
         self.senders.push(sender);
         receiver
+    }
+
+    /// Cork sending notifications about this hypercore and start queuing in-memory messages
+    /// about changes.
+    pub(crate) fn cork(&mut self) {
+        self.corked = true;
+    }
+
+    /// Remove cork and send out all of the messages that were corked to listeners.
+    pub(crate) async fn uncork(&mut self) -> anyhow::Result<()> {
+        let messages = {
+            self.corked = false;
+            self.message_queue.clone()
+        };
+        {
+            for message in messages {
+                self.notify_listeners(&message).await?;
+            }
+        }
+        {
+            self.message_queue = vec![];
+        }
+        Ok(())
     }
 
     pub(crate) async fn entries(&mut self, index: u64) -> anyhow::Result<Vec<Entry>> {
@@ -134,13 +164,18 @@ where
         });
     }
 
-    async fn notify_listeners(&mut self, message: Message) -> anyhow::Result<()> {
+    async fn notify_listeners(&mut self, message: &Message) -> anyhow::Result<()> {
         let mut closed_indices: Vec<usize> = vec![];
         for i in 0..self.senders.len() {
             if self.senders[i].is_closed() {
                 closed_indices.push(i);
             } else {
-                self.senders[i].send(message.clone()).await?;
+                let message = message.clone();
+                if !self.corked {
+                    self.senders[i].send(message).await?;
+                } else {
+                    self.message_queue.push(message);
+                }
             }
         }
         closed_indices.sort();

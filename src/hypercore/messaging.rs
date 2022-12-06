@@ -57,7 +57,6 @@ where
     match message {
         Message::Synchronize(message) => {
             let length_changed = message.length != peer_state.remote_length;
-            let first_sync = !peer_state.remote_sync_received;
             let (info, public_key) = {
                 let hypercore = hypercore.lock().await;
                 let info = hypercore.info();
@@ -71,14 +70,13 @@ where
             peer_state.remote_can_upgrade = message.can_upgrade;
             peer_state.remote_uploading = message.uploading;
             peer_state.remote_downloading = message.downloading;
-            peer_state.remote_sync_received = true;
 
             peer_state.length_acked = if same_fork { message.remote_length } else { 0 };
 
             let mut messages = vec![];
 
-            if first_sync {
-                // Need to send another sync back that acknowledges the received sync
+            if length_changed {
+                // When the peer says it got a new length, we need to send another sync back that acknowledges the received sync
                 let msg = Synchronize {
                     fork: info.fork,
                     length: info.length,
@@ -94,6 +92,10 @@ where
                 && peer_state.length_acked == info.length
                 && length_changed
             {
+                // Let's request an upgrade when the peer has said they have a new length, and
+                // they've acked our length. NB: We can't know if the peer actually has any
+                // blocks from this message: those are only possible to know from the Ranges they
+                // send. Hence no block.
                 let msg = Request {
                     id: 1,
                     fork: info.fork,
@@ -105,6 +107,7 @@ where
                         length: peer_state.remote_length - info.length,
                     }),
                 };
+                peer_state.requested_upgrade_length = peer_state.remote_length;
                 messages.push(Message::Request(msg));
                 Some(PeerEvent::PeerSyncStarted(public_key))
             } else {
@@ -137,47 +140,25 @@ where
             }
         }
         Message::Data(message) => {
-            let (old_info, applied, new_info, request_block, peer_synced) = {
+            let (old_info, applied, new_info, request, peer_synced) = {
                 let mut hypercore = hypercore.lock().await;
                 let old_info = hypercore.info();
                 let proof = message.clone().into_proof();
                 let applied = hypercore.verify_and_apply_proof(&proof).await?;
                 let new_info = hypercore.info();
-                let request_block: Option<RequestBlock> = if let Some(upgrade) = &message.upgrade {
-                    // When getting the initial upgrade, send a request for the first missing block
-                    if old_info.length < upgrade.length {
-                        let request_index = old_info.length;
-                        let nodes = hypercore.missing_nodes(request_index * 2).await?;
-                        Some(RequestBlock {
-                            index: request_index,
-                            nodes,
-                        })
-                    } else {
-                        None
-                    }
-                } else if let Some(block) = &message.block {
-                    // When receiving a block, ask for the next, if there are still some missing
-                    if block.index < peer_state.remote_length - 1 {
-                        let request_index = block.index + 1;
-                        let nodes = hypercore.missing_nodes(request_index * 2).await?;
-                        Some(RequestBlock {
-                            index: request_index,
-                            nodes,
-                        })
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                };
+                let request = next_request(&mut hypercore, peer_state).await?;
                 let peer_synced: Option<PeerEvent> =
                     if new_info.contiguous_length == new_info.length {
                         let public_key: [u8; 32] = *hypercore.key_pair().public.as_bytes();
                         Some(PeerEvent::PeerSynced(public_key))
                     } else {
+                        println!(
+                            "NOT SENDING PEER SYNCED, {} vs {}",
+                            new_info.contiguous_length, new_info.length
+                        );
                         None
                     };
-                (old_info, applied, new_info, request_block, peer_synced)
+                (old_info, applied, new_info, request, peer_synced)
             };
             assert!(applied, "Could not apply proof");
 
@@ -218,15 +199,8 @@ where
                     }));
                 }
             }
-            if let Some(request_block) = request_block {
-                messages.push(Message::Request(Request {
-                    id: request_block.index + 1,
-                    fork: new_info.fork,
-                    hash: None,
-                    block: Some(request_block),
-                    seek: None,
-                    upgrade: None,
-                }));
+            if let Some(request) = request {
+                messages.push(Message::Request(request));
             }
             channel.send_batch(&messages).await?;
             return Ok(peer_synced);
@@ -235,50 +209,37 @@ where
             let event = {
                 let mut hypercore = hypercore.lock().await;
                 let info = hypercore.info();
-                let event: Option<PeerEvent> = if message.start == 0
-                    && info.contiguous_length == message.length
-                    && peer_state.remote_length == message.length
-                {
-                    Some(PeerEvent::RemotePeerSynced(
-                        *hypercore.key_pair().public.as_bytes(),
-                    ))
-                } else {
-                    // If the other side advertises more than we have, and more than the peer length,
-                    // we have recorded, then we need to request the rest of the blocks.
-                    if message.start == 0
-                        && info.length < message.length
-                        && peer_state.remote_length < message.length
+                let event: Option<PeerEvent> = if message.start == 0 {
+                    if info.contiguous_length == message.length
+                        && peer_state.remote_length == message.length
                     {
-                        if peer_state.remote_length + 1 < message.length {
-                            unimplemented!(
-                                "Can't yet handle more than one extra block notified in range"
-                            );
-                        }
-                        peer_state.remote_length = message.length;
-                        let request_index = info.length;
-                        let nodes = hypercore.missing_nodes(request_index * 2).await?;
-                        let block = Some(RequestBlock {
-                            index: request_index,
-                            nodes,
-                        });
-                        let msg = Request {
-                            id: message.length,
-                            fork: info.fork,
-                            hash: None,
-                            block,
-                            seek: None,
-                            upgrade: Some(RequestUpgrade {
-                                start: info.length,
-                                length: peer_state.remote_length - info.length,
-                            }),
-                        };
-                        channel.send(Message::Request(msg)).await?;
-                        Some(PeerEvent::PeerSyncStarted(
+                        // The peer has advertised that they now have what we have
+                        Some(PeerEvent::RemotePeerSynced(
                             *hypercore.key_pair().public.as_bytes(),
                         ))
                     } else {
-                        None
+                        // If the other side advertises more than we have, and more than the peer length,
+                        // we have recorded, then we need to request the rest of the blocks.
+                        if info.length < message.length && peer_state.remote_length < message.length
+                        {
+                            peer_state.remote_length = message.length;
+                            if let Some(msg) = next_request(&mut hypercore, peer_state).await? {
+                                channel.send(Message::Request(msg)).await?;
+                                Some(PeerEvent::PeerSyncStarted(
+                                    *hypercore.key_pair().public.as_bytes(),
+                                ))
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
                     }
+                } else {
+                    // TODO: For now, let's just ignore messages that don't broadcast
+                    // a contiguous length. When we add support for deleting entries
+                    // from the hypercore, this needs proper bitfield support.
+                    None
                 };
                 event
             };
@@ -382,4 +343,68 @@ where
         }
     };
     Ok(None)
+}
+
+/// Return the next request that should be sent based on peer state.
+async fn next_request<T>(
+    hypercore: &mut Hypercore<T>,
+    peer_state: &mut PeerState,
+) -> anyhow::Result<Option<Request>>
+where
+    T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send,
+{
+    let info = hypercore.info();
+
+    // Create an upgrade if needed
+    let upgrade: Option<RequestUpgrade> = if peer_state.remote_length
+        > peer_state.requested_upgrade_length
+        && peer_state.remote_length > info.length
+    {
+        let upgrade = Some(RequestUpgrade {
+            start: peer_state.requested_upgrade_length,
+            length: peer_state.remote_length - peer_state.requested_upgrade_length,
+        });
+        peer_state.requested_upgrade_length = peer_state.remote_length;
+        upgrade
+    } else {
+        None
+    };
+
+    // Add blocks to block index queue if there's a new length
+    if peer_state.remote_length > 0 && peer_state.remote_length > info.contiguous_length {
+        let new_block_start_index: u64 = if !peer_state.request_block_index_queue.is_empty() {
+            peer_state.request_block_index_queue[peer_state.request_block_index_queue.len() - 1] + 1
+        } else {
+            info.contiguous_length
+        };
+        for index in new_block_start_index..peer_state.remote_length {
+            peer_state.request_block_index_queue.push(index);
+        }
+    }
+
+    // As there can only be one block in the request, ask for the first one in the queue
+    let block: Option<RequestBlock> = if !peer_state.request_block_index_queue.is_empty() {
+        let request_index = peer_state.request_block_index_queue[0];
+        let nodes = hypercore.missing_nodes(request_index * 2).await?;
+        let block = Some(RequestBlock {
+            index: request_index,
+            nodes,
+        });
+        peer_state.request_block_index_queue.remove(0);
+        block
+    } else {
+        None
+    };
+    if block.is_some() || upgrade.is_some() {
+        Ok(Some(Request {
+            id: info.contiguous_length,
+            fork: info.fork,
+            hash: None,
+            block,
+            seek: None,
+            upgrade,
+        }))
+    } else {
+        Ok(None)
+    }
 }

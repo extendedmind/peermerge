@@ -7,12 +7,12 @@ use random_access_storage::RandomAccess;
 use std::{fmt::Debug, path::PathBuf};
 
 use crate::{
-    automerge::{init_doc_from_data, AutomergeDoc},
+    automerge::AutomergeDoc,
     common::state::{DocState, RepoState},
     hypercore::discovery_key_from_public_key,
 };
 
-use super::state::{DocContent, DocCursor, DocPeerState};
+use super::state::{DocContent, DocPeerState};
 
 #[derive(Debug)]
 pub(crate) struct RepoStateWrapper<T>

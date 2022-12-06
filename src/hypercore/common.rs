@@ -1,3 +1,5 @@
+use hypercore_protocol::schema::Request;
+
 /// A PeerState stores information about a connected peer.
 #[derive(Debug)]
 pub(super) struct PeerState {
@@ -10,8 +12,9 @@ pub(super) struct PeerState {
     pub(super) remote_can_upgrade: bool,
     pub(super) remote_uploading: bool,
     pub(super) remote_downloading: bool,
-    pub(super) remote_sync_received: bool,
     pub(super) length_acked: u64,
+    pub(super) requested_upgrade_length: u64,
+    pub(super) request_block_index_queue: Vec<u64>,
 }
 impl PeerState {
     pub fn new(public_key: Option<[u8; 32]>, peer_public_keys: Vec<[u8; 32]>) -> Self {
@@ -25,8 +28,9 @@ impl PeerState {
             remote_can_upgrade: false,
             remote_uploading: true,
             remote_downloading: true,
-            remote_sync_received: false,
             length_acked: 0,
+            requested_upgrade_length: 0,
+            request_block_index_queue: vec![],
         }
     }
 
