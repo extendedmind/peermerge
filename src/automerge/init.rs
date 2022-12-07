@@ -13,10 +13,9 @@ pub fn init_doc_with_root_scalars<P: Into<Prop>, V: Into<ScalarValue>>(
     discovery_key: &[u8; 32],
     root_props: Vec<(P, V)>,
 ) -> (AutomergeDoc, Vec<u8>) {
-    let mut actor_id: Vec<u8> = format!("{}__", peer_name).into_bytes();
+    let mut actor_id: Vec<u8> = peer_name.as_bytes().to_vec();
     actor_id.extend_from_slice(discovery_key);
-    let mut doc = Automerge::new();
-    doc.set_actor(ActorId::from(actor_id));
+    let mut doc = Automerge::new().with_actor(ActorId::from(actor_id));
     doc.transact_with::<_, _, AutomergeError, _>(
         |_| CommitOptions::default().with_message("init".to_owned()),
         |tx| {
@@ -52,10 +51,11 @@ pub(crate) fn init_doc_from_entries(
 }
 
 fn init_doc_from_data(peer_name: &str, discovery_key: &[u8; 32], data: &Vec<u8>) -> AutomergeDoc {
-    let mut actor_id: Vec<u8> = format!("{}__", peer_name).into_bytes();
+    let mut actor_id: Vec<u8> = peer_name.as_bytes().to_vec();
     actor_id.extend_from_slice(discovery_key);
     let doc = AutoCommit::load(data).unwrap();
-    let mut doc = doc.with_observer(VecOpObserver::default());
-    doc.set_actor(ActorId::from(actor_id));
+    let doc = doc
+        .with_actor(ActorId::from(actor_id))
+        .with_observer(VecOpObserver::default());
     doc
 }

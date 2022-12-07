@@ -23,8 +23,19 @@ use std::time::Duration;
 mod common;
 use common::*;
 
+#[derive(Clone, Debug, Default)]
+struct ProtocolThreeWritersResult {
+    joiner_merge: Option<String>,
+    creator_merge: Option<String>,
+}
+impl ProtocolThreeWritersResult {
+    pub fn merge_equals(&self) -> bool {
+        self.joiner_merge.as_ref().unwrap() == self.creator_merge.as_ref().unwrap()
+    }
+}
+
 #[async_std::test]
-async fn protocol_two_writers() -> anyhow::Result<()> {
+async fn protocol_three_writers() -> anyhow::Result<()> {
     let (proto_responder, proto_initiator) = create_pair_memory().await?;
 
     let (creator_state_event_sender, mut creator_state_event_receiver): (
@@ -79,9 +90,11 @@ async fn protocol_two_writers() -> anyhow::Result<()> {
 
     let cork_sync_creator = Arc::new((Mutex::new(false), Condvar::new()));
     let cork_sync_joiner = Arc::clone(&cork_sync_creator);
+    let mut merge_result_for_creator = Arc::new(Mutex::new(ProtocolThreeWritersResult::default()));
+    let mut merge_result_for_joiner = merge_result_for_creator.clone();
 
     // Simulate UI threads here
-    task::spawn(async move {
+    let handle = task::spawn(async move {
         let mut peers_synced = false;
         let mut texts_id: Option<ObjId> = None;
         let mut text_id: Option<ObjId> = None;
@@ -159,7 +172,15 @@ async fn protocol_two_writers() -> anyhow::Result<()> {
                         assert_eq!(patches.len(), 3); // One overlapping delete, and two Y
                         document_changes.push(patches);
                         let text_id = text_id.clone().unwrap();
-                        assert_text_equals(&hypermerge_joiner, &text_id, "HellXXYYworld!").await;
+                        merge_result_for_joiner.lock().await.joiner_merge = Some(
+                            assert_text_equals_either(
+                                &hypermerge_joiner,
+                                &text_id,
+                                "HellXXYYworld!",
+                                "HellYYXXworld!",
+                            )
+                            .await,
+                        );
                         // These are the changes sent by the peer, uncork to send the changes to the peer now
                         hypermerge_joiner.uncork().await.unwrap();
                     } else {
@@ -240,7 +261,17 @@ async fn protocol_two_writers() -> anyhow::Result<()> {
                 } else if document_changes.len() == 5 {
                     assert_eq!(patches.len(), 3); // One deletion that wasn't joined and two X chars
                     document_changes.push(patches);
-                    assert_text_equals(&hypermerge_creator, &text_id, "HellXXYYworld!").await;
+                    let mut merge_result = merge_result_for_creator.lock().await;
+                    merge_result.creator_merge = Some(
+                        assert_text_equals_either(
+                            &hypermerge_creator,
+                            &text_id,
+                            "HellXXYYworld!",
+                            "HellYYXXworld!",
+                        )
+                        .await,
+                    );
+                    assert!(merge_result.merge_equals());
                 } else if document_changes.len() == 6 {
                     panic!("Did not expect more creator document changes");
                 }
@@ -279,4 +310,20 @@ async fn assert_text_equals(
 ) {
     let result = hypermerge.realize_text(obj).await;
     assert_eq!(result.unwrap().unwrap(), expected);
+}
+
+async fn assert_text_equals_either(
+    hypermerge: &Hypermerge<RandomAccessMemory>,
+    obj: &ObjId,
+    expected_1: &str,
+    expected_2: &str,
+) -> String {
+    let result = hypermerge.realize_text(obj).await.unwrap().unwrap();
+    if result == expected_1 {
+        return expected_1.to_string();
+    } else if result == expected_2 {
+        return expected_1.to_string();
+    } else {
+        panic!("Text did not match either {} or {}", expected_1, expected_2);
+    }
 }
