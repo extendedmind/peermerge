@@ -1,4 +1,7 @@
-use hypercore_protocol::schema::Request;
+use hypercore_protocol::{
+    hypercore::{RequestBlock, RequestUpgrade},
+    schema::Request,
+};
 
 /// A PeerState stores information about a connected peer.
 #[derive(Debug)]
@@ -13,8 +16,7 @@ pub(super) struct PeerState {
     pub(super) remote_uploading: bool,
     pub(super) remote_downloading: bool,
     pub(super) length_acked: u64,
-    pub(super) requested_upgrade_length: u64,
-    pub(super) request_block_index_queue: Vec<u64>,
+    pub(super) inflight: InflightTracker,
 }
 impl PeerState {
     pub fn new(public_key: Option<[u8; 32]>, peer_public_keys: Vec<[u8; 32]>) -> Self {
@@ -29,8 +31,7 @@ impl PeerState {
             remote_uploading: true,
             remote_downloading: true,
             length_acked: 0,
-            requested_upgrade_length: 0,
-            request_block_index_queue: vec![],
+            inflight: InflightTracker::default(),
         }
     }
 
@@ -76,5 +77,63 @@ impl PeerState {
         }
         public_keys.sort();
         remote_public_keys == public_keys
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub(super) struct InflightTracker {
+    freed_ids: Vec<u64>,
+    requests: Vec<Option<Request>>,
+}
+
+impl InflightTracker {
+    pub fn add(&mut self, request: &mut Request) {
+        let id = self
+            .freed_ids
+            .pop()
+            .unwrap_or_else(|| self.requests.len() as u64 + 1);
+        request.id = id;
+        self.requests.push(Some(request.clone()));
+    }
+
+    pub fn get(&self, id: u64) -> Option<Request> {
+        if id as usize <= self.requests.len() {
+            self.requests[id as usize - 1].clone()
+        } else {
+            None
+        }
+    }
+
+    pub fn get_highest_upgrade(&self) -> Option<RequestUpgrade> {
+        self.requests
+            .iter()
+            .filter_map(|request| request.as_ref().and_then(|request| request.upgrade.clone()))
+            .reduce(|accum, upgrade| {
+                if upgrade.start + upgrade.length > accum.start + accum.length {
+                    upgrade
+                } else {
+                    accum
+                }
+            })
+    }
+
+    pub fn get_highest_block(&self) -> Option<RequestBlock> {
+        self.requests
+            .iter()
+            .filter_map(|request| request.as_ref().and_then(|request| request.block.clone()))
+            .reduce(|accum, block| {
+                if block.index > accum.index {
+                    block
+                } else {
+                    accum
+                }
+            })
+    }
+
+    pub fn remove(&mut self, id: u64) {
+        if id as usize <= self.requests.len() {
+            self.requests[id as usize - 1] = None;
+            self.freed_ids.push(id);
+        }
     }
 }

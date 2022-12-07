@@ -256,10 +256,12 @@ where
                     *state_event_sender = None;
                 } else {
                     let patches = doc.observer().take_patches();
-                    sender
-                        .send(StateEvent::DocumentChanged(patches))
-                        .await
-                        .unwrap();
+                    if patches.len() > 0 {
+                        sender
+                            .send(StateEvent::DocumentChanged(patches))
+                            .await
+                            .unwrap();
+                    }
                 }
             }
         }

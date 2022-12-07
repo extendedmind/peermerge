@@ -96,8 +96,8 @@ where
                 // they've acked our length. NB: We can't know if the peer actually has any
                 // blocks from this message: those are only possible to know from the Ranges they
                 // send. Hence no block.
-                let msg = Request {
-                    id: 1,
+                let mut request = Request {
+                    id: 0,
                     fork: info.fork,
                     hash: None,
                     block: None,
@@ -107,8 +107,8 @@ where
                         length: peer_state.remote_length - info.length,
                     }),
                 };
-                peer_state.requested_upgrade_length = peer_state.remote_length;
-                messages.push(Message::Request(msg));
+                peer_state.inflight.add(&mut request);
+                messages.push(Message::Request(request));
                 Some(PeerEvent::PeerSyncStarted(public_key))
             } else {
                 None
@@ -146,16 +146,13 @@ where
                 let proof = message.clone().into_proof();
                 let applied = hypercore.verify_and_apply_proof(&proof).await?;
                 let new_info = hypercore.info();
+                peer_state.inflight.remove(message.request);
                 let request = next_request(&mut hypercore, peer_state).await?;
                 let peer_synced: Option<PeerEvent> =
                     if new_info.contiguous_length == new_info.length {
                         let public_key: [u8; 32] = *hypercore.key_pair().public.as_bytes();
                         Some(PeerEvent::PeerSynced(public_key))
                     } else {
-                        println!(
-                            "NOT SENDING PEER SYNCED, {} vs {}",
-                            new_info.contiguous_length, new_info.length
-                        );
                         None
                     };
                 (old_info, applied, new_info, request, peer_synced)
@@ -223,8 +220,8 @@ where
                         if info.length < message.length && peer_state.remote_length < message.length
                         {
                             peer_state.remote_length = message.length;
-                            if let Some(msg) = next_request(&mut hypercore, peer_state).await? {
-                                channel.send(Message::Request(msg)).await?;
+                            if let Some(request) = next_request(&mut hypercore, peer_state).await? {
+                                channel.send(Message::Request(request)).await?;
                                 Some(PeerEvent::PeerSyncStarted(
                                     *hypercore.key_pair().public.as_bytes(),
                                 ))
@@ -356,54 +353,59 @@ where
     let info = hypercore.info();
 
     // Create an upgrade if needed
-    let upgrade: Option<RequestUpgrade> = if peer_state.remote_length
-        > peer_state.requested_upgrade_length
-        && peer_state.remote_length > info.length
-    {
-        let upgrade = Some(RequestUpgrade {
-            start: peer_state.requested_upgrade_length,
-            length: peer_state.remote_length - peer_state.requested_upgrade_length,
-        });
-        peer_state.requested_upgrade_length = peer_state.remote_length;
-        upgrade
+    let upgrade: Option<RequestUpgrade> = if peer_state.remote_length > info.length {
+        // Check if there's already an inflight upgrade
+        if let Some(upgrade) = peer_state.inflight.get_highest_upgrade() {
+            if peer_state.remote_length > upgrade.start + upgrade.length {
+                Some(RequestUpgrade {
+                    start: upgrade.start,
+                    length: peer_state.remote_length - upgrade.start,
+                })
+            } else {
+                None
+            }
+        } else {
+            Some(RequestUpgrade {
+                start: info.length,
+                length: peer_state.remote_length - info.length,
+            })
+        }
     } else {
         None
     };
 
     // Add blocks to block index queue if there's a new length
-    if peer_state.remote_length > 0 && peer_state.remote_length > info.contiguous_length {
-        let new_block_start_index: u64 = if !peer_state.request_block_index_queue.is_empty() {
-            peer_state.request_block_index_queue[peer_state.request_block_index_queue.len() - 1] + 1
+    let block: Option<RequestBlock> = if peer_state.remote_length > info.contiguous_length {
+        // Check if there's already an inflight block request
+        let request_index: u64 = if let Some(block) = peer_state.inflight.get_highest_block() {
+            block.index + 1
         } else {
             info.contiguous_length
         };
-        for index in new_block_start_index..peer_state.remote_length {
-            peer_state.request_block_index_queue.push(index);
+        if peer_state.remote_length > request_index {
+            let nodes = hypercore.missing_nodes(request_index * 2).await?;
+            Some(RequestBlock {
+                index: request_index,
+                nodes,
+            })
+        } else {
+            None
         }
-    }
-
-    // As there can only be one block in the request, ask for the first one in the queue
-    let block: Option<RequestBlock> = if !peer_state.request_block_index_queue.is_empty() {
-        let request_index = peer_state.request_block_index_queue[0];
-        let nodes = hypercore.missing_nodes(request_index * 2).await?;
-        let block = Some(RequestBlock {
-            index: request_index,
-            nodes,
-        });
-        peer_state.request_block_index_queue.remove(0);
-        block
     } else {
         None
     };
+
     if block.is_some() || upgrade.is_some() {
-        Ok(Some(Request {
-            id: info.contiguous_length,
+        let mut request = Request {
+            id: 0, // This changes in the next step
             fork: info.fork,
             hash: None,
             block,
             seek: None,
             upgrade,
-        }))
+        };
+        peer_state.inflight.add(&mut request);
+        Ok(Some(request))
     } else {
         Ok(None)
     }
