@@ -6,6 +6,7 @@ pub(crate) use crate::common::entry::Entry;
 pub(crate) use crate::common::message::BroadcastMessage;
 pub(crate) use crate::common::state::{DocState, RepoState};
 
+use super::message::CloseMessage;
 use super::state::{DocContent, DocCursor, DocPeerState};
 
 impl CompactEncoding<RepoState> for State {
@@ -229,6 +230,23 @@ impl CompactEncoding<BroadcastMessage> for State {
         BroadcastMessage {
             public_key,
             peer_public_keys,
+        }
+    }
+}
+
+impl CompactEncoding<CloseMessage> for State {
+    fn preencode(&mut self, value: &CloseMessage) {
+        preencode_fixed_32_byte_vec(self, &value.new_peer_public_keys);
+    }
+
+    fn encode(&mut self, value: &CloseMessage, buffer: &mut [u8]) {
+        encode_fixed_32_byte_vec(self, &value.new_peer_public_keys, buffer);
+    }
+
+    fn decode(&mut self, buffer: &[u8]) -> CloseMessage {
+        let new_peer_public_keys: Vec<[u8; 32]> = decode_fixed_32_byte_vec(self, buffer);
+        CloseMessage {
+            new_peer_public_keys,
         }
     }
 }

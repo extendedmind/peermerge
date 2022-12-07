@@ -472,7 +472,6 @@ async fn on_peer_event_memory(
                         if let Some(peers_synced) = peers_synced {
                             // All peers are synced, so it should be possible to create a coherent
                             // document now.
-                            // Process all new events and take patches
                             let mut patches = if let Some(content) = doc_state.content_mut() {
                                 let patches =
                                     update_content(content, hypercores.clone()).await.unwrap();

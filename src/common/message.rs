@@ -12,3 +12,16 @@ impl BroadcastMessage {
         }
     }
 }
+
+/// An CloseMessage transmits locally data about new discovered peers
+#[derive(Debug)]
+pub(crate) struct CloseMessage {
+    pub(crate) new_peer_public_keys: Vec<[u8; 32]>,
+}
+impl CloseMessage {
+    pub fn new(new_peer_public_keys: Vec<[u8; 32]>) -> Self {
+        Self {
+            new_peer_public_keys,
+        }
+    }
+}

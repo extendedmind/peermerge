@@ -2,12 +2,18 @@ use anyhow::Result;
 use async_channel::{Receiver, Sender};
 use async_std::sync::{Arc, Mutex};
 use futures_lite::stream::StreamExt;
-use hypercore_protocol::{hypercore::Hypercore, Channel, Message};
+use hypercore_protocol::{
+    hypercore::{
+        compact_encoding::{CompactEncoding, State},
+        Hypercore,
+    },
+    Channel, Message,
+};
 use random_access_storage::RandomAccess;
 use std::fmt::Debug;
 
 use super::{messaging::create_broadcast_message, on_message, PeerState};
-use crate::common::PeerEvent;
+use crate::common::{message::CloseMessage, PeerEvent};
 
 pub(super) async fn on_peer<T>(
     mut hypercore: Arc<Mutex<Hypercore<T>>>,
@@ -40,11 +46,17 @@ where
         .await?;
         if let Some(event) = event {
             peer_event_sender.send(event.clone()).await?;
-            if let PeerEvent::NewPeersAdvertised(_) = event {
-                // When there are new peers advertised, let's just close the channel, write
-                // the new peers to state and reopen.
+            if let PeerEvent::NewPeersAdvertised(ref new_peer_public_keys) = event {
+                // When there are new peers advertised, let's tell about them via the close
+                // message to be able to wait for the right number of hypercores to end up
+                // in the store.
                 println!("on_peer({}): closing id={}", is_initiator, channel.id());
-                channel.close().await?;
+                let close_message = CloseMessage::new(new_peer_public_keys.clone());
+                let mut enc_state = State::new();
+                enc_state.preencode(&close_message);
+                let mut buffer = enc_state.create_buffer();
+                enc_state.encode(&close_message, &mut buffer);
+                channel.close_with_data(buffer.to_vec()).await?;
                 println!(
                     "on_peer({}): close success id={}",
                     is_initiator,
