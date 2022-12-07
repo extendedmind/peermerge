@@ -90,13 +90,12 @@ async fn protocol_three_writers() -> anyhow::Result<()> {
 
     let cork_sync_creator = Arc::new((Mutex::new(false), Condvar::new()));
     let cork_sync_joiner = Arc::clone(&cork_sync_creator);
-    let mut merge_result_for_creator = Arc::new(Mutex::new(ProtocolThreeWritersResult::default()));
-    let mut merge_result_for_joiner = merge_result_for_creator.clone();
+    let merge_result_for_creator = Arc::new(Mutex::new(ProtocolThreeWritersResult::default()));
+    let merge_result_for_joiner = merge_result_for_creator.clone();
 
     // Simulate UI threads here
-    let handle = task::spawn(async move {
+    task::spawn(async move {
         let mut peers_synced = false;
-        let mut texts_id: Option<ObjId> = None;
         let mut text_id: Option<ObjId> = None;
         let mut document_changes: Vec<Vec<Patch>> = vec![];
         while let Some(event) = joiner_state_event_receiver.next().await {
@@ -107,16 +106,15 @@ async fn protocol_three_writers() -> anyhow::Result<()> {
                     if !peers_synced {
                         let (_value, local_texts_id) =
                             hypermerge_joiner.get(ROOT, "texts").await.unwrap().unwrap();
-                        texts_id = Some(local_texts_id.clone());
                         let (_value, local_text_id) = hypermerge_joiner
-                            .get(local_texts_id, "text")
+                            .get(&local_texts_id, "text")
                             .await
                             .unwrap()
                             .unwrap();
                         assert_text_equals(&hypermerge_joiner, &local_text_id, "").await;
                         text_id = Some(local_text_id.clone());
                         hypermerge_joiner
-                            .watch(vec![texts_id.clone().unwrap(), text_id.clone().unwrap()])
+                            .watch(vec![local_texts_id, text_id.clone().unwrap()])
                             .await;
                     }
                     peers_synced = true;
@@ -192,7 +190,6 @@ async fn protocol_three_writers() -> anyhow::Result<()> {
     });
 
     let mut document_changes: Vec<Vec<Patch>> = vec![];
-    let mut peers_synced = false;
     let mut remote_peer_synced = false;
     while let Some(event) = creator_state_event_receiver.next().await {
         println!("TEST: CREATOR got event {:?}", event);
@@ -200,7 +197,6 @@ async fn protocol_three_writers() -> anyhow::Result<()> {
         match event {
             StateEvent::PeersSynced(len) => {
                 assert_eq!(len, 1);
-                peers_synced = true;
             }
             StateEvent::RemotePeerSynced() => {
                 if !remote_peer_synced {
@@ -322,7 +318,7 @@ async fn assert_text_equals_either(
     if result == expected_1 {
         return expected_1.to_string();
     } else if result == expected_2 {
-        return expected_1.to_string();
+        return expected_2.to_string();
     } else {
         panic!("Text did not match either {} or {}", expected_1, expected_2);
     }
