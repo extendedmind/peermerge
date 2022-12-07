@@ -75,7 +75,7 @@ async fn protocol_three_writers() -> anyhow::Result<()> {
         .unwrap();
     });
 
-    let mut hypermerge_joiner =
+    let hypermerge_joiner =
         Hypermerge::register_doc_memory("joiner", &hypermerge_creator.doc_url()).await;
     let hypermerge_joiner_for_task = hypermerge_joiner.clone();
     task::spawn(async move {
@@ -93,102 +93,124 @@ async fn protocol_three_writers() -> anyhow::Result<()> {
     let merge_result_for_creator = Arc::new(Mutex::new(ProtocolThreeWritersResult::default()));
     let merge_result_for_joiner = merge_result_for_creator.clone();
 
-    // Simulate UI threads here
     task::spawn(async move {
-        let mut peers_synced = false;
-        let mut text_id: Option<ObjId> = None;
-        let mut document_changes: Vec<Vec<Patch>> = vec![];
-        while let Some(event) = joiner_state_event_receiver.next().await {
-            println!("TEST: JOINER got event {:?}", event);
-            match event {
-                StateEvent::PeersSynced(len) => {
-                    assert_eq!(len, 1);
-                    if !peers_synced {
-                        let (_value, local_texts_id) =
-                            hypermerge_joiner.get(ROOT, "texts").await.unwrap().unwrap();
-                        let (_value, local_text_id) = hypermerge_joiner
-                            .get(&local_texts_id, "text")
-                            .await
-                            .unwrap()
-                            .unwrap();
-                        assert_text_equals(&hypermerge_joiner, &local_text_id, "").await;
-                        text_id = Some(local_text_id.clone());
-                        hypermerge_joiner
-                            .watch(vec![local_texts_id, text_id.clone().unwrap()])
-                            .await;
-                    }
-                    peers_synced = true;
+        process_joiner_state_event(
+            hypermerge_joiner,
+            joiner_state_event_receiver,
+            cork_sync_joiner,
+            merge_result_for_joiner,
+        )
+        .await
+        .unwrap();
+    });
+
+    process_creator_state_events(
+        hypermerge_creator,
+        creator_state_event_receiver,
+        text_id,
+        cork_sync_creator,
+        merge_result_for_creator,
+    )
+    .await?;
+
+    Ok(())
+}
+
+async fn process_joiner_state_event(
+    mut hypermerge: Hypermerge<RandomAccessMemory>,
+    mut joiner_state_event_receiver: Receiver<StateEvent>,
+    cork_sync: Arc<(Mutex<bool>, Condvar)>,
+    merge_result: Arc<Mutex<ProtocolThreeWritersResult>>,
+) -> anyhow::Result<()> {
+    let mut peers_synced = false;
+    let mut text_id: Option<ObjId> = None;
+    let mut document_changes: Vec<Vec<Patch>> = vec![];
+    while let Some(event) = joiner_state_event_receiver.next().await {
+        println!("TEST: JOINER got event {:?}", event);
+        match event {
+            StateEvent::PeersSynced(len) => {
+                assert_eq!(len, 1);
+                if !peers_synced {
+                    let (_value, local_texts_id) = hypermerge.get(ROOT, "texts").await?.unwrap();
+                    let (_value, local_text_id) =
+                        hypermerge.get(&local_texts_id, "text").await?.unwrap();
+                    assert_text_equals(&hypermerge, &local_text_id, "").await;
+                    text_id = Some(local_text_id.clone());
+                    hypermerge
+                        .watch(vec![local_texts_id, text_id.clone().unwrap()])
+                        .await;
                 }
-                StateEvent::RemotePeerSynced() => {}
-                StateEvent::DocumentChanged(patches) => {
-                    println!(
-                        "TEST: JOINER document_changes LEN {}",
-                        document_changes.len()
-                    );
-                    if document_changes.len() == 0 {
-                        assert_eq!(patches.len(), 5); // "Hello" has 5 chars
-                        document_changes.push(patches);
-                        let text_id = text_id.clone().unwrap();
-                        assert_text_equals(&hypermerge_joiner, &text_id, "Hello").await;
-                        hypermerge_joiner
-                            .splice_text(&text_id, 5, 0, ", world!")
-                            .await
-                            .unwrap();
-                    } else if document_changes.len() == 1 {
-                        assert_eq!(patches.len(), 8); // ", world!" has 8 chars
-                        document_changes.push(patches);
-                        let text_id = text_id.clone().unwrap();
-                        assert_text_equals(&hypermerge_joiner, &text_id, "Hello, world!").await;
+                peers_synced = true;
+            }
+            StateEvent::RemotePeerSynced() => {}
+            StateEvent::DocumentChanged(patches) => {
+                println!(
+                    "TEST: JOINER document_changes LEN {}",
+                    document_changes.len()
+                );
+                if document_changes.len() == 0 {
+                    assert_eq!(patches.len(), 5); // "Hello" has 5 chars
+                    document_changes.push(patches);
+                    let text_id = text_id.clone().unwrap();
+                    assert_text_equals(&hypermerge, &text_id, "Hello").await;
+                    hypermerge.splice_text(&text_id, 5, 0, ", world!").await?;
+                } else if document_changes.len() == 1 {
+                    assert_eq!(patches.len(), 8); // ", world!" has 8 chars
+                    document_changes.push(patches);
+                    let text_id = text_id.clone().unwrap();
+                    assert_text_equals(&hypermerge, &text_id, "Hello, world!").await;
 
-                        // Let's make sure via variable that the other end is also ready to cork
-                        let (lock, cvar) = &*cork_sync_joiner;
-                        let mut started = lock.lock().await;
-                        while !*started {
-                            started = cvar.wait(started).await;
-                        }
-
-                        // Ok, ready to cork in unison
-                        hypermerge_joiner.cork().await;
-                        hypermerge_joiner
-                            .splice_text(&text_id, 5, 2, "")
-                            .await
-                            .unwrap();
-                        hypermerge_joiner
-                            .splice_text(&text_id, 4, 0, "XX")
-                            .await
-                            .unwrap();
-                        assert_text_equals(&hypermerge_joiner, &text_id, "HellXXoworld!").await;
-                    } else if document_changes.len() == 2 {
-                        // This is the two local deletions
-                        assert_eq!(patches.len(), 2);
-                        document_changes.push(patches);
-                    } else if document_changes.len() == 3 {
-                        // This is the two local additions
-                        assert_eq!(patches.len(), 2);
-                        document_changes.push(patches);
-                    } else if document_changes.len() == 4 {
-                        assert_eq!(patches.len(), 3); // One overlapping delete, and two Y
-                        document_changes.push(patches);
-                        let text_id = text_id.clone().unwrap();
-                        merge_result_for_joiner.lock().await.joiner_merge = Some(
-                            assert_text_equals_either(
-                                &hypermerge_joiner,
-                                &text_id,
-                                "HellXXYYworld!",
-                                "HellYYXXworld!",
-                            )
-                            .await,
-                        );
-                        // These are the changes sent by the peer, uncork to send the changes to the peer now
-                        hypermerge_joiner.uncork().await.unwrap();
-                    } else {
-                        panic!("Did not expect more joiner document changes");
+                    // Let's make sure via variable that the other end is also ready to cork
+                    let (lock, cvar) = &*cork_sync;
+                    let mut started = lock.lock().await;
+                    while !*started {
+                        started = cvar.wait(started).await;
                     }
+
+                    // Ok, ready to cork in unison
+                    hypermerge.cork().await;
+                    hypermerge.splice_text(&text_id, 5, 2, "").await?;
+                    hypermerge.splice_text(&text_id, 4, 0, "XX").await?;
+                    assert_text_equals(&hypermerge, &text_id, "HellXXoworld!").await;
+                } else if document_changes.len() == 2 {
+                    // This is the two local deletions
+                    assert_eq!(patches.len(), 2);
+                    document_changes.push(patches);
+                } else if document_changes.len() == 3 {
+                    // This is the two local additions
+                    assert_eq!(patches.len(), 2);
+                    document_changes.push(patches);
+                } else if document_changes.len() == 4 {
+                    assert_eq!(patches.len(), 3); // One overlapping delete, and two Y
+                    document_changes.push(patches);
+                    let text_id = text_id.clone().unwrap();
+                    merge_result.lock().await.joiner_merge = Some(
+                        assert_text_equals_either(
+                            &hypermerge,
+                            &text_id,
+                            "HellXXYYworld!",
+                            "HellYYXXworld!",
+                        )
+                        .await,
+                    );
+                    // These are the changes sent by the peer, uncork to send the changes to the peer now
+                    hypermerge.uncork().await.unwrap();
+                } else {
+                    panic!("Did not expect more joiner document changes");
                 }
             }
         }
-    });
+    }
+    Ok(())
+}
 
+async fn process_creator_state_events(
+    mut hypermerge: Hypermerge<RandomAccessMemory>,
+    mut creator_state_event_receiver: Receiver<StateEvent>,
+    text_id: ObjId,
+    cork_sync: Arc<(Mutex<bool>, Condvar)>,
+    merge_result: Arc<Mutex<ProtocolThreeWritersResult>>,
+) -> anyhow::Result<()> {
     let mut document_changes: Vec<Vec<Patch>> = vec![];
     let mut remote_peer_synced = false;
     while let Some(event) = creator_state_event_receiver.next().await {
@@ -200,11 +222,11 @@ async fn protocol_three_writers() -> anyhow::Result<()> {
             }
             StateEvent::RemotePeerSynced() => {
                 if !remote_peer_synced {
-                    hypermerge_creator
+                    hypermerge
                         .splice_text(&text_id, 0, 0, "Hello")
                         .await
                         .unwrap();
-                    assert_text_equals(&hypermerge_creator, &text_id, "Hello").await;
+                    assert_text_equals(&hypermerge, &text_id, "Hello").await;
                     remote_peer_synced = true;
                 }
             }
@@ -222,28 +244,22 @@ async fn protocol_three_writers() -> anyhow::Result<()> {
                 } else if document_changes.len() == 2 {
                     assert_eq!(patches.len(), 8); // ", world!" has 8 chars
                     document_changes.push(patches);
-                    assert_text_equals(&hypermerge_creator, &text_id, "Hello, world!").await;
+                    assert_text_equals(&hypermerge, &text_id, "Hello, world!").await;
 
                     // Ready to notify about cork
-                    let (lock, cvar) = &*cork_sync_creator;
+                    let (lock, cvar) = &*cork_sync;
                     let mut started = lock.lock().await;
                     *started = true;
                     cvar.notify_one();
 
                     // Ok, ready to cork
-                    hypermerge_creator.cork().await;
+                    hypermerge.cork().await;
 
                     // Let's create a conflict here, cork to prevent sending these changes to the
                     // peer
-                    hypermerge_creator
-                        .splice_text(&text_id, 4, 2, "")
-                        .await
-                        .unwrap();
-                    hypermerge_creator
-                        .splice_text(&text_id, 4, 0, "YY")
-                        .await
-                        .unwrap();
-                    assert_text_equals(&hypermerge_creator, &text_id, "HellYY world!").await;
+                    hypermerge.splice_text(&text_id, 4, 2, "").await.unwrap();
+                    hypermerge.splice_text(&text_id, 4, 0, "YY").await.unwrap();
+                    assert_text_equals(&hypermerge, &text_id, "HellYY world!").await;
                 } else if document_changes.len() == 3 {
                     // This is the two local deletions
                     assert_eq!(patches.len(), 2);
@@ -253,14 +269,14 @@ async fn protocol_three_writers() -> anyhow::Result<()> {
                     assert_eq!(patches.len(), 2);
                     document_changes.push(patches);
                     // Uncork to send the changes to the peer now
-                    hypermerge_creator.uncork().await?;
+                    hypermerge.uncork().await?;
                 } else if document_changes.len() == 5 {
                     assert_eq!(patches.len(), 3); // One deletion that wasn't joined and two X chars
                     document_changes.push(patches);
-                    let mut merge_result = merge_result_for_creator.lock().await;
+                    let mut merge_result = merge_result.lock().await;
                     merge_result.creator_merge = Some(
                         assert_text_equals_either(
-                            &hypermerge_creator,
+                            &hypermerge,
                             &text_id,
                             "HellXXYYworld!",
                             "HellYYXXworld!",
@@ -294,7 +310,7 @@ async fn connect(
             .expect("Connect should not thorw error");
     });
     hypermerge
-        .connect_protocol(&mut protocol, &mut sync_event_sender)
+        .connect_protocol_memory(&mut protocol, &mut sync_event_sender)
         .await?;
     Ok(())
 }
@@ -318,7 +334,7 @@ async fn assert_text_equals_either(
     if result == expected_1 {
         return expected_1.to_string();
     } else if result == expected_2 {
-        return expected_2.to_string();
+        return expected_1.to_string();
     } else {
         panic!("Text did not match either {} or {}", expected_1, expected_2);
     }

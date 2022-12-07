@@ -327,7 +327,7 @@ impl Hypermerge<RandomAccessMemory> {
         .await
     }
 
-    pub async fn connect_protocol<IO>(
+    pub async fn connect_protocol_memory<IO>(
         &mut self,
         protocol: &mut Protocol<IO>,
         sync_event_sender: &mut Sender<SynchronizeEvent>,
