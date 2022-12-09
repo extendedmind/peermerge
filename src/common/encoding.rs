@@ -33,6 +33,7 @@ impl CompactEncoding<RepoState> for State {
 impl CompactEncoding<DocState> for State {
     fn preencode(&mut self, value: &DocState) {
         self.preencode(&value.version);
+        self.end += 32; // public key
         self.end += 1; // flags
         let len = value.peers.len();
         if len > 0 {
@@ -41,7 +42,7 @@ impl CompactEncoding<DocState> for State {
                 self.preencode(peer);
             }
         }
-        if value.public_key.is_some() {
+        if value.write_public_key.is_some() {
             self.end += 32;
         }
         if let Some(content) = &value.content {
@@ -51,6 +52,7 @@ impl CompactEncoding<DocState> for State {
 
     fn encode(&mut self, value: &DocState, buffer: &mut [u8]) {
         self.encode(&value.version, buffer);
+        self.encode_fixed_32(&value.doc_public_key, buffer);
         let flags_index = self.start;
         let mut flags: u8 = 0;
         self.start += 1;
@@ -62,9 +64,9 @@ impl CompactEncoding<DocState> for State {
                 self.encode(peer, buffer);
             }
         }
-        if let Some(public_key) = &value.public_key {
+        if let Some(write_public_key) = &value.write_public_key {
             flags = flags | 2;
-            self.encode_fixed_32(public_key, buffer);
+            self.encode_fixed_32(write_public_key, buffer);
         }
         if let Some(content) = &value.content {
             flags = flags | 4;
@@ -76,6 +78,7 @@ impl CompactEncoding<DocState> for State {
 
     fn decode(&mut self, buffer: &[u8]) -> DocState {
         let version: u8 = self.decode(buffer);
+        let doc_public_key: [u8; 32] = self.decode_fixed_32(buffer).to_vec().try_into().unwrap();
         let flags: u8 = self.decode(buffer);
         let peers: Vec<DocPeerState> = if flags & 1 != 0 {
             let len: usize = self.decode(buffer);
@@ -89,7 +92,7 @@ impl CompactEncoding<DocState> for State {
             vec![]
         };
 
-        let public_key: Option<[u8; 32]> = if flags & 2 != 0 {
+        let write_public_key: Option<[u8; 32]> = if flags & 2 != 0 {
             Some(self.decode_fixed_32(buffer).to_vec().try_into().unwrap())
         } else {
             None
@@ -100,13 +103,7 @@ impl CompactEncoding<DocState> for State {
         } else {
             None
         };
-        DocState {
-            version,
-            peers,
-            public_key,
-            content,
-            watched_ids: vec![],
-        }
+        DocState::new_with_version(version, doc_public_key, peers, write_public_key, content)
     }
 }
 

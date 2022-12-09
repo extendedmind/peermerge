@@ -137,5 +137,5 @@ where
         .iter()
         .map(|peer| peer.public_key.clone())
         .collect();
-    (state.public_key, peer_public_keys)
+    (state.write_public_key, peer_public_keys)
 }

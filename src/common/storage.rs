@@ -130,7 +130,12 @@ where
     }
 
     pub fn write_discovery_key(&self) -> [u8; 32] {
-        discovery_key_from_public_key(&self.state.public_key.expect("TODO: read-only hypercore"))
+        discovery_key_from_public_key(
+            &self
+                .state
+                .write_public_key
+                .expect("TODO: read-only hypercore"),
+        )
     }
 
     pub fn state(&self) -> &DocState {
@@ -158,7 +163,8 @@ where
 
 impl DocStateWrapper<RandomAccessMemory> {
     pub async fn new_memory(
-        public_key: [u8; 32],
+        doc_public_key: [u8; 32],
+        write_public_key: Option<[u8; 32]>,
         peer_public_keys: Vec<[u8; 32]>,
         content: Option<DocContent>,
     ) -> Self {
@@ -166,7 +172,7 @@ impl DocStateWrapper<RandomAccessMemory> {
             .iter()
             .map(|public_key| DocPeerState::new(public_key.clone(), false))
             .collect();
-        let state = DocState::new(peers, Some(public_key), content);
+        let state = DocState::new(doc_public_key, peers, write_public_key, content);
         let mut storage = RandomAccessMemory::default();
         write_doc_state(&state, &mut storage).await;
         Self { state, storage }
@@ -175,7 +181,8 @@ impl DocStateWrapper<RandomAccessMemory> {
 
 impl DocStateWrapper<RandomAccessDisk> {
     pub async fn new_disk(
-        public_key: [u8; 32],
+        doc_public_key: [u8; 32],
+        write_public_key: Option<[u8; 32]>,
         peer_public_keys: Vec<[u8; 32]>,
         content: Option<DocContent>,
         data_root_dir: &PathBuf,
@@ -184,7 +191,7 @@ impl DocStateWrapper<RandomAccessDisk> {
             .iter()
             .map(|public_key| DocPeerState::new(public_key.clone(), false))
             .collect();
-        let state = DocState::new(peers, Some(public_key), content);
+        let state = DocState::new(doc_public_key, peers, write_public_key, content);
         let state_path = data_root_dir.join(PathBuf::from("hypermerge_state.bin"));
         let mut storage = RandomAccessDisk::builder(state_path).build().await.unwrap();
         write_doc_state(&state, &mut storage).await;

@@ -274,9 +274,9 @@ impl Hypermerge<RandomAccessMemory> {
         root_scalars: Vec<(P, V)>,
     ) -> Self {
         // Generate a key pair, its discovery key and the public key string
-        let (key_pair, encoded_public_key, discovery_key) = generate_keys();
+        let (key_pair, encoded_doc_public_key, discovery_key) = generate_keys();
         let (doc, data) = init_doc_with_root_scalars(peer_name, &discovery_key, root_scalars);
-        let public_key = *key_pair.public.as_bytes();
+        let doc_public_key = *key_pair.public.as_bytes();
 
         // Create the memory hypercore
         let (length, hypercore) = create_new_write_memory_hypercore(
@@ -289,14 +289,16 @@ impl Hypermerge<RandomAccessMemory> {
             vec![DocCursor::new(discovery_key.clone(), length)],
             doc,
         );
+        let doc_url = to_doc_url(&encoded_doc_public_key);
 
         Self::new_memory(
-            (public_key, discovery_key.clone(), hypercore),
+            (doc_public_key.clone(), discovery_key.clone(), hypercore),
             vec![],
             Some(content),
             discovery_key,
             peer_name,
-            &to_doc_url(&encoded_public_key),
+            doc_public_key,
+            &doc_url,
         )
         .await
     }
@@ -320,10 +322,15 @@ impl Hypermerge<RandomAccessMemory> {
 
         Self::new_memory(
             (write_public_key, write_discovery_key, write_hypercore),
-            vec![(doc_public_key, doc_discovery_key.clone(), doc_hypercore)],
+            vec![(
+                doc_public_key.clone(),
+                doc_discovery_key.clone(),
+                doc_hypercore,
+            )],
             None,
             doc_discovery_key,
             peer_name,
+            doc_public_key,
             doc_url,
         )
         .await
@@ -391,6 +398,7 @@ impl Hypermerge<RandomAccessMemory> {
         content: Option<DocContent>,
         discovery_key: [u8; 32],
         peer_name: &str,
+        doc_public_key: [u8; 32],
         doc_url: &str,
     ) -> Self {
         let hypercores: DashMap<[u8; 32], Arc<Mutex<HypercoreWrapper<RandomAccessMemory>>>> =
@@ -402,8 +410,13 @@ impl Hypermerge<RandomAccessMemory> {
             peer_public_keys.push(peer_public_key);
             hypercores.insert(peer_discovery_key, Arc::new(Mutex::new(peer_hypercore)));
         }
-        let doc_state =
-            DocStateWrapper::new_memory(write_public_key, peer_public_keys, content).await;
+        let doc_state = DocStateWrapper::new_memory(
+            doc_public_key,
+            Some(write_public_key),
+            peer_public_keys,
+            content,
+        )
+        .await;
         Self {
             hypercores: Arc::new(hypercores),
             doc_state: Arc::new(Mutex::new(doc_state)),

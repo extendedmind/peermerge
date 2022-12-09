@@ -1,7 +1,7 @@
 use automerge::ObjId;
 use std::fmt::Debug;
 
-use crate::automerge::AutomergeDoc;
+use crate::{automerge::AutomergeDoc, hypercore::discovery_key_from_public_key};
 
 /// A RepoState stores serialized information about the Repo.
 #[derive(Debug)]
@@ -22,10 +22,12 @@ impl Default for RepoState {
 #[derive(Debug)]
 pub(crate) struct DocState {
     pub(crate) version: u8,
+    pub(crate) doc_public_key: [u8; 32],
+    pub(crate) doc_discovery_key: [u8; 32],
     pub(crate) peers: Vec<DocPeerState>,
     /// Public key of personal writeable hypercore. None means the
     /// document is read-only.
-    pub(crate) public_key: Option<[u8; 32]>,
+    pub(crate) write_public_key: Option<[u8; 32]>,
     /// Content of the document. None means content hasn't been synced yet.
     pub(crate) content: Option<DocContent>,
     /// Transient watch variable
@@ -33,14 +35,27 @@ pub(crate) struct DocState {
 }
 impl DocState {
     pub fn new(
+        doc_public_key: [u8; 32],
         peers: Vec<DocPeerState>,
-        public_key: Option<[u8; 32]>,
+        write_public_key: Option<[u8; 32]>,
+        content: Option<DocContent>,
+    ) -> Self {
+        Self::new_with_version(1, doc_public_key, peers, write_public_key, content)
+    }
+
+    pub fn new_with_version(
+        version: u8,
+        doc_public_key: [u8; 32],
+        peers: Vec<DocPeerState>,
+        write_public_key: Option<[u8; 32]>,
         content: Option<DocContent>,
     ) -> Self {
         Self {
-            version: 1,
+            version,
+            doc_public_key,
+            doc_discovery_key: discovery_key_from_public_key(&doc_public_key),
             peers,
-            public_key,
+            write_public_key,
             content,
             watched_ids: vec![],
         }
