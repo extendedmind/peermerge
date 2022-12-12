@@ -129,6 +129,7 @@ where
         public_key: Option<[u8; 32]>,
         peer_public_keys: Vec<[u8; 32]>,
         peer_event_sender: &mut Sender<PeerEvent>,
+        doc_message_receiver: Option<Receiver<Message>>,
         is_initiator: bool,
     ) {
         println!("on_channel({}): id={}", is_initiator, channel.id(),);
@@ -143,6 +144,7 @@ where
                 peer_state,
                 channel,
                 internal_message_receiver,
+                doc_message_receiver,
                 &mut peer_event_sender_for_task,
                 is_initiator,
             )
@@ -157,6 +159,7 @@ where
                 channel,
                 internal_message_receiver,
                 &mut peer_event_sender_for_task,
+                doc_message_receiver,
                 is_initiator,
             )
             .await

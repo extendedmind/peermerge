@@ -73,7 +73,19 @@ where
                             is_initiator,
                             channel.id()
                         );
-                        if let Some(hypercore) = hypercores.get(channel.discovery_key()) {
+                        let discovery_key = channel.discovery_key();
+                        let doc_message_receiver = if &doc_discovery_key != discovery_key {
+                            let receiver = {
+                                let doc_hypercore = hypercores.get(&doc_discovery_key).unwrap();
+                                let mut doc_hypercore = doc_hypercore.lock().await;
+                                doc_hypercore.listen()
+                            };
+                            Some(receiver)
+                        } else {
+                            None
+                        };
+
+                        if let Some(hypercore) = hypercores.get(discovery_key) {
                             let mut hypercore = hypercore.lock().await;
                             let (public_key, peer_public_keys) =
                                 public_keys(doc_state.clone()).await;
@@ -83,12 +95,19 @@ where
                                 public_key.map(|_| 1).unwrap_or(0),
                                 peer_public_keys.len()
                             );
+
                             hypercore.on_channel(
                                 channel,
                                 public_key,
                                 peer_public_keys,
                                 peer_event_sender,
+                                doc_message_receiver,
                                 is_initiator,
+                            );
+                        } else {
+                            panic!(
+                                "Could not find hypercore with discovery key {:02X?}",
+                                discovery_key
                             );
                         }
                     }
