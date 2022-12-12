@@ -157,7 +157,7 @@ async fn process_joiner_state_event(
                     assert_text_equals(&hypermerge, &text_id, "Hello").await;
                     hypermerge.splice_text(&text_id, 5, 0, ", world!").await?;
                 } else if document_changes.len() == 1 {
-                    assert_eq!(patches.len(), 8); // ", world!" has 8 chars
+                    assert_eq!(patches.len(), 1); // ", world!" in one Splice patch
                     document_changes.push(patches);
                     let text_id = text_id.clone().unwrap();
                     assert_text_equals(&hypermerge, &text_id, "Hello, world!").await;
@@ -175,12 +175,12 @@ async fn process_joiner_state_event(
                     hypermerge.splice_text(&text_id, 4, 0, "XX").await?;
                     assert_text_equals(&hypermerge, &text_id, "HellXXoworld!").await;
                 } else if document_changes.len() == 2 {
-                    // This is the two local deletions
-                    assert_eq!(patches.len(), 2);
+                    // This is the two local deletions as one Splice message
+                    assert_eq!(patches.len(), 1);
                     document_changes.push(patches);
                 } else if document_changes.len() == 3 {
-                    // This is the two local additions
-                    assert_eq!(patches.len(), 2);
+                    // This is the two local additions as one Splice patch
+                    assert_eq!(patches.len(), 1);
                     document_changes.push(patches);
                 } else if document_changes.len() == 4 {
                     assert_eq!(patches.len(), 3); // One overlapping delete, and two Y
@@ -243,7 +243,7 @@ async fn process_creator_state_events(
                     assert_eq!(patches.len(), 2); // Original creation of "texts" and "text";
                     document_changes.push(patches);
                 } else if document_changes.len() == 1 {
-                    assert_eq!(patches.len(), 5); // "Hello" has 5 chars
+                    assert_eq!(patches.len(), 1); // "Hello" in one Splice patch
                     document_changes.push(patches);
                 } else if document_changes.len() == 2 {
                     assert_eq!(patches.len(), 8); // ", world!" has 8 chars
@@ -265,12 +265,12 @@ async fn process_creator_state_events(
                     hypermerge.splice_text(&text_id, 4, 0, "YY").await.unwrap();
                     assert_text_equals(&hypermerge, &text_id, "HellYY world!").await;
                 } else if document_changes.len() == 3 {
-                    // This is the two local deletions
-                    assert_eq!(patches.len(), 2);
+                    // This is the local deletions, one Delete patch with num 2
+                    assert_eq!(patches.len(), 1);
                     document_changes.push(patches);
                 } else if document_changes.len() == 4 {
-                    // This is the two local additions
-                    assert_eq!(patches.len(), 2);
+                    // This is the two local additions as one Splice message
+                    assert_eq!(patches.len(), 1);
                     document_changes.push(patches);
                     // Uncork to send the changes to the peer now
                     hypermerge.uncork().await?;
@@ -376,7 +376,7 @@ async fn process_latecomer_state_event(
             StateEvent::RemotePeerSynced() => {}
             StateEvent::DocumentChanged(patches) => {
                 if document_changes.len() == 0 {
-                    assert_eq!(patches.len(), 2); // Two local additions
+                    assert_eq!(patches.len(), 1); // Two local additions as one Splice
                     assert_text_equals_either(
                         &hypermerge,
                         &text_id.clone().unwrap(),

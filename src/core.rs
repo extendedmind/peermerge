@@ -511,6 +511,8 @@ async fn on_peer_event_memory(
                                 Patch::Insert { obj, .. } => watched_ids.contains(obj),
                                 Patch::Delete { obj, .. } => watched_ids.contains(obj),
                                 Patch::Increment { obj, .. } => watched_ids.contains(obj),
+                                Patch::Expose { obj, .. } => watched_ids.contains(obj),
+                                Patch::Splice { obj, .. } => watched_ids.contains(obj),
                             });
                             Some((peers_synced, patches))
                         } else {
