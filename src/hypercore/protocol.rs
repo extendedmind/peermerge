@@ -29,6 +29,9 @@ where
         "on_protocol({}): Begin listening to protocol events",
         is_initiator
     );
+
+    // TODO: Use this for notification of new peers
+    let doc_discovery_key = { doc_state.lock().await.state().doc_discovery_key.clone() };
     let mut hypercore_count = 0;
     while let Some(event) = protocol.next().await {
         println!(
