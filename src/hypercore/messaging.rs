@@ -16,6 +16,8 @@ use crate::common::{message::BroadcastMessage, PeerEvent};
 
 const HYPERMERGE_BROADCAST_MSG: &str = "hypermerge/v1/broadcast";
 const HYPERMERGE_INTERNAL_APPEND_MSG: &str = "hypermerge/__append";
+const HYPERMERGE_INTERNAL_PEER_SYNCED_MSG: &str = "hypermerge/__peer-synced";
+const HYPERMERGE_INTERNAL_NEW_PEERS_CREATED_MSG: &str = "hypermerge/__new-peers-created";
 
 pub(super) fn create_broadcast_message(peer_state: &PeerState) -> Message {
     let broadcast_message: BroadcastMessage = BroadcastMessage {
@@ -39,6 +41,28 @@ pub(super) fn create_internal_append_message(length: u64) -> Message {
     enc_state.encode(&length, &mut buffer);
     Message::Extension(Extension {
         name: HYPERMERGE_INTERNAL_APPEND_MSG.to_string(),
+        message: buffer.to_vec(),
+    })
+}
+
+pub(super) fn create_internal_peer_synced_message(contiguous_length: u64) -> Message {
+    let mut enc_state = State::new();
+    enc_state.preencode(&contiguous_length);
+    let mut buffer = enc_state.create_buffer();
+    enc_state.encode(&contiguous_length, &mut buffer);
+    Message::Extension(Extension {
+        name: HYPERMERGE_INTERNAL_PEER_SYNCED_MSG.to_string(),
+        message: buffer.to_vec(),
+    })
+}
+
+pub(super) fn create_internal_new_peers_created(count: usize) -> Message {
+    let mut enc_state = State::new();
+    enc_state.preencode(&count);
+    let mut buffer = enc_state.create_buffer();
+    enc_state.encode(&count, &mut buffer);
+    Message::Extension(Extension {
+        name: HYPERMERGE_INTERNAL_NEW_PEERS_CREATED_MSG.to_string(),
         message: buffer.to_vec(),
     })
 }
@@ -151,7 +175,11 @@ where
                 let peer_synced: Option<PeerEvent> =
                     if new_info.contiguous_length == new_info.length {
                         let public_key: [u8; 32] = *hypercore.key_pair().public.as_bytes();
-                        Some(PeerEvent::PeerSynced(public_key))
+                        peer_state.synced_contiguous_length = new_info.contiguous_length;
+                        Some(PeerEvent::PeerSynced((
+                            public_key,
+                            peer_state.synced_contiguous_length,
+                        )))
                     } else {
                         None
                     };
@@ -307,9 +335,9 @@ where
                     } else {
                         channel.send(Message::Synchronize(sync_msg)).await?;
                     }
-                } else {
+                } else if !new_remote_public_keys.is_empty() {
                     // New peers found, return a peer event
-                    return Ok(Some(PeerEvent::NewPeersAdvertised(new_remote_public_keys)));
+                    return Ok(Some(PeerEvent::NewPeersBroadcasted(new_remote_public_keys)));
                 }
             }
             HYPERMERGE_INTERNAL_APPEND_MSG => {
@@ -327,6 +355,34 @@ where
                     };
                     channel.send(Message::Range(range_msg)).await?;
                 }
+            }
+            HYPERMERGE_INTERNAL_PEER_SYNCED_MSG => {
+                let mut dec_state = State::from_buffer(&message.message);
+                let contiguous_length: u64 = dec_state.decode(&message.message);
+                if contiguous_length > peer_state.synced_contiguous_length {
+                    peer_state.synced_contiguous_length = contiguous_length;
+                    let range_msg = Range {
+                        drop: false,
+                        start: 0,
+                        length: contiguous_length,
+                    };
+                    channel.send(Message::Range(range_msg)).await?;
+                }
+            }
+            HYPERMERGE_INTERNAL_NEW_PEERS_CREATED_MSG => {
+                // Close all channels when this happens: caller will
+                // reopen channels.
+                if !channel.closed() {
+                    println!("on_message({}): closing id={}", is_initiator, channel.id());
+                    channel.close().await?;
+                    println!(
+                        "on_message({}): close success id={}",
+                        is_initiator,
+                        channel.id()
+                    );
+                }
+
+                return Ok(Some(PeerEvent::PeerDisconnected(channel.id() as u64)));
             }
             _ => {
                 panic!("Received unexpected extension message {:?}", message);

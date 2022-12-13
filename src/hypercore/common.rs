@@ -15,6 +15,7 @@ pub(super) struct PeerState {
     pub(super) remote_can_upgrade: bool,
     pub(super) remote_uploading: bool,
     pub(super) remote_downloading: bool,
+    pub(super) synced_contiguous_length: u64,
     pub(super) length_acked: u64,
     pub(super) inflight: InflightTracker,
 }
@@ -30,6 +31,7 @@ impl PeerState {
             remote_can_upgrade: false,
             remote_uploading: true,
             remote_downloading: true,
+            synced_contiguous_length: 0,
             length_acked: 0,
             inflight: InflightTracker::default(),
         }

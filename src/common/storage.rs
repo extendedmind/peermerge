@@ -69,16 +69,27 @@ impl<T> DocStateWrapper<T>
 where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send,
 {
-    pub async fn add_peer_public_keys_to_state(&mut self, public_keys: Vec<[u8; 32]>) {
-        let new_peers: Vec<DocPeerState> = public_keys
+    pub async fn add_peer_public_keys_to_state(&mut self, public_keys: Vec<[u8; 32]>) -> bool {
+        // Need to check if another thread has already added these keys to the state
+        let need_to_add = self
+            .state
+            .peers
             .iter()
-            .map(|public_key| DocPeerState {
-                public_key: public_key.clone(),
-                synced: false,
-            })
-            .collect();
-        self.state.peers.extend(new_peers);
-        write_doc_state(&self.state, &mut self.storage).await;
+            .filter(|peer_state| public_keys.contains(&peer_state.public_key))
+            .count()
+            == 0;
+        if need_to_add {
+            let new_peers: Vec<DocPeerState> = public_keys
+                .iter()
+                .map(|public_key| DocPeerState {
+                    public_key: public_key.clone(),
+                    synced: false,
+                })
+                .collect();
+            self.state.peers.extend(new_peers);
+            write_doc_state(&self.state, &mut self.storage).await;
+        }
+        need_to_add
     }
 
     pub async fn set_synced_to_state(&mut self, public_key: [u8; 32], synced: bool) -> bool {

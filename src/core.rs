@@ -223,7 +223,7 @@ where
                         .await
                         .unwrap();
                 }
-                SynchronizeEvent::NewPeersAdvertised(_) => {
+                SynchronizeEvent::NewPeersBroadcasted(_) => {
                     // TODO: ignore for now
                 }
                 SynchronizeEvent::PeersSynced(len) => {
@@ -441,24 +441,34 @@ async fn on_peer_event_memory(
     while let Some(event) = peer_event_receiver.next().await {
         println!("on_peer_event({}): Got event {:?}", is_initiator, event);
         match event {
-            PeerEvent::NewPeersAdvertised(public_keys) => {
+            PeerEvent::NewPeersBroadcasted(public_keys) => {
                 let len = public_keys.len();
-                {
+                let added = {
                     // Save new keys to state
                     let mut doc_state = doc_state.lock().await;
                     doc_state
                         .add_peer_public_keys_to_state(public_keys.clone())
-                        .await;
+                        .await
+                };
+                if added {
+                    {
+                        // Create and insert all new hypercores
+                        create_and_insert_read_memory_hypercores(public_keys, hypercores.clone())
+                            .await;
+                    }
+                    {
+                        // Send message to all hypercores that new peers have been created to trigger
+                        // close/reopen
+                        for hypercore in hypercores.iter() {
+                            let mut hypercore = hypercore.lock().await;
+                            hypercore.notify_new_peers_created(len).await.unwrap();
+                        }
+                    }
+                    sync_event_sender
+                        .send(SynchronizeEvent::NewPeersBroadcasted(len))
+                        .await
+                        .unwrap();
                 }
-                {
-                    // Create and insert all new hypercores
-                    create_and_insert_read_memory_hypercores(public_keys, hypercores.clone()).await;
-                }
-
-                sync_event_sender
-                    .send(SynchronizeEvent::NewPeersAdvertised(len))
-                    .await
-                    .unwrap();
             }
             PeerEvent::PeerDisconnected(_) => {
                 // This is an FYI message, just continue for now
@@ -474,8 +484,8 @@ async fn on_peer_event_memory(
                 let mut doc_state = doc_state.lock().await;
                 doc_state.set_synced_to_state(public_key, false).await;
             }
-            PeerEvent::PeerSynced(public_key) => {
-                let peers_synced = {
+            PeerEvent::PeerSynced((public_key, synced_contiguous_length)) => {
+                let sync_info = {
                     // Set peer to synced
                     let mut doc_state = doc_state.lock().await;
                     let sync_status_changed = doc_state.set_synced_to_state(public_key, true).await;
@@ -524,7 +534,7 @@ async fn on_peer_event_memory(
                     }
                 };
 
-                if let Some((peers_synced, patches)) = peers_synced {
+                if let Some((peers_synced, patches)) = sync_info {
                     sync_event_sender
                         .send(SynchronizeEvent::PeersSynced(peers_synced))
                         .await
@@ -535,6 +545,18 @@ async fn on_peer_event_memory(
                             .await
                             .unwrap();
                     }
+                }
+
+                // Finally, notify about the new sync so that other protocols can get synced as
+                // well. The message reaches the same hypercore that sent this, but is disregarded.
+                let discovery_key = discovery_key_from_public_key(&public_key);
+                {
+                    let hypercore = hypercores.get_mut(&discovery_key).unwrap();
+                    let mut hypercore = hypercore.lock().await;
+                    hypercore
+                        .notify_peer_synced(synced_contiguous_length)
+                        .await
+                        .unwrap();
                 }
             }
         }

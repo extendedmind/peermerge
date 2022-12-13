@@ -32,7 +32,6 @@ where
 
     // TODO: Use this for notification of new peers
     let doc_discovery_key = { doc_state.lock().await.state().doc_discovery_key.clone() };
-    let mut hypercore_count = 0;
     while let Some(event) = protocol.next().await {
         println!(
             "on_protocol({}): Got protocol event {:?}",
@@ -50,7 +49,6 @@ where
                 match event {
                     Event::Handshake(_) => {
                         if is_initiator {
-                            hypercore_count = hypercores.len();
                             for hypercore in hypercores.iter() {
                                 let hypercore = hypercore.lock().await;
                                 println!(
@@ -74,17 +72,11 @@ where
                             channel.id()
                         );
                         let discovery_key = channel.discovery_key();
-                        let doc_message_receiver = if &doc_discovery_key != discovery_key {
-                            let receiver = {
-                                let doc_hypercore = hypercores.get(&doc_discovery_key).unwrap();
-                                let mut doc_hypercore = doc_hypercore.lock().await;
-                                doc_hypercore.listen()
-                            };
-                            Some(receiver)
-                        } else {
-                            None
+                        let new_peers_created_message_receiver = {
+                            let doc_hypercore = hypercores.get(&doc_discovery_key).unwrap();
+                            let mut doc_hypercore = doc_hypercore.lock().await;
+                            doc_hypercore.listen_for_new_peers_created()
                         };
-
                         if let Some(hypercore) = hypercores.get(discovery_key) {
                             let mut hypercore = hypercore.lock().await;
                             let (public_key, peer_public_keys) =
@@ -101,7 +93,7 @@ where
                                 public_key,
                                 peer_public_keys,
                                 peer_event_sender,
-                                doc_message_receiver,
+                                new_peers_created_message_receiver,
                                 is_initiator,
                             );
                         } else {
@@ -111,29 +103,19 @@ where
                             );
                         }
                     }
-                    Event::Close((_, close_message)) => {
-                        // When a channel is closed, reopen all. Reopening is needed during initial
-                        // advertising of public keys.
+                    Event::Close(discovery_key) => {
+                        // When a channel is closed, reopen all if the channel is the doc channel. Reopening is
+                        // needed during initial advertising of public keys.
                         if is_initiator {
-                            if !close_message.is_empty() {
-                                let mut dec_state = State::from_buffer(&close_message);
-                                let close_message: CloseMessage = dec_state.decode(&close_message);
-                                while hypercores.len()
-                                    < hypercore_count + close_message.new_peer_public_keys.len()
-                                {
-                                    // We need to wait here to give time for the new hypercores to be
-                                    // created, and only after that reopen
-                                    async_std::task::sleep(Duration::from_millis(10)).await;
+                            if discovery_key == doc_discovery_key {
+                                for entry in hypercores.iter() {
+                                    let hypercore = entry.value().lock().await;
+                                    println!(
+                                        "on_protocol({}): Event:Close: re-opening protocol",
+                                        is_initiator,
+                                    );
+                                    protocol.open(hypercore.public_key().clone()).await?;
                                 }
-                                hypercore_count = hypercores.len();
-                            }
-                            for entry in hypercores.iter() {
-                                let hypercore = entry.value().lock().await;
-                                println!(
-                                    "on_protocol({}): Event:Close: re-opening protocol",
-                                    is_initiator,
-                                );
-                                protocol.open(hypercore.public_key().clone()).await?;
                             }
                         }
                     }

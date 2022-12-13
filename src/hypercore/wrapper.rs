@@ -19,7 +19,13 @@ use wasm_bindgen_futures::spawn_local;
 
 use crate::common::{entry::Entry, PeerEvent};
 
-use super::{messaging::create_internal_append_message, on_peer, PeerState};
+use super::{
+    messaging::{
+        create_internal_append_message, create_internal_new_peers_created,
+        create_internal_peer_synced_message,
+    },
+    on_peer, PeerState,
+};
 
 #[derive(Debug, Clone)]
 pub struct HypercoreWrapper<T>
@@ -28,7 +34,8 @@ where
 {
     pub(super) public_key: [u8; 32],
     pub(super) hypercore: Arc<Mutex<Hypercore<T>>>,
-    pub(super) senders: Vec<Sender<Message>>,
+    senders: Vec<Sender<Message>>,
+    new_peers_created_senders: Vec<Sender<Message>>,
     corked: bool,
     message_queue: Vec<Message>,
 }
@@ -41,6 +48,7 @@ impl HypercoreWrapper<RandomAccessDisk> {
             public_key,
             hypercore: Arc::new(Mutex::new(hypercore)),
             senders: vec![],
+            new_peers_created_senders: vec![],
             corked: false,
             message_queue: vec![],
         }
@@ -54,6 +62,7 @@ impl HypercoreWrapper<RandomAccessMemory> {
             public_key,
             hypercore: Arc::new(Mutex::new(hypercore)),
             senders: vec![],
+            new_peers_created_senders: vec![],
             corked: false,
             message_queue: vec![],
         }
@@ -77,10 +86,38 @@ where
         Ok(outcome.length)
     }
 
-    pub(crate) fn listen(&mut self) -> Receiver<Message> {
+    pub(crate) async fn notify_peer_synced(
+        &mut self,
+        contiguous_length: u64,
+    ) -> anyhow::Result<()> {
+        let message = create_internal_peer_synced_message(contiguous_length);
+        self.notify_listeners(&message).await?;
+        Ok(())
+    }
+
+    pub(crate) fn listen_for_new_peers_created(&mut self) -> Receiver<Message> {
         let (sender, receiver): (Sender<Message>, Receiver<Message>) = unbounded();
-        self.senders.push(sender);
+        self.new_peers_created_senders.push(sender);
         receiver
+    }
+
+    pub(crate) async fn notify_new_peers_created(&mut self, count: usize) -> anyhow::Result<()> {
+        let message = create_internal_new_peers_created(count);
+        let mut closed_indices: Vec<usize> = vec![];
+        for i in 0..self.new_peers_created_senders.len() {
+            if self.new_peers_created_senders[i].is_closed() {
+                closed_indices.push(i);
+            } else {
+                let message = message.clone();
+                self.new_peers_created_senders[i].send(message).await?;
+            }
+        }
+        closed_indices.sort();
+        closed_indices.reverse();
+        for i in closed_indices {
+            self.new_peers_created_senders.remove(i);
+        }
+        Ok(())
     }
 
     /// Cork sending notifications about this hypercore and start queuing in-memory messages
@@ -129,7 +166,7 @@ where
         public_key: Option<[u8; 32]>,
         peer_public_keys: Vec<[u8; 32]>,
         peer_event_sender: &mut Sender<PeerEvent>,
-        doc_message_receiver: Option<Receiver<Message>>,
+        mut new_peers_created_message_receiver: Receiver<Message>,
         is_initiator: bool,
     ) {
         println!("on_channel({}): id={}", is_initiator, channel.id(),);
@@ -144,12 +181,12 @@ where
                 peer_state,
                 channel,
                 internal_message_receiver,
-                doc_message_receiver,
+                new_peers_created_message_receiver,
                 &mut peer_event_sender_for_task,
                 is_initiator,
             )
             .await
-            .expect("peer connect failed");
+            .expect(format!("peer({}) connect failed", is_initiator).as_str());
         });
         #[cfg(target_arch = "wasm32")]
         spawn_local(async move {
@@ -158,13 +195,19 @@ where
                 peer_state,
                 channel,
                 internal_message_receiver,
+                &mut new_peers_created_message_receiver,
                 &mut peer_event_sender_for_task,
-                doc_message_receiver,
                 is_initiator,
             )
             .await
-            .expect("peer connect failed");
+            .expect(format!("peer({}) connect failed", is_initiator).as_str());
         });
+    }
+
+    fn listen(&mut self) -> Receiver<Message> {
+        let (sender, receiver): (Sender<Message>, Receiver<Message>) = unbounded();
+        self.senders.push(sender);
+        receiver
     }
 
     async fn notify_listeners(&mut self, message: &Message) -> anyhow::Result<()> {

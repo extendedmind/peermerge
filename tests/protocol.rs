@@ -131,7 +131,7 @@ async fn process_joiner_state_event(
         println!("TEST: JOINER got event {:?}", event);
         match event {
             StateEvent::PeersSynced(len) => {
-                assert_eq!(len, 1);
+                assert!(len == 1 || len == 2);
                 if !peers_synced {
                     let (_value, local_texts_id) = hypermerge.get(ROOT, "texts").await?.unwrap();
                     let (_value, local_text_id) =
@@ -197,6 +197,17 @@ async fn process_joiner_state_event(
                     );
                     // These are the changes sent by the peer, uncork to send the changes to the peer now
                     hypermerge.uncork().await.unwrap();
+                } else if document_changes.len() == 5 {
+                    assert_eq!(patches.len(), 2); // Two latecomer additions
+                    document_changes.push(patches);
+                    let text_id = text_id.clone().unwrap();
+                    assert_text_equals_either(
+                        &hypermerge,
+                        &text_id,
+                        "HellXXYYworldZZ!",
+                        "HellYYXXworldZZ!",
+                    )
+                    .await;
                 } else {
                     panic!("Did not expect more joiner document changes");
                 }
