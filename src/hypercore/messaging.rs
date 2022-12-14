@@ -10,6 +10,7 @@ use hypercore_protocol::{
 };
 use random_access_storage::RandomAccess;
 use std::fmt::Debug;
+use tracing::{debug, instrument};
 
 use super::PeerState;
 use crate::common::{message::BroadcastMessage, PeerEvent};
@@ -67,17 +68,18 @@ pub(super) fn create_internal_new_peers_created(count: usize) -> Message {
     })
 }
 
+#[instrument(level = "debug", skip(hypercore, peer_state, channel))]
 pub(super) async fn on_message<T>(
     hypercore: &mut Arc<Mutex<Hypercore<T>>>,
     peer_state: &mut PeerState,
     channel: &mut Channel,
     message: Message,
-    is_initiator: bool,
+    peer_name: &str,
 ) -> Result<Option<PeerEvent>>
 where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send,
 {
-    println!("on_message({}): GOT MESSAGE {:?}", is_initiator, message);
+    debug!("Processing");
     match message {
         Message::Synchronize(message) => {
             let length_changed = message.length != peer_state.remote_length;
@@ -373,13 +375,9 @@ where
                 // Close all channels when this happens: caller will
                 // reopen channels.
                 if !channel.closed() {
-                    println!("on_message({}): closing id={}", is_initiator, channel.id());
+                    debug!("Closing channel id={}", channel.id());
                     channel.close().await?;
-                    println!(
-                        "on_message({}): close success id={}",
-                        is_initiator,
-                        channel.id()
-                    );
+                    debug!("Closing succeeded for channel id={}", channel.id());
                 }
 
                 return Ok(Some(PeerEvent::PeerDisconnected(channel.id() as u64)));

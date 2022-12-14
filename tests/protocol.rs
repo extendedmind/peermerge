@@ -19,6 +19,8 @@ use hypermerge::Value;
 use random_access_memory::RandomAccessMemory;
 use std::io;
 use std::time::Duration;
+use test_log::test;
+use tracing::{info, instrument};
 
 mod common;
 use common::*;
@@ -34,7 +36,7 @@ impl ProtocolThreeWritersResult {
     }
 }
 
-#[async_std::test]
+#[test(async_std::test)]
 async fn protocol_three_writers() -> anyhow::Result<()> {
     let (proto_responder, proto_initiator) = create_pair_memory().await?;
 
@@ -122,6 +124,7 @@ async fn protocol_three_writers() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[instrument(skip_all)]
 async fn process_joiner_state_event(
     mut hypermerge: Hypermerge<RandomAccessMemory>,
     mut joiner_state_event_receiver: Receiver<StateEvent>,
@@ -133,7 +136,11 @@ async fn process_joiner_state_event(
     let mut text_id: Option<ObjId> = None;
     let mut document_changes: Vec<Vec<Patch>> = vec![];
     while let Some(event) = joiner_state_event_receiver.next().await {
-        println!("TEST: JOINER got event {:?}", event);
+        info!(
+            "Received event {:?}, document_changes={}",
+            event,
+            document_changes.len()
+        );
         match event {
             StateEvent::PeersSynced(len) => {
                 assert!(len == 1 || len == 2);
@@ -151,10 +158,6 @@ async fn process_joiner_state_event(
             }
             StateEvent::RemotePeerSynced() => {}
             StateEvent::DocumentChanged(patches) => {
-                println!(
-                    "TEST: JOINER document_changes LEN {}",
-                    document_changes.len()
-                );
                 if document_changes.len() == 0 {
                     assert_eq!(patches.len(), 5); // "Hello" has 5 chars
                     document_changes.push(patches);
@@ -229,6 +232,7 @@ async fn process_joiner_state_event(
     Ok(())
 }
 
+#[instrument(skip_all)]
 async fn process_creator_state_events(
     mut hypermerge: Hypermerge<RandomAccessMemory>,
     creator_state_event_sender: Sender<StateEvent>,
@@ -243,7 +247,11 @@ async fn process_creator_state_events(
     let mut latecomer_attached = false;
 
     while let Some(event) = creator_state_event_receiver.next().await {
-        println!("TEST: CREATOR got event {:?}", event);
+        info!(
+            "Received event {:?}, document_changes={}",
+            event,
+            document_changes.len()
+        );
         let text_id = text_id.clone();
         match event {
             StateEvent::PeersSynced(len) => {
@@ -260,10 +268,6 @@ async fn process_creator_state_events(
                 }
             }
             StateEvent::DocumentChanged(patches) => {
-                println!(
-                    "TEST: CREATOR document_changes LEN {}",
-                    document_changes.len()
-                );
                 if document_changes.len() == 0 {
                     assert_eq!(patches.len(), 2); // Original creation of "texts" and "text";
                     document_changes.push(patches);
@@ -380,6 +384,7 @@ async fn process_creator_state_events(
     Ok(())
 }
 
+#[instrument(skip_all)]
 async fn process_latecomer_state_event(
     mut hypermerge: Hypermerge<RandomAccessMemory>,
     mut latecomer_state_event_receiver: Receiver<StateEvent>,
@@ -388,7 +393,11 @@ async fn process_latecomer_state_event(
     let mut text_id: Option<ObjId> = None;
     let mut document_changes: Vec<Vec<Patch>> = vec![];
     while let Some(event) = latecomer_state_event_receiver.next().await {
-        println!("TEST: LATECOMER got event {:?}", event);
+        info!(
+            "Received event {:?}, document_changes={}",
+            event,
+            document_changes.len()
+        );
         match event {
             StateEvent::PeersSynced(len) => {
                 assert_eq!(len, 2);

@@ -10,6 +10,7 @@ use hypercore_protocol::Protocol;
 use random_access_memory::RandomAccessMemory;
 use random_access_storage::RandomAccess;
 use std::{fmt::Debug, path::PathBuf};
+use tracing::{debug, instrument};
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_futures::spawn_local;
 
@@ -50,11 +51,13 @@ impl<T> Hypermerge<T>
 where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send + 'static,
 {
+    #[instrument(skip(self))]
     pub async fn watch(&mut self, ids: Vec<ObjId>) {
         let mut doc_state = self.doc_state.lock().await;
         doc_state.watch(ids);
     }
 
+    #[instrument(skip(self, obj, prop), fields(obj = obj.as_ref().to_string()))]
     pub async fn get<O: AsRef<ObjId>, P: Into<Prop>>(
         &self,
         obj: O,
@@ -86,6 +89,7 @@ where
         Ok(result)
     }
 
+    #[instrument(skip(self, obj), fields(obj = obj.as_ref().to_string()))]
     pub async fn realize_text<O: AsRef<ObjId>>(&self, obj: O) -> anyhow::Result<Option<String>> {
         let doc_state = &self.doc_state;
         let result = {
@@ -122,6 +126,7 @@ where
         Ok(result)
     }
 
+    #[instrument(skip(self, obj, prop), fields(obj = obj.as_ref().to_string()))]
     pub async fn put_object<O: AsRef<ObjId>, P: Into<Prop>>(
         &mut self,
         obj: O,
@@ -153,6 +158,7 @@ where
         Ok(id)
     }
 
+    #[instrument(skip(self, obj), fields(obj = obj.as_ref().to_string()))]
     pub async fn splice_text<O: AsRef<ObjId>>(
         &mut self,
         obj: O,
@@ -184,6 +190,7 @@ where
         Ok(())
     }
 
+    #[instrument(skip(self))]
     pub async fn cork(&mut self) {
         let doc_state = self.doc_state.lock().await;
         let write_discovery_key = doc_state.write_discovery_key();
@@ -192,6 +199,7 @@ where
         write_hypercore.cork();
     }
 
+    #[instrument(skip(self))]
     pub async fn uncork(&mut self) -> anyhow::Result<()> {
         let doc_state = self.doc_state.lock().await;
         let write_discovery_key = doc_state.write_discovery_key();
@@ -201,6 +209,7 @@ where
         Ok(())
     }
 
+    #[instrument(skip(self))]
     pub async fn connect_document(
         &mut self,
         state_event_sender: Sender<StateEvent>,
@@ -214,7 +223,7 @@ where
             self.notify_of_document_changes().await;
         }
         // Then start listening for any sync events
-        println!("connect_document: start listening");
+        debug!("Start listening for SynchronizeEvents");
         while let Some(event) = sync_event_receiver.next().await {
             match event {
                 SynchronizeEvent::DocumentChanged(patches) => {
@@ -243,6 +252,7 @@ where
         Ok(())
     }
 
+    #[instrument(skip(self))]
     pub fn doc_url(&self) -> String {
         self.doc_url.clone()
     }
@@ -349,34 +359,31 @@ impl Hypermerge<RandomAccessMemory> {
 
         let sync_event_sender_for_task = sync_event_sender.clone();
         let doc_state = self.doc_state.clone();
-        let is_initiator = protocol.is_initiator();
         let discovery_key_for_task = self.discovery_key.clone();
         let hypercores_for_task = self.hypercores.clone();
-        let peer_name = self.peer_name.clone();
+        let peer_name_for_task = self.peer_name.clone();
         #[cfg(not(target_arch = "wasm32"))]
         task::spawn(async move {
             on_peer_event_memory(
-                &peer_name,
                 &discovery_key_for_task,
                 peer_event_receiver,
                 sync_event_sender_for_task,
                 doc_state,
                 hypercores_for_task,
-                is_initiator,
+                &peer_name_for_task,
             )
             .await;
         });
         #[cfg(target_arch = "wasm32")]
         spawn_local(async move {
             on_peer_event_memory(
-                &peer_name,
                 &discovery_key_for_task,
                 &discovery_key_for_task,
                 peer_event_receiver,
                 sync_event_sender_for_task,
                 doc_state,
                 hypercores_for_task,
-                is_initiator,
+                &peer_name_for_task,
             )
             .await;
         });
@@ -386,7 +393,7 @@ impl Hypermerge<RandomAccessMemory> {
             self.doc_state.clone(),
             self.hypercores.clone(),
             &mut peer_event_sender,
-            is_initiator,
+            &self.peer_name.clone(),
         )
         .await?;
         Ok(())
@@ -429,17 +436,26 @@ impl Hypermerge<RandomAccessMemory> {
     }
 }
 
+#[instrument(
+    level = "debug",
+    skip(
+        doc_discovery_key,
+        peer_event_receiver,
+        sync_event_sender,
+        doc_state,
+        hypercores
+    )
+)]
 async fn on_peer_event_memory(
-    peer_name: &str,
     doc_discovery_key: &[u8; 32],
     mut peer_event_receiver: Receiver<PeerEvent>,
     sync_event_sender: Sender<SynchronizeEvent>,
     doc_state: Arc<Mutex<DocStateWrapper<RandomAccessMemory>>>,
     hypercores: Arc<DashMap<[u8; 32], Arc<Mutex<HypercoreWrapper<RandomAccessMemory>>>>>,
-    is_initiator: bool,
+    peer_name: &str,
 ) {
     while let Some(event) = peer_event_receiver.next().await {
-        println!("on_peer_event({}): Got event {:?}", is_initiator, event);
+        debug!("Received event {:?}", event);
         match event {
             PeerEvent::NewPeersBroadcasted(public_keys) => {
                 let len = public_keys.len();
@@ -561,7 +577,7 @@ async fn on_peer_event_memory(
             }
         }
     }
-    println!("on_peer_event({}): Returning", is_initiator);
+    debug!("Exiting");
 }
 
 async fn create_and_insert_read_memory_hypercores(

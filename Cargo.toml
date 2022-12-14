@@ -15,19 +15,21 @@ random-access-storage = { git = "https://github.com/ttiurani/random-access-stora
 random-access-memory = { git = "https://github.com/ttiurani/random-access-memory", branch = "v10" }
 anyhow = "1.0.28"
 hex = "0.4"
-log = "0.4.14"
 async-std = { version = "1.9.0", features = ["attributes", "unstable"], optional = true }
 futures-lite = "1.12"
 async-channel = "1.7.1"
 wasm-bindgen-futures = { version = "0.4.33", optional = true }
 derivative = "2.2.0"
 dashmap = "5.4.0"
+tracing = "0.1.37"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 random-access-disk = { git = "https://github.com/ttiurani/random-access-disk", branch = "v10" }
 
 [dev-dependencies]
 sluice = "0.5.5"
+test-log = { version = "0.2.11", default-features = false, features = ["trace"] }
+tracing-subscriber = { version = "0.3.16", features = ["env-filter", "fmt"] }
 
 [features]
 default =  ["async-std", "wasm-bindgen"]

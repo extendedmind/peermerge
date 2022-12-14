@@ -14,6 +14,7 @@ use random_access_disk::RandomAccessDisk;
 use random_access_memory::RandomAccessMemory;
 use random_access_storage::RandomAccess;
 use std::fmt::Debug;
+use tracing::{debug, instrument};
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_futures::spawn_local;
 
@@ -160,20 +161,31 @@ where
         &self.public_key
     }
 
+    #[instrument(
+        level = "debug",
+        skip(
+            self,
+            public_key,
+            peer_public_keys,
+            peer_event_sender,
+            new_peers_created_message_receiver
+        )
+    )]
     pub(super) fn on_channel(
         &mut self,
         channel: Channel,
         public_key: Option<[u8; 32]>,
         peer_public_keys: Vec<[u8; 32]>,
         peer_event_sender: &mut Sender<PeerEvent>,
-        mut new_peers_created_message_receiver: Receiver<Message>,
-        is_initiator: bool,
+        new_peers_created_message_receiver: Receiver<Message>,
+        peer_name: &str,
     ) {
-        println!("on_channel({}): id={}", is_initiator, channel.id(),);
+        debug!("Processing channel id={}", channel.id(),);
         let peer_state = PeerState::new(public_key, peer_public_keys);
         let hypercore = self.hypercore.clone();
         let mut peer_event_sender_for_task = peer_event_sender.clone();
         let internal_message_receiver = self.listen();
+        let peer_name_for_task = peer_name.clone().to_string();
         #[cfg(not(target_arch = "wasm32"))]
         task::spawn(async move {
             on_peer(
@@ -183,10 +195,10 @@ where
                 internal_message_receiver,
                 new_peers_created_message_receiver,
                 &mut peer_event_sender_for_task,
-                is_initiator,
+                &peer_name_for_task,
             )
             .await
-            .expect(format!("peer({}) connect failed", is_initiator).as_str());
+            .expect(format!("peer {}: connect failed", peer_name_for_task).as_str());
         });
         #[cfg(target_arch = "wasm32")]
         spawn_local(async move {
@@ -197,10 +209,10 @@ where
                 internal_message_receiver,
                 &mut new_peers_created_message_receiver,
                 &mut peer_event_sender_for_task,
-                is_initiator,
+                &peer_name_for_task,
             )
             .await
-            .expect(format!("peer({}) connect failed", is_initiator).as_str());
+            .expect(format!("peer {}: connect failed", peer_name_for_task).as_str());
         });
     }
 
