@@ -93,6 +93,8 @@ async fn protocol_three_writers() -> anyhow::Result<()> {
     let cork_sync_joiner = Arc::clone(&cork_sync_creator);
     let merge_result_for_creator = Arc::new(Mutex::new(ProtocolThreeWritersResult::default()));
     let merge_result_for_joiner = merge_result_for_creator.clone();
+    let append_sync_creator = Arc::new((Mutex::new(false), Condvar::new()));
+    let append_sync_joiner = Arc::clone(&append_sync_creator);
 
     task::spawn(async move {
         process_joiner_state_event(
@@ -100,6 +102,7 @@ async fn protocol_three_writers() -> anyhow::Result<()> {
             joiner_state_event_receiver,
             cork_sync_joiner,
             merge_result_for_joiner,
+            append_sync_joiner,
         )
         .await
         .unwrap();
@@ -112,6 +115,7 @@ async fn protocol_three_writers() -> anyhow::Result<()> {
         text_id,
         cork_sync_creator,
         merge_result_for_creator,
+        append_sync_creator,
     )
     .await?;
 
@@ -123,6 +127,7 @@ async fn process_joiner_state_event(
     mut joiner_state_event_receiver: Receiver<StateEvent>,
     cork_sync: Arc<(Mutex<bool>, Condvar)>,
     merge_result: Arc<Mutex<ProtocolThreeWritersResult>>,
+    append_sync: Arc<(Mutex<bool>, Condvar)>,
 ) -> anyhow::Result<()> {
     let mut peers_synced = false;
     let mut text_id: Option<ObjId> = None;
@@ -208,6 +213,13 @@ async fn process_joiner_state_event(
                         "HellYYXXworldZZ!",
                     )
                     .await;
+
+                    // Notify about append to both
+                    let (lock, cvar) = &*append_sync;
+                    let mut appended = lock.lock().await;
+                    *appended = true;
+                    cvar.notify_all();
+                    break;
                 } else {
                     panic!("Did not expect more joiner document changes");
                 }
@@ -224,10 +236,12 @@ async fn process_creator_state_events(
     text_id: ObjId,
     cork_sync: Arc<(Mutex<bool>, Condvar)>,
     merge_result: Arc<Mutex<ProtocolThreeWritersResult>>,
+    append_sync: Arc<(Mutex<bool>, Condvar)>,
 ) -> anyhow::Result<()> {
     let mut document_changes: Vec<Vec<Patch>> = vec![];
     let mut remote_peer_synced = false;
     let mut latecomer_attached = false;
+
     while let Some(event) = creator_state_event_receiver.next().await {
         println!("TEST: CREATOR got event {:?}", event);
         let text_id = text_id.clone();
@@ -330,10 +344,12 @@ async fn process_creator_state_events(
                         .await
                         .unwrap();
                     });
+                    let append_sync_latecomer = Arc::clone(&append_sync);
                     task::spawn(async move {
                         process_latecomer_state_event(
                             hypermerge_latecomer,
                             latecomer_state_event_receiver,
+                            append_sync_latecomer,
                         )
                         .await
                         .unwrap();
@@ -347,6 +363,14 @@ async fn process_creator_state_events(
                         "HellYYXXworldZZ!",
                     )
                     .await;
+
+                    // Let's wait for the sync to end up to the joiner
+                    let (lock, cvar) = &*append_sync;
+                    let mut appended = lock.lock().await;
+                    while !*appended {
+                        appended = cvar.wait(appended).await;
+                    }
+                    break;
                 } else {
                     panic!("Did not expect more creator document changes");
                 }
@@ -359,6 +383,7 @@ async fn process_creator_state_events(
 async fn process_latecomer_state_event(
     mut hypermerge: Hypermerge<RandomAccessMemory>,
     mut latecomer_state_event_receiver: Receiver<StateEvent>,
+    append_sync: Arc<(Mutex<bool>, Condvar)>,
 ) -> anyhow::Result<()> {
     let mut text_id: Option<ObjId> = None;
     let mut document_changes: Vec<Vec<Patch>> = vec![];
@@ -396,6 +421,14 @@ async fn process_latecomer_state_event(
                     )
                     .await;
                     document_changes.push(patches);
+
+                    // Let's wait for this to end up, via the creator, to the joiner
+                    let (lock, cvar) = &*append_sync;
+                    let mut appended = lock.lock().await;
+                    while !*appended {
+                        appended = cvar.wait(appended).await;
+                    }
+                    break;
                 }
             }
         }
