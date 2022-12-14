@@ -382,7 +382,6 @@ impl Hypermerge<RandomAccessMemory> {
             let _entered = task_span.enter();
             on_peer_event_memory(
                 &discovery_key_for_task,
-                &discovery_key_for_task,
                 peer_event_receiver,
                 sync_event_sender_for_task,
                 doc_state,

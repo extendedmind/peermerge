@@ -46,6 +46,7 @@ impl RepoStateWrapper<RandomAccessMemory> {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl RepoStateWrapper<RandomAccessDisk> {
     pub async fn new_disk(data_root_dir: &PathBuf) -> Self {
         let state = RepoState::default();
@@ -190,6 +191,7 @@ impl DocStateWrapper<RandomAccessMemory> {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl DocStateWrapper<RandomAccessDisk> {
     pub async fn new_disk(
         doc_public_key: [u8; 32],

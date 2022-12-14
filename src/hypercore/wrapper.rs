@@ -198,7 +198,7 @@ where
                 peer_state,
                 channel,
                 internal_message_receiver,
-                &mut new_peers_created_message_receiver,
+                new_peers_created_message_receiver,
                 &mut peer_event_sender_for_task,
             )
             .await
