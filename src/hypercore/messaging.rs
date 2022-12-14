@@ -74,7 +74,6 @@ pub(super) async fn on_message<T>(
     peer_state: &mut PeerState,
     channel: &mut Channel,
     message: Message,
-    peer_name: &str,
 ) -> Result<Option<PeerEvent>>
 where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send,

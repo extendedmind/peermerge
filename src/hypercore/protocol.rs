@@ -20,7 +20,6 @@ pub(crate) async fn on_protocol<T, IO>(
     doc_state: Arc<Mutex<DocStateWrapper<T>>>,
     hypercores: Arc<DashMap<[u8; 32], Arc<Mutex<HypercoreWrapper<T>>>>>,
     peer_event_sender: &mut Sender<PeerEvent>,
-    peer_name: &str,
 ) -> anyhow::Result<()>
 where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send + 'static,
@@ -75,7 +74,6 @@ where
                                 peer_public_keys,
                                 peer_event_sender,
                                 new_peers_created_message_receiver,
-                                peer_name,
                             );
                         } else {
                             panic!(

@@ -10,16 +10,7 @@ use tracing::{debug, instrument};
 use super::{messaging::create_broadcast_message, on_message, PeerState};
 use crate::common::PeerEvent;
 
-#[instrument(
-    level = "debug",
-    skip(
-        hypercore,
-        peer_state,
-        channel,
-        internal_message_receiver,
-        new_peers_created_message_receiver
-    )
-)]
+#[instrument(level = "debug", skip_all)]
 pub(super) async fn on_peer<T>(
     mut hypercore: Arc<Mutex<Hypercore<T>>>,
     mut peer_state: PeerState,
@@ -27,7 +18,6 @@ pub(super) async fn on_peer<T>(
     mut internal_message_receiver: Receiver<Message>,
     mut new_peers_created_message_receiver: Receiver<Message>,
     peer_event_sender: &mut Sender<PeerEvent>,
-    peer_name: &str,
 ) -> Result<()>
 where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send + 'static,
@@ -54,7 +44,6 @@ where
             &mut peer_state,
             &mut channel,
             peer_event_sender,
-            peer_name,
         )
         .await?;
         if exit {
@@ -65,22 +54,18 @@ where
     Ok(())
 }
 
-#[instrument(
-    level = "debug",
-    skip(hypercore, peer_state, channel, peer_event_sender,)
-)]
+#[instrument(level = "debug", skip_all)]
 async fn process_message<T>(
     message: Message,
     hypercore: &mut Arc<Mutex<Hypercore<T>>>,
     peer_state: &mut PeerState,
     channel: &mut Channel,
     peer_event_sender: &mut Sender<PeerEvent>,
-    peer_name: &str,
 ) -> Result<bool>
 where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send + 'static,
 {
-    let event = on_message(hypercore, peer_state, channel, message, peer_name).await?;
+    let event = on_message(hypercore, peer_state, channel, message).await?;
     if let Some(event) = event {
         peer_event_sender.send(event.clone()).await?;
         if let PeerEvent::PeerDisconnected(_) = event {

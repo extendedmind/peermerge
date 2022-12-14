@@ -161,16 +161,7 @@ where
         &self.public_key
     }
 
-    #[instrument(
-        level = "debug",
-        skip(
-            self,
-            public_key,
-            peer_public_keys,
-            peer_event_sender,
-            new_peers_created_message_receiver
-        )
-    )]
+    #[instrument(level = "debug", skip_all)]
     pub(super) fn on_channel(
         &mut self,
         channel: Channel,
@@ -178,16 +169,16 @@ where
         peer_public_keys: Vec<[u8; 32]>,
         peer_event_sender: &mut Sender<PeerEvent>,
         new_peers_created_message_receiver: Receiver<Message>,
-        peer_name: &str,
     ) {
         debug!("Processing channel id={}", channel.id(),);
         let peer_state = PeerState::new(public_key, peer_public_keys);
         let hypercore = self.hypercore.clone();
         let mut peer_event_sender_for_task = peer_event_sender.clone();
         let internal_message_receiver = self.listen();
-        let peer_name_for_task = peer_name.clone().to_string();
+        let task_span = tracing::debug_span!("call_on_peer").or_current();
         #[cfg(not(target_arch = "wasm32"))]
         task::spawn(async move {
+            let _entered = task_span.enter();
             on_peer(
                 hypercore,
                 peer_state,
@@ -195,13 +186,13 @@ where
                 internal_message_receiver,
                 new_peers_created_message_receiver,
                 &mut peer_event_sender_for_task,
-                &peer_name_for_task,
             )
             .await
-            .expect(format!("peer {}: connect failed", peer_name_for_task).as_str());
+            .expect("connect failed");
         });
         #[cfg(target_arch = "wasm32")]
         spawn_local(async move {
+            let _entered = task_span.enter();
             on_peer(
                 hypercore,
                 peer_state,
@@ -209,10 +200,9 @@ where
                 internal_message_receiver,
                 &mut new_peers_created_message_receiver,
                 &mut peer_event_sender_for_task,
-                &peer_name_for_task,
             )
             .await
-            .expect(format!("peer {}: connect failed", peer_name_for_task).as_str());
+            .expect("connect failed");
         });
     }
 

@@ -346,6 +346,7 @@ impl Hypermerge<RandomAccessMemory> {
         .await
     }
 
+    #[instrument(skip_all, fields(peer_name = self.peer_name))]
     pub async fn connect_protocol_memory<IO>(
         &mut self,
         protocol: &mut Protocol<IO>,
@@ -362,8 +363,10 @@ impl Hypermerge<RandomAccessMemory> {
         let discovery_key_for_task = self.discovery_key.clone();
         let hypercores_for_task = self.hypercores.clone();
         let peer_name_for_task = self.peer_name.clone();
+        let task_span = tracing::debug_span!("call_on_peer_event_memory").or_current();
         #[cfg(not(target_arch = "wasm32"))]
         task::spawn(async move {
+            let _entered = task_span.enter();
             on_peer_event_memory(
                 &discovery_key_for_task,
                 peer_event_receiver,
@@ -376,6 +379,7 @@ impl Hypermerge<RandomAccessMemory> {
         });
         #[cfg(target_arch = "wasm32")]
         spawn_local(async move {
+            let _entered = task_span.enter();
             on_peer_event_memory(
                 &discovery_key_for_task,
                 &discovery_key_for_task,
@@ -393,7 +397,6 @@ impl Hypermerge<RandomAccessMemory> {
             self.doc_state.clone(),
             self.hypercores.clone(),
             &mut peer_event_sender,
-            &self.peer_name.clone(),
         )
         .await?;
         Ok(())
@@ -436,16 +439,7 @@ impl Hypermerge<RandomAccessMemory> {
     }
 }
 
-#[instrument(
-    level = "debug",
-    skip(
-        doc_discovery_key,
-        peer_event_receiver,
-        sync_event_sender,
-        doc_state,
-        hypercores
-    )
-)]
+#[instrument(level = "debug", skip_all)]
 async fn on_peer_event_memory(
     doc_discovery_key: &[u8; 32],
     mut peer_event_receiver: Receiver<PeerEvent>,
