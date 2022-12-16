@@ -38,7 +38,7 @@ impl ProtocolThreeWritersResult {
 
 #[test(async_std::test)]
 async fn protocol_three_writers() -> anyhow::Result<()> {
-    let (proto_responder, proto_initiator) = create_pair_memory().await?;
+    let (proto_responder, proto_initiator) = create_pair_memory().await;
 
     let (creator_state_event_sender, creator_state_event_receiver): (
         Sender<StateEvent>,
@@ -320,7 +320,7 @@ async fn process_creator_state_events(
 
                     // Now let's join in a latecomer peer to the creator peer
                     latecomer_attached = true;
-                    let (proto_responder, proto_initiator) = create_pair_memory().await?;
+                    let (proto_responder, proto_initiator) = create_pair_memory().await;
                     let (latecomer_state_event_sender, latecomer_state_event_receiver): (
                         Sender<StateEvent>,
                         Receiver<StateEvent>,
