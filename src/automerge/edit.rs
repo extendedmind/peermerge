@@ -1,6 +1,6 @@
 use std::convert::TryFrom;
 
-use automerge::{transaction::Transactable, Change, ObjId, ObjType, Prop};
+use automerge::{transaction::Transactable, Change, ObjId, ObjType, Prop, ScalarValue};
 
 use super::AutomergeDoc;
 use crate::common::entry::{Entry, EntryType};
@@ -31,6 +31,22 @@ pub(crate) fn put_object_autocommit<O: AsRef<ObjId>, P: Into<Prop>>(
         .bytes()
         .to_vec();
     Ok((Entry::new_change(change), id))
+}
+
+pub(crate) fn put_scalar_autocommit<O: AsRef<ObjId>, P: Into<Prop>, V: Into<ScalarValue>>(
+    doc: &mut AutomergeDoc,
+    obj: O,
+    prop: P,
+    value: V,
+) -> anyhow::Result<Entry> {
+    doc.put(obj, prop, value)?;
+    let change = doc
+        .get_last_local_change()
+        .unwrap()
+        .clone()
+        .bytes()
+        .to_vec();
+    Ok(Entry::new_change(change))
 }
 
 pub(crate) fn splice_text<O: AsRef<ObjId>>(

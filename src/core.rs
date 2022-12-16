@@ -14,7 +14,9 @@ use tracing::{debug, instrument};
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_futures::spawn_local;
 
-use crate::automerge::{apply_changes_autocommit, init_doc_from_entries, splice_text};
+use crate::automerge::{
+    apply_changes_autocommit, init_doc_from_entries, put_scalar_autocommit, splice_text,
+};
 use crate::common::PeerEvent;
 use crate::hypercore::{discovery_key_from_public_key, on_protocol};
 use crate::{
@@ -156,6 +158,37 @@ where
             self.notify_of_document_changes().await;
         }
         Ok(id)
+    }
+
+    #[instrument(skip(self, obj, prop, value), fields(obj = obj.as_ref().to_string()))]
+    pub async fn put_scalar<O: AsRef<ObjId>, P: Into<Prop>, V: Into<ScalarValue>>(
+        &mut self,
+        obj: O,
+        prop: P,
+        value: V,
+    ) -> anyhow::Result<()> {
+        {
+            let mut doc_state = self.doc_state.lock().await;
+            let entry = if let Some(doc) = doc_state.doc_mut() {
+                put_scalar_autocommit(doc, obj, prop, value).unwrap()
+            } else {
+                unimplemented!(
+                    "TODO: No proper error code for trying to change before a document is synced"
+                );
+            };
+
+            let write_discovery_key = doc_state.write_discovery_key();
+            let length = {
+                let write_hypercore = self.hypercores.get_mut(&write_discovery_key).unwrap();
+                let mut write_hypercore = write_hypercore.lock().await;
+                write_hypercore.append(&serialize_entry(&entry)).await?
+            };
+            doc_state.set_cursor(&write_discovery_key, length).await;
+        };
+        {
+            self.notify_of_document_changes().await;
+        }
+        Ok(())
     }
 
     #[instrument(skip(self, obj), fields(obj = obj.as_ref().to_string()))]
