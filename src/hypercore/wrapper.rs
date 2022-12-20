@@ -25,7 +25,7 @@ use super::{
         create_internal_append_message, create_internal_new_peers_created,
         create_internal_peer_synced_message,
     },
-    on_peer, PeerState,
+    on_doc_peer, on_peer, PeerState,
 };
 
 #[derive(Debug, Clone)]
@@ -36,7 +36,6 @@ where
     pub(super) public_key: [u8; 32],
     pub(super) hypercore: Arc<Mutex<Hypercore<T>>>,
     senders: Vec<Sender<Message>>,
-    new_peers_created_senders: Vec<Sender<Message>>,
     corked: bool,
     message_queue: Vec<Message>,
 }
@@ -49,7 +48,6 @@ impl HypercoreWrapper<RandomAccessDisk> {
             public_key,
             hypercore: Arc::new(Mutex::new(hypercore)),
             senders: vec![],
-            new_peers_created_senders: vec![],
             corked: false,
             message_queue: vec![],
         }
@@ -63,7 +61,6 @@ impl HypercoreWrapper<RandomAccessMemory> {
             public_key,
             hypercore: Arc::new(Mutex::new(hypercore)),
             senders: vec![],
-            new_peers_created_senders: vec![],
             corked: false,
             message_queue: vec![],
         }
@@ -96,28 +93,12 @@ where
         Ok(())
     }
 
-    pub(crate) fn listen_for_new_peers_created(&mut self) -> Receiver<Message> {
-        let (sender, receiver): (Sender<Message>, Receiver<Message>) = unbounded();
-        self.new_peers_created_senders.push(sender);
-        receiver
-    }
-
-    pub(crate) async fn notify_new_peers_created(&mut self, count: usize) -> anyhow::Result<()> {
-        let message = create_internal_new_peers_created(count);
-        let mut closed_indices: Vec<usize> = vec![];
-        for i in 0..self.new_peers_created_senders.len() {
-            if self.new_peers_created_senders[i].is_closed() {
-                closed_indices.push(i);
-            } else {
-                let message = message.clone();
-                self.new_peers_created_senders[i].send(message).await?;
-            }
-        }
-        closed_indices.sort();
-        closed_indices.reverse();
-        for i in closed_indices {
-            self.new_peers_created_senders.remove(i);
-        }
+    pub(crate) async fn notify_new_peers_created(
+        &mut self,
+        public_keys: Vec<[u8; 32]>,
+    ) -> anyhow::Result<()> {
+        let message = create_internal_new_peers_created(public_keys);
+        self.notify_listeners(&message).await?;
         Ok(())
     }
 
@@ -164,14 +145,14 @@ where
     #[instrument(level = "debug", skip_all)]
     pub(super) fn on_channel(
         &mut self,
+        is_doc: bool,
         channel: Channel,
-        public_key: Option<[u8; 32]>,
+        write_public_key: Option<[u8; 32]>,
         peer_public_keys: Vec<[u8; 32]>,
         peer_event_sender: &mut Sender<PeerEvent>,
-        new_peers_created_message_receiver: Receiver<Message>,
     ) {
         debug!("Processing channel id={}", channel.id(),);
-        let peer_state = PeerState::new(public_key, peer_public_keys);
+        let peer_state = PeerState::new(is_doc, write_public_key, peer_public_keys);
         let hypercore = self.hypercore.clone();
         let mut peer_event_sender_for_task = peer_event_sender.clone();
         let internal_message_receiver = self.listen();
@@ -179,30 +160,52 @@ where
         #[cfg(not(target_arch = "wasm32"))]
         task::spawn(async move {
             let _entered = task_span.enter();
-            on_peer(
-                hypercore,
-                peer_state,
-                channel,
-                internal_message_receiver,
-                new_peers_created_message_receiver,
-                &mut peer_event_sender_for_task,
-            )
-            .await
-            .expect("connect failed");
+            if is_doc {
+                on_doc_peer(
+                    hypercore,
+                    peer_state,
+                    channel,
+                    internal_message_receiver,
+                    &mut peer_event_sender_for_task,
+                )
+                .await
+                .expect("doc peer connect failed");
+            } else {
+                on_peer(
+                    hypercore,
+                    peer_state,
+                    channel,
+                    internal_message_receiver,
+                    &mut peer_event_sender_for_task,
+                )
+                .await
+                .expect("peer connect failed");
+            }
         });
         #[cfg(target_arch = "wasm32")]
         spawn_local(async move {
             let _entered = task_span.enter();
-            on_peer(
-                hypercore,
-                peer_state,
-                channel,
-                internal_message_receiver,
-                new_peers_created_message_receiver,
-                &mut peer_event_sender_for_task,
-            )
-            .await
-            .expect("connect failed");
+            if is_doc {
+                on_doc_peer(
+                    hypercore,
+                    peer_state,
+                    channel,
+                    internal_message_receiver,
+                    &mut peer_event_sender_for_task,
+                )
+                .await
+                .expect("doc peer connect failed");
+            } else {
+                on_peer(
+                    hypercore,
+                    peer_state,
+                    channel,
+                    internal_message_receiver,
+                    &mut peer_event_sender_for_task,
+                )
+                .await
+                .expect("peer connect failed");
+            }
         });
     }
 

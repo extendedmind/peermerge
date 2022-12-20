@@ -484,7 +484,6 @@ async fn on_peer_event_memory(
         debug!("Received event {:?}", event);
         match event {
             PeerEvent::NewPeersBroadcasted(public_keys) => {
-                let len = public_keys.len();
                 let added = {
                     // Save new keys to state
                     let mut doc_state = doc_state.lock().await;
@@ -495,19 +494,24 @@ async fn on_peer_event_memory(
                 if added {
                     {
                         // Create and insert all new hypercores
-                        create_and_insert_read_memory_hypercores(public_keys, hypercores.clone())
-                            .await;
+                        create_and_insert_read_memory_hypercores(
+                            public_keys.clone(),
+                            hypercores.clone(),
+                        )
+                        .await;
                     }
                     {
-                        // Send message to all hypercores that new peers have been created to trigger
-                        // close/reopen
-                        for hypercore in hypercores.iter() {
-                            let mut hypercore = hypercore.lock().await;
-                            hypercore.notify_new_peers_created(len).await.unwrap();
-                        }
+                        // Send message to doc hypercore that new peers have been created to get all open protocols to
+                        // open channels to it.
+                        let doc_hypercore = hypercores.get(doc_discovery_key).unwrap();
+                        let mut doc_hypercore = doc_hypercore.lock().await;
+                        doc_hypercore
+                            .notify_new_peers_created(public_keys.clone())
+                            .await
+                            .unwrap();
                     }
                     sync_event_sender
-                        .send(SynchronizeEvent::NewPeersBroadcasted(len))
+                        .send(SynchronizeEvent::NewPeersBroadcasted(public_keys.len()))
                         .await
                         .unwrap();
                 }

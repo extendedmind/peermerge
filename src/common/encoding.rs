@@ -6,7 +6,7 @@ pub(crate) use crate::common::entry::Entry;
 pub(crate) use crate::common::message::BroadcastMessage;
 pub(crate) use crate::common::state::{DocState, RepoState};
 
-use super::message::CloseMessage;
+use super::message::NewPeersCreatedMessage;
 use super::state::{DocContent, DocCursor, DocPeerState};
 
 impl CompactEncoding<RepoState> for State {
@@ -187,7 +187,7 @@ impl CompactEncoding<DocCursor> for State {
 impl CompactEncoding<BroadcastMessage> for State {
     fn preencode(&mut self, value: &BroadcastMessage) {
         self.end += 1; // flags
-        if value.public_key.is_some() {
+        if value.write_public_key.is_some() {
             self.end += 32;
         }
         let len = value.peer_public_keys.len();
@@ -200,7 +200,7 @@ impl CompactEncoding<BroadcastMessage> for State {
         let flags_index = self.start;
         let mut flags: u8 = 0;
         self.start += 1;
-        if let Some(public_key) = &value.public_key {
+        if let Some(public_key) = &value.write_public_key {
             flags = flags | 1;
             self.encode_fixed_32(public_key, buffer);
         }
@@ -214,7 +214,7 @@ impl CompactEncoding<BroadcastMessage> for State {
 
     fn decode(&mut self, buffer: &[u8]) -> BroadcastMessage {
         let flags: u8 = self.decode(buffer);
-        let public_key: Option<[u8; 32]> = if flags & 1 != 0 {
+        let write_public_key: Option<[u8; 32]> = if flags & 1 != 0 {
             Some(self.decode_fixed_32(buffer).to_vec().try_into().unwrap())
         } else {
             None
@@ -224,27 +224,22 @@ impl CompactEncoding<BroadcastMessage> for State {
         } else {
             vec![]
         };
-        BroadcastMessage {
-            public_key,
-            peer_public_keys,
-        }
+        BroadcastMessage::new(write_public_key, peer_public_keys)
     }
 }
 
-impl CompactEncoding<CloseMessage> for State {
-    fn preencode(&mut self, value: &CloseMessage) {
-        preencode_fixed_32_byte_vec(self, &value.new_peer_public_keys);
+impl CompactEncoding<NewPeersCreatedMessage> for State {
+    fn preencode(&mut self, value: &NewPeersCreatedMessage) {
+        preencode_fixed_32_byte_vec(self, &value.public_keys);
     }
 
-    fn encode(&mut self, value: &CloseMessage, buffer: &mut [u8]) {
-        encode_fixed_32_byte_vec(self, &value.new_peer_public_keys, buffer);
+    fn encode(&mut self, value: &NewPeersCreatedMessage, buffer: &mut [u8]) {
+        encode_fixed_32_byte_vec(self, &value.public_keys, buffer);
     }
 
-    fn decode(&mut self, buffer: &[u8]) -> CloseMessage {
-        let new_peer_public_keys: Vec<[u8; 32]> = decode_fixed_32_byte_vec(self, buffer);
-        CloseMessage {
-            new_peer_public_keys,
-        }
+    fn decode(&mut self, buffer: &[u8]) -> NewPeersCreatedMessage {
+        let public_keys: Vec<[u8; 32]> = decode_fixed_32_byte_vec(self, buffer);
+        NewPeersCreatedMessage::new(public_keys)
     }
 }
 

@@ -11,7 +11,7 @@ mod wrapper;
 
 use common::PeerState;
 use messaging::on_message;
-use peer::on_peer;
+use peer::{on_doc_peer, on_peer};
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use persistence::{

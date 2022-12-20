@@ -13,16 +13,19 @@ use std::fmt::Debug;
 use tracing::{debug, instrument};
 
 use super::PeerState;
-use crate::common::{message::BroadcastMessage, PeerEvent};
+use crate::common::{
+    message::{BroadcastMessage, NewPeersCreatedMessage},
+    PeerEvent,
+};
 
 const HYPERMERGE_BROADCAST_MSG: &str = "hypermerge/v1/broadcast";
 const HYPERMERGE_INTERNAL_APPEND_MSG: &str = "hypermerge/__append";
 const HYPERMERGE_INTERNAL_PEER_SYNCED_MSG: &str = "hypermerge/__peer-synced";
-const HYPERMERGE_INTERNAL_NEW_PEERS_CREATED_MSG: &str = "hypermerge/__new-peers-created";
+pub(super) const HYPERMERGE_INTERNAL_NEW_PEERS_CREATED_MSG: &str = "hypermerge/__new-peers-created";
 
 pub(super) fn create_broadcast_message(peer_state: &PeerState) -> Message {
     let broadcast_message: BroadcastMessage = BroadcastMessage {
-        public_key: peer_state.public_key.clone(),
+        write_public_key: peer_state.write_public_key.clone(),
         peer_public_keys: peer_state.peer_public_keys.clone(),
     };
     let mut enc_state = State::new();
@@ -57,15 +60,59 @@ pub(super) fn create_internal_peer_synced_message(contiguous_length: u64) -> Mes
     })
 }
 
-pub(super) fn create_internal_new_peers_created(count: usize) -> Message {
+pub(super) fn create_internal_new_peers_created(public_keys: Vec<[u8; 32]>) -> Message {
+    let message = NewPeersCreatedMessage { public_keys };
     let mut enc_state = State::new();
-    enc_state.preencode(&count);
+    enc_state.preencode(&message);
     let mut buffer = enc_state.create_buffer();
-    enc_state.encode(&count, &mut buffer);
+    enc_state.encode(&message, &mut buffer);
     Message::Extension(Extension {
         name: HYPERMERGE_INTERNAL_NEW_PEERS_CREATED_MSG.to_string(),
         message: buffer.to_vec(),
     })
+}
+
+pub(super) async fn create_initial_synchronize<T>(
+    hypercore: &mut Arc<Mutex<Hypercore<T>>>,
+    peer_state: &mut PeerState,
+) -> Vec<Message>
+where
+    T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send,
+{
+    // There are no new peers, start sync
+    let info = {
+        let hypercore = hypercore.lock().await;
+        hypercore.info()
+    };
+
+    if info.fork != peer_state.remote_fork {
+        peer_state.can_upgrade = false;
+    }
+    let remote_length = if info.fork == peer_state.remote_fork {
+        peer_state.remote_length
+    } else {
+        0
+    };
+
+    let sync_msg = Synchronize {
+        fork: info.fork,
+        length: info.length,
+        remote_length,
+        can_upgrade: peer_state.can_upgrade,
+        uploading: true,
+        downloading: true,
+    };
+
+    if info.contiguous_length > 0 {
+        let range_msg = Range {
+            drop: false,
+            start: 0,
+            length: info.contiguous_length,
+        };
+        vec![Message::Synchronize(sync_msg), Message::Range(range_msg)]
+    } else {
+        vec![Message::Synchronize(sync_msg)]
+    }
 }
 
 #[instrument(level = "debug", skip(hypercore, peer_state, channel))]
@@ -90,6 +137,7 @@ where
             };
             let same_fork = message.fork == info.fork;
 
+            peer_state.sync_received = true;
             peer_state.remote_fork = message.fork;
             peer_state.remote_length = message.length;
             peer_state.remote_can_upgrade = message.can_upgrade;
@@ -273,69 +321,25 @@ where
         }
         Message::Extension(message) => match message.name.as_str() {
             HYPERMERGE_BROADCAST_MSG => {
+                assert!(
+                    peer_state.is_doc,
+                    "Only doc peer should ever get broadcast messages"
+                );
                 let mut dec_state = State::from_buffer(&message.message);
                 let broadcast_message: BroadcastMessage = dec_state.decode(&message.message);
                 let new_remote_public_keys = peer_state.filter_new_peer_public_keys(
-                    &broadcast_message.public_key,
+                    &broadcast_message.write_public_key,
                     &broadcast_message.peer_public_keys,
                 );
 
                 if new_remote_public_keys.is_empty()
                     && peer_state.peer_public_keys_match(
-                        &broadcast_message.public_key,
+                        &broadcast_message.write_public_key,
                         &broadcast_message.peer_public_keys,
                     )
                 {
-                    // There are no new peers, start sync
-                    //
-                    // Save information about if this peer can write to this hypercore: that
-                    // determines if we ask this peer for new data
-                    if let Some(remote_public_key) = broadcast_message.public_key {
-                        peer_state.remote_can_write = {
-                            let hypercore = hypercore.lock().await;
-                            let public_key: [u8; 32] = *hypercore.key_pair().public.as_bytes();
-                            public_key == remote_public_key
-                        };
-                    }
-
-                    let info = {
-                        let hypercore = hypercore.lock().await;
-                        hypercore.info()
-                    };
-
-                    if info.fork != peer_state.remote_fork {
-                        peer_state.can_upgrade = false;
-                    }
-                    let remote_length = if info.fork == peer_state.remote_fork {
-                        peer_state.remote_length
-                    } else {
-                        0
-                    };
-
-                    let sync_msg = Synchronize {
-                        fork: info.fork,
-                        length: info.length,
-                        remote_length,
-                        can_upgrade: peer_state.can_upgrade,
-                        uploading: true,
-                        downloading: true,
-                    };
-
-                    if info.contiguous_length > 0 {
-                        let range_msg = Range {
-                            drop: false,
-                            start: 0,
-                            length: info.contiguous_length,
-                        };
-                        channel
-                            .send_batch(&[
-                                Message::Synchronize(sync_msg),
-                                Message::Range(range_msg),
-                            ])
-                            .await?;
-                    } else {
-                        channel.send(Message::Synchronize(sync_msg)).await?;
-                    }
+                    let messages = create_initial_synchronize(hypercore, peer_state).await;
+                    channel.send_batch(&messages).await?;
                 } else if !new_remote_public_keys.is_empty() {
                     // New peers found, return a peer event
                     return Ok(Some(PeerEvent::NewPeersBroadcasted(new_remote_public_keys)));
@@ -371,21 +375,40 @@ where
                 }
             }
             HYPERMERGE_INTERNAL_NEW_PEERS_CREATED_MSG => {
-                // Close all channels when this happens: caller will
-                // reopen channels.
-                if !channel.closed() {
-                    debug!("Closing channel id={}", channel.id());
-                    channel.close().await?;
-                    debug!("Closing succeeded for channel id={}", channel.id());
-                }
+                assert!(
+                    peer_state.is_doc,
+                    "Only doc peer should ever get new peers created messages"
+                );
+                let mut dec_state = State::from_buffer(&message.message);
+                let new_peers: NewPeersCreatedMessage = dec_state.decode(&message.message);
 
-                return Ok(Some(PeerEvent::PeerDisconnected(channel.id() as u64)));
+                // Save new peers to the peer state
+                peer_state.peer_public_keys.extend(new_peers.public_keys);
+
+                // Transmit this event forward to the protocol
+                channel
+                    .signal_local(HYPERMERGE_INTERNAL_NEW_PEERS_CREATED_MSG, message.message)
+                    .await?;
+
+                // Create new broadcast message
+                let mut messages = vec![create_broadcast_message(&peer_state)];
+
+                // If sync has not been started, start it now
+                if !peer_state.sync_received {
+                    messages.extend(create_initial_synchronize(hypercore, peer_state).await);
+                }
+                channel.send_batch(&messages).await?;
             }
             _ => {
                 panic!("Received unexpected extension message {:?}", message);
             }
         },
         Message::Close(message) => {
+            debug!(
+                "Got close from remote to channel id={}, messsage.channel={}",
+                channel.id(),
+                message.channel
+            );
             return Ok(Some(PeerEvent::PeerDisconnected(message.channel)));
         }
         _ => {
