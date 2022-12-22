@@ -17,7 +17,7 @@ anyhow = "1.0.28"
 hex = "0.4"
 async-std = { version = "1.9.0", features = ["attributes", "unstable"], optional = true }
 futures-lite = "1.12"
-async-channel = "1.7.1"
+async-channel = "1.8.0"
 wasm-bindgen-futures = { version = "0.4.33", optional = true }
 derivative = "2.2.0"
 dashmap = "5.4.0"
@@ -30,6 +30,8 @@ random-access-disk = { git = "https://github.com/ttiurani/random-access-disk", b
 sluice = "0.5.5"
 test-log = { version = "0.2.11", default-features = false, features = ["trace"] }
 tracing-subscriber = { version = "0.3.16", features = ["env-filter", "fmt"] }
+criterion = { version = "0.4", features = ["async_std"] }
+pprof = { version = "0.11.0", features = ["flamegraph", "criterion"] }
 
 [features]
 default =  ["async-std", "wasm-bindgen"]
@@ -37,3 +39,7 @@ wasm-bindgen = [
   "wasm-bindgen-futures", 
   "hypercore-protocol/wasm-bindgen"
 ]
+
+[[bench]]
+name = "three_peers_separate"
+harness = false
