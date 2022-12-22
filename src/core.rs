@@ -2,6 +2,7 @@ use async_channel::{unbounded, Receiver, Sender};
 use async_std::sync::{Arc, Mutex};
 #[cfg(not(target_arch = "wasm32"))]
 use async_std::task;
+use automerge::Change;
 use automerge::{transaction::Transactable, ObjId, ObjType, Patch, Prop, ScalarValue, Value};
 use dashmap::DashMap;
 use futures_lite::{AsyncRead, AsyncWrite, StreamExt};
@@ -9,13 +10,15 @@ use hypercore_protocol::hypercore::compact_encoding::{CompactEncoding, State};
 use hypercore_protocol::Protocol;
 use random_access_memory::RandomAccessMemory;
 use random_access_storage::RandomAccess;
+use std::collections::HashMap;
 use std::{fmt::Debug, path::PathBuf};
 use tracing::{debug, instrument};
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_futures::spawn_local;
 
 use crate::automerge::{
-    apply_changes_autocommit, init_doc_from_entries, put_scalar_autocommit, splice_text,
+    apply_entries_autocommit, init_doc_from_entries, put_scalar_autocommit, splice_text,
+    UnappliedEntries,
 };
 use crate::common::PeerEvent;
 use crate::hypercore::{discovery_key_from_public_key, on_protocol};
@@ -265,18 +268,18 @@ where
                         .await
                         .unwrap();
                 }
-                SynchronizeEvent::NewPeersBroadcasted(_) => {
-                    // TODO: ignore for now
-                }
-                SynchronizeEvent::PeersSynced(len) => {
+                SynchronizeEvent::PeerSynced(sync_info) => {
                     state_event_sender
-                        .send(StateEvent::PeersSynced(len))
+                        .send(StateEvent::PeerSynced(sync_info))
                         .await
                         .unwrap();
                 }
-                SynchronizeEvent::RemotePeerSynced() => {
+                SynchronizeEvent::RemotePeerSynced((discovery_key, synced_contiguous_length)) => {
                     state_event_sender
-                        .send(StateEvent::RemotePeerSynced())
+                        .send(StateEvent::RemotePeerSynced((
+                            discovery_key,
+                            synced_contiguous_length,
+                        )))
                         .await
                         .unwrap();
                 }
@@ -324,7 +327,7 @@ impl Hypermerge<RandomAccessMemory> {
         // Create the memory hypercore
         let (length, hypercore) = create_new_write_memory_hypercore(
             key_pair,
-            serialize_entry(&Entry::new_init_doc(data.clone())),
+            serialize_entry(&Entry::new_init_doc(peer_name, data.clone())),
         )
         .await;
         let content = DocContent::new(
@@ -359,7 +362,7 @@ impl Hypermerge<RandomAccessMemory> {
         let write_public_key = *write_key_pair.public.as_bytes();
         let (_, write_hypercore) = create_new_write_memory_hypercore(
             write_key_pair,
-            serialize_entry(&Entry::new_init_peer(doc_discovery_key)),
+            serialize_entry(&Entry::new_init_peer(peer_name, doc_discovery_key)),
         )
         .await;
 
@@ -449,16 +452,14 @@ impl Hypermerge<RandomAccessMemory> {
         hypercores.insert(write_discovery_key, Arc::new(Mutex::new(write_hypercore)));
         let mut peer_public_keys = vec![];
         for (peer_public_key, peer_discovery_key, peer_hypercore) in peer_hypercores {
-            peer_public_keys.push(peer_public_key);
             hypercores.insert(peer_discovery_key, Arc::new(Mutex::new(peer_hypercore)));
+            peer_public_keys.push(peer_public_key);
         }
-        let doc_state = DocStateWrapper::new_memory(
-            doc_public_key,
-            Some(write_public_key),
-            peer_public_keys,
-            content,
-        )
-        .await;
+        let mut doc_state =
+            DocStateWrapper::new_memory(doc_public_key, Some(write_public_key), content).await;
+        doc_state
+            .add_peer_public_keys_to_state(peer_public_keys)
+            .await;
         Self {
             hypercores: Arc::new(hypercores),
             doc_state: Arc::new(Mutex::new(doc_state)),
@@ -484,14 +485,13 @@ async fn on_peer_event_memory(
         debug!("Received event {:?}", event);
         match event {
             PeerEvent::NewPeersBroadcasted(public_keys) => {
-                let added = {
-                    // Save new keys to state
+                let changed = {
                     let mut doc_state = doc_state.lock().await;
                     doc_state
                         .add_peer_public_keys_to_state(public_keys.clone())
                         .await
                 };
-                if added {
+                if changed {
                     {
                         // Create and insert all new hypercores
                         create_and_insert_read_memory_hypercores(
@@ -510,92 +510,100 @@ async fn on_peer_event_memory(
                             .await
                             .unwrap();
                     }
-                    sync_event_sender
-                        .send(SynchronizeEvent::NewPeersBroadcasted(public_keys.len()))
-                        .await
-                        .unwrap();
                 }
             }
             PeerEvent::PeerDisconnected(_) => {
                 // This is an FYI message, just continue for now
             }
-            PeerEvent::RemotePeerSynced(_) => {
+            PeerEvent::RemotePeerSynced((discovery_key, synced_contiguous_length)) => {
                 sync_event_sender
-                    .send(SynchronizeEvent::RemotePeerSynced())
+                    .send(SynchronizeEvent::RemotePeerSynced((
+                        discovery_key,
+                        synced_contiguous_length,
+                    )))
                     .await
                     .unwrap();
             }
-            PeerEvent::PeerSyncStarted(public_key) => {
-                // Set peer to not-synced
-                let mut doc_state = doc_state.lock().await;
-                doc_state.set_synced_to_state(public_key, false).await;
-            }
-            PeerEvent::PeerSynced((public_key, synced_contiguous_length)) => {
-                let sync_info = {
-                    // Set peer to synced
+            PeerEvent::PeerSynced((discovery_key, synced_contiguous_length)) => {
+                let (peer_sync_events, patches): (Vec<SynchronizeEvent>, Vec<Patch>) = {
+                    // Sync doc state exclusively...
                     let mut doc_state = doc_state.lock().await;
-                    let sync_status_changed = doc_state.set_synced_to_state(public_key, true).await;
-                    if sync_status_changed {
-                        // Find out if now all peers are synced
-                        let peers_synced = doc_state.peers_synced();
-                        if let Some(peers_synced) = peers_synced {
-                            // All peers are synced, so it should be possible to create a coherent
-                            // document now.
-                            let mut patches = if let Some(content) = doc_state.content_mut() {
-                                let patches =
-                                    update_content(content, hypercores.clone()).await.unwrap();
-                                doc_state.persist_content().await;
-                                patches
-                            } else {
-                                let write_discovery_key = doc_state.write_discovery_key();
-                                let (content, patches) = create_content(
-                                    doc_discovery_key,
-                                    peer_name,
-                                    &write_discovery_key,
-                                    hypercores.clone(),
-                                )
-                                .await
-                                .unwrap();
-                                doc_state.set_content(content).await;
-                                patches
-                            };
-
-                            // Filter out unwatched patches
-                            let watched_ids = &doc_state.state().watched_ids;
-                            patches.retain(|patch| match patch {
-                                Patch::Put { obj, .. } => watched_ids.contains(obj),
-                                Patch::Insert { obj, .. } => watched_ids.contains(obj),
-                                Patch::Delete { obj, .. } => watched_ids.contains(obj),
-                                Patch::Increment { obj, .. } => watched_ids.contains(obj),
-                                Patch::Expose { obj, .. } => watched_ids.contains(obj),
-                                Patch::Splice { obj, .. } => watched_ids.contains(obj),
-                            });
-                            Some((peers_synced, patches))
-                        } else {
-                            None
-                        }
-                    } else {
-                        // If nothing changed, don't reannounce
-                        None
-                    }
-                };
-
-                if let Some((peers_synced, patches)) = sync_info {
-                    sync_event_sender
-                        .send(SynchronizeEvent::PeersSynced(peers_synced))
+                    let (mut patches, peer_syncs) = if let Some((content, unapplied_entries)) =
+                        doc_state.content_and_unapplied_entries_mut()
+                    {
+                        let (patches, new_peer_names, peer_syncs) = update_content(
+                            &discovery_key,
+                            synced_contiguous_length,
+                            content,
+                            hypercores.clone(),
+                            unapplied_entries,
+                        )
                         .await
                         .unwrap();
-                    if patches.len() > 0 {
-                        sync_event_sender
-                            .send(SynchronizeEvent::DocumentChanged(patches))
+                        doc_state
+                            .persist_content_and_new_peer_names(new_peer_names)
+                            .await;
+                        (patches, peer_syncs)
+                    } else {
+                        let write_discovery_key = doc_state.write_discovery_key();
+                        let unapplied_entries = doc_state.unappliend_entries_mut();
+                        if let Some((content, patches, new_peer_names, peer_syncs)) =
+                            create_content(
+                                &discovery_key,
+                                synced_contiguous_length,
+                                doc_discovery_key,
+                                peer_name,
+                                &write_discovery_key,
+                                hypercores.clone(),
+                                unapplied_entries,
+                            )
                             .await
-                            .unwrap();
-                    }
+                            .unwrap()
+                        {
+                            doc_state
+                                .set_content_and_new_peer_names(content, new_peer_names)
+                                .await;
+                            (patches, peer_syncs)
+                        } else {
+                            // Could not create content from this peer's data, needs more peers
+                            (vec![], vec![])
+                        }
+                    };
+
+                    // Filter out unwatched patches
+                    let watched_ids = &doc_state.state().watched_ids;
+                    patches.retain(|patch| match patch {
+                        Patch::Put { obj, .. } => watched_ids.contains(obj),
+                        Patch::Insert { obj, .. } => watched_ids.contains(obj),
+                        Patch::Delete { obj, .. } => watched_ids.contains(obj),
+                        Patch::Increment { obj, .. } => watched_ids.contains(obj),
+                        Patch::Expose { obj, .. } => watched_ids.contains(obj),
+                        Patch::Splice { obj, .. } => watched_ids.contains(obj),
+                    });
+
+                    let peer_synced_events: Vec<SynchronizeEvent> = peer_syncs
+                        .iter()
+                        .map(|sync| {
+                            let name = doc_state.peer_name(&sync.0);
+                            SynchronizeEvent::PeerSynced((name, sync.0.clone(), sync.1))
+                        })
+                        .collect();
+                    (peer_synced_events, patches)
+                    // ..doc state sync ready, release lock
+                };
+
+                for peer_sync_event in peer_sync_events {
+                    sync_event_sender.send(peer_sync_event).await.unwrap();
+                }
+                if patches.len() > 0 {
+                    sync_event_sender
+                        .send(SynchronizeEvent::DocumentChanged(patches))
+                        .await
+                        .unwrap();
                 }
 
                 // Finally, notify about the new sync so that other protocols can get synced as
                 // well. The message reaches the same hypercore that sent this, but is disregarded.
-                let discovery_key = discovery_key_from_public_key(&public_key);
                 {
                     let hypercore = hypercores.get_mut(&discovery_key).unwrap();
                     let mut hypercore = hypercore.lock().await;
@@ -616,82 +624,149 @@ async fn create_and_insert_read_memory_hypercores(
 ) {
     for public_key in public_keys {
         let discovery_key = discovery_key_from_public_key(&public_key);
-        let (_, hypercore) = create_new_read_memory_hypercore(&public_key).await;
-        hypercores.insert(discovery_key, Arc::new(Mutex::new(hypercore)));
+        // Make sure to insert only once even if two protocols notice the same new
+        // hypercore at the same timeusing the entry API.
+        let entry = hypercores.entry(discovery_key);
+        match entry {
+            dashmap::mapref::entry::Entry::Occupied(_) => {
+                debug!("Concurrent creating of hypercores noticed, continuing.");
+            }
+            dashmap::mapref::entry::Entry::Vacant(vacant) => {
+                let (_, hypercore) = create_new_read_memory_hypercore(&public_key).await;
+                vacant.insert(Arc::new(Mutex::new(hypercore)));
+            }
+        }
     }
 }
 
 async fn create_content<T>(
+    synced_discovery_key: &[u8; 32],
+    synced_contiguous_length: u64,
     doc_discovery_key: &[u8; 32],
     write_peer_name: &str,
     write_discovery_key: &[u8; 32],
     hypercores: Arc<DashMap<[u8; 32], Arc<Mutex<HypercoreWrapper<T>>>>>,
-) -> anyhow::Result<(DocContent, Vec<Patch>)>
+    unapplied_entries: &mut UnappliedEntries,
+) -> anyhow::Result<
+    Option<(
+        DocContent,
+        Vec<Patch>,
+        Vec<([u8; 32], String)>,
+        Vec<([u8; 32], u64)>,
+    )>,
+>
 where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send + 'static,
 {
-    // The document starts from the origin, so get that first
-    let (mut cursors, mut entries) = {
-        let origin_hypercore = hypercores.get(doc_discovery_key).unwrap();
-        let mut origin_hypercore = origin_hypercore.lock().await;
-        let entries = origin_hypercore.entries(0).await?;
-        (
-            vec![DocCursor::new(
-                doc_discovery_key.clone(),
-                entries.len() as u64,
-            )],
-            entries,
-        )
-    };
-    for kv in hypercores.iter() {
-        let discovery_key = kv.key();
-        let hypercore = kv.value();
-        if discovery_key != doc_discovery_key {
-            let mut hypercore = hypercore.lock().await;
-            let new_entries = hypercore.entries(0).await?;
-            cursors.push(DocCursor::new(
-                doc_discovery_key.clone(),
-                new_entries.len() as u64,
-            ));
-            entries.extend(new_entries);
-        }
-    }
+    // The document starts from the doc hypercore, so get that first
+    if synced_discovery_key == doc_discovery_key {
+        let entries = {
+            let doc_hypercore = hypercores.get(doc_discovery_key).unwrap();
+            let mut doc_hypercore = doc_hypercore.lock().await;
+            doc_hypercore.entries(0, synced_contiguous_length).await?
+        };
 
-    // Create DocContent from the hypercore
-    let (mut doc, data) = init_doc_from_entries(write_peer_name, write_discovery_key, entries);
-    let patches = doc.observer().take_patches();
-    Ok((DocContent::new(data, cursors, doc), patches))
+        // Create DocContent from the hypercore
+        let (mut doc, data, result) = init_doc_from_entries(
+            write_peer_name,
+            write_discovery_key,
+            synced_discovery_key,
+            entries,
+            unapplied_entries,
+        )?;
+        let cursors: Vec<DocCursor> = result
+            .iter()
+            .map(|value| DocCursor::new(value.0.clone(), value.1 .0))
+            .collect();
+        let patches = if !cursors.is_empty() {
+            doc.observer().take_patches()
+        } else {
+            vec![]
+        };
+        let new_names: Vec<([u8; 32], String)> = result
+            .iter()
+            .filter(|value| value.1 .1.is_some())
+            .map(|value| (value.0.clone(), value.1 .1.clone().unwrap()))
+            .collect();
+        let peer_syncs: Vec<([u8; 32], u64)> = result
+            .iter()
+            .map(|value| (value.0.clone(), value.1 .0))
+            .collect();
+        Ok(Some((
+            DocContent::new(data, cursors, doc),
+            patches,
+            new_names,
+            peer_syncs,
+        )))
+    } else {
+        // Got first some other peer's data, need to store it to unapplied changes
+        let hypercore = hypercores.get(synced_discovery_key).unwrap();
+        let mut hypercore = hypercore.lock().await;
+        let start_index = unapplied_entries.current_length(synced_discovery_key);
+        let entries = hypercore
+            .entries(start_index, synced_contiguous_length - start_index)
+            .await?;
+        let mut index = start_index;
+        for entry in entries {
+            unapplied_entries.add(synced_discovery_key, index, entry);
+            index += 1;
+        }
+        Ok(None)
+    }
 }
 
 async fn update_content<T>(
+    synced_discovery_key: &[u8; 32],
+    synced_contiguous_length: u64,
     content: &mut DocContent,
     hypercores: Arc<DashMap<[u8; 32], Arc<Mutex<HypercoreWrapper<T>>>>>,
-) -> anyhow::Result<Vec<Patch>>
+    unapplied_entries: &mut UnappliedEntries,
+) -> anyhow::Result<(Vec<Patch>, Vec<([u8; 32], String)>, Vec<([u8; 32], u64)>)>
 where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send + 'static,
 {
     let entries = {
-        let mut entries = vec![];
-        // TODO: This is slightly inefficient because we now go through all peers even though
-        // it should be possible for the caller to know what changed.
-        for kv in hypercores.iter() {
-            let discovery_key = kv.key();
-            let hypercore_wrapper = kv.value();
-            let mut hypercore = hypercore_wrapper.lock().await;
-            let old_length = content.cursor_length(discovery_key);
-            let new_entries = hypercore.entries(old_length).await?;
-            if !new_entries.is_empty() {
-                content.set_cursor(&discovery_key, new_entries.len() as u64);
-                entries.extend(new_entries);
-            }
-        }
-        entries
+        let hypercore = hypercores.get(synced_discovery_key).unwrap();
+        let mut hypercore = hypercore.lock().await;
+        hypercore
+            .entries(
+                content.cursor_length(synced_discovery_key),
+                synced_contiguous_length,
+            )
+            .await?
     };
-    {
+
+    let (patches, new_names, peer_syncs) = {
         let doc = content.doc.as_mut().unwrap();
-        apply_changes_autocommit(doc, entries)?;
-        Ok(doc.observer().take_patches())
+        let result = apply_entries_autocommit(
+            doc,
+            synced_discovery_key,
+            synced_contiguous_length,
+            entries,
+            unapplied_entries,
+        )?;
+        let new_names: Vec<([u8; 32], String)> = result
+            .iter()
+            .filter(|value| value.1 .1.is_some())
+            .map(|value| (value.0.clone(), value.1 .1.clone().unwrap()))
+            .collect();
+        let peer_syncs: Vec<([u8; 32], u64)> = result
+            .iter()
+            .map(|value| (value.0.clone(), value.1 .0))
+            .collect();
+        let patches = if !peer_syncs.is_empty() {
+            doc.observer().take_patches()
+        } else {
+            vec![]
+        };
+        (patches, new_names, peer_syncs)
+    };
+
+    for (discovery_key, length) in &peer_syncs[..] {
+        content.set_cursor(&discovery_key, *length);
     }
+
+    Ok((patches, new_names, peer_syncs))
 }
 
 fn serialize_entry(entry: &Entry) -> Vec<u8> {

@@ -1,5 +1,6 @@
 use automerge::ObjId;
 use std::fmt::Debug;
+use tracing::debug;
 
 use crate::{automerge::AutomergeDoc, hypercore::discovery_key_from_public_key};
 
@@ -65,11 +66,17 @@ impl DocState {
 #[derive(Clone, Debug)]
 pub(crate) struct DocPeerState {
     pub(crate) public_key: [u8; 32],
-    pub(crate) synced: bool,
+    pub(crate) discovery_key: [u8; 32],
+    pub(crate) name: Option<String>,
 }
 impl DocPeerState {
-    pub fn new(public_key: [u8; 32], synced: bool) -> Self {
-        Self { public_key, synced }
+    pub fn new(public_key: [u8; 32], name: Option<String>) -> Self {
+        let discovery_key = discovery_key_from_public_key(&public_key);
+        Self {
+            discovery_key,
+            public_key,
+            name,
+        }
     }
 }
 

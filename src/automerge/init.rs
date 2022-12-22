@@ -1,11 +1,13 @@
+use std::collections::HashMap;
+
 use automerge::{
     transaction::{CommitOptions, Transactable},
-    ActorId, AutoCommit, Automerge, AutomergeError, Change, Prop, ScalarValue, VecOpObserver, ROOT,
+    ActorId, AutoCommit, Automerge, AutomergeError, Prop, ScalarValue, VecOpObserver, ROOT,
 };
 
 use crate::common::entry::{Entry, EntryType};
 
-use super::AutomergeDoc;
+use super::{apply_entries_autocommit, AutomergeDoc, UnappliedEntries};
 
 /// Convenience method to initialize an Automerge document with root scalars
 pub fn init_doc_with_root_scalars<P: Into<Prop>, V: Into<ScalarValue>>(
@@ -33,24 +35,45 @@ pub fn init_doc_with_root_scalars<P: Into<Prop>, V: Into<ScalarValue>>(
 }
 
 pub(crate) fn init_doc_from_entries(
-    peer_name: &str,
-    discovery_key: &[u8; 32],
-    entries: Vec<Entry>,
-) -> (AutomergeDoc, Vec<u8>) {
-    let mut doc = init_doc_from_data(peer_name, discovery_key, &entries[0].data);
-    let changes: Vec<Change> = entries
-        .iter()
-        .skip(1)
-        .filter(|entry| entry.entry_type != EntryType::InitPeer)
-        .map(|entry| Change::from_bytes(entry.data.clone()).unwrap())
-        .collect();
-
-    doc.apply_changes(changes).unwrap();
+    write_peer_name: &str,
+    write_discovery_key: &[u8; 32],
+    synced_discovery_key: &[u8; 32],
+    mut entries: Vec<Entry>,
+    unapplied_entries: &mut UnappliedEntries,
+) -> anyhow::Result<(
+    AutomergeDoc,
+    Vec<u8>,
+    HashMap<[u8; 32], (u64, Option<String>)>,
+)> {
+    let contiguous_length = entries.len() as u64;
+    let init_entry = entries.remove(0);
+    assert!(init_entry.entry_type == EntryType::InitDoc);
+    let peer_name = init_entry.peer_name.unwrap();
+    let mut doc = init_doc_from_data(write_peer_name, write_discovery_key, &init_entry.data);
+    let mut result = apply_entries_autocommit(
+        &mut doc,
+        &synced_discovery_key,
+        contiguous_length,
+        entries,
+        unapplied_entries,
+    )?;
+    if let Some(value) = result.get_mut(synced_discovery_key) {
+        value.1 = Some(peer_name);
+    } else {
+        result.insert(
+            synced_discovery_key.clone(),
+            (contiguous_length, Some(peer_name)),
+        );
+    }
     let data = doc.save();
-    (doc, data)
+    Ok((doc, data, result))
 }
 
-fn init_doc_from_data(peer_name: &str, discovery_key: &[u8; 32], data: &Vec<u8>) -> AutomergeDoc {
+pub(super) fn init_doc_from_data(
+    peer_name: &str,
+    discovery_key: &[u8; 32],
+    data: &Vec<u8>,
+) -> AutomergeDoc {
     let mut actor_id: Vec<u8> = peer_name.as_bytes().to_vec();
     actor_id.extend_from_slice(discovery_key);
     let doc = AutoCommit::load(data).unwrap();

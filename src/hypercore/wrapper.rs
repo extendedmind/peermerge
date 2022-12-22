@@ -125,11 +125,10 @@ where
         Ok(())
     }
 
-    pub(crate) async fn entries(&mut self, index: u64) -> anyhow::Result<Vec<Entry>> {
+    pub(crate) async fn entries(&mut self, index: u64, len: u64) -> anyhow::Result<Vec<Entry>> {
         let mut hypercore = self.hypercore.lock().await;
-        let length = hypercore.info().contiguous_length;
         let mut entries: Vec<Entry> = vec![];
-        for i in index..length {
+        for i in index..len {
             let data = hypercore.get(i).await.unwrap().unwrap();
             let mut dec_state = State::from_buffer(&data);
             let entry: Entry = dec_state.decode(&data);

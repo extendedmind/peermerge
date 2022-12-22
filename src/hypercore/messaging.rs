@@ -125,15 +125,13 @@ pub(super) async fn on_message<T>(
 where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send,
 {
-    debug!("Processing");
+    debug!("Message on channel={}", channel.id(),);
     match message {
         Message::Synchronize(message) => {
             let length_changed = message.length != peer_state.remote_length;
-            let (info, public_key) = {
+            let info = {
                 let hypercore = hypercore.lock().await;
-                let info = hypercore.info();
-                let public_key: [u8; 32] = *hypercore.key_pair().public.as_bytes();
-                (info, public_key)
+                hypercore.info()
             };
             let same_fork = message.fork == info.fork;
 
@@ -161,7 +159,7 @@ where
                 messages.push(Message::Synchronize(msg));
             }
 
-            let peer_sync_started: Option<PeerEvent> = if peer_state.remote_length > info.length
+            if peer_state.remote_length > info.length
                 && peer_state.length_acked == info.length
                 && length_changed
             {
@@ -182,13 +180,10 @@ where
                 };
                 peer_state.inflight.add(&mut request);
                 messages.push(Message::Request(request));
-                Some(PeerEvent::PeerSyncStarted(public_key))
-            } else {
-                None
-            };
+            }
 
             channel.send_batch(&messages).await?;
-            return Ok(peer_sync_started);
+            return Ok(None);
         }
         Message::Request(message) => {
             let (info, proof) = {
@@ -223,10 +218,9 @@ where
                 let request = next_request(&mut hypercore, peer_state).await?;
                 let peer_synced: Option<PeerEvent> =
                     if new_info.contiguous_length == new_info.length {
-                        let public_key: [u8; 32] = *hypercore.key_pair().public.as_bytes();
                         peer_state.synced_contiguous_length = new_info.contiguous_length;
                         Some(PeerEvent::PeerSynced((
-                            public_key,
+                            *channel.discovery_key(),
                             peer_state.synced_contiguous_length,
                         )))
                     } else {
@@ -288,9 +282,10 @@ where
                         && peer_state.remote_length == message.length
                     {
                         // The peer has advertised that they now have what we have
-                        Some(PeerEvent::RemotePeerSynced(
-                            *hypercore.key_pair().public.as_bytes(),
-                        ))
+                        Some(PeerEvent::RemotePeerSynced((
+                            *channel.discovery_key(),
+                            message.length,
+                        )))
                     } else {
                         // If the other side advertises more than we have, and more than the peer length,
                         // we have recorded, then we need to request the rest of the blocks.
@@ -299,15 +294,9 @@ where
                             peer_state.remote_length = message.length;
                             if let Some(request) = next_request(&mut hypercore, peer_state).await? {
                                 channel.send(Message::Request(request)).await?;
-                                Some(PeerEvent::PeerSyncStarted(
-                                    *hypercore.key_pair().public.as_bytes(),
-                                ))
-                            } else {
-                                None
                             }
-                        } else {
-                            None
                         }
+                        None
                     }
                 } else {
                     // TODO: For now, let's just ignore messages that don't broadcast
@@ -404,11 +393,6 @@ where
             }
         },
         Message::Close(message) => {
-            debug!(
-                "Got close from remote to channel id={}, messsage.channel={}",
-                channel.id(),
-                message.channel
-            );
             return Ok(Some(PeerEvent::PeerDisconnected(message.channel)));
         }
         _ => {

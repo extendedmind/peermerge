@@ -108,23 +108,28 @@ impl CompactEncoding<DocState> for State {
 }
 
 impl CompactEncoding<DocPeerState> for State {
-    fn preencode(&mut self, _value: &DocPeerState) {
-        self.end += 32 + 1;
+    fn preencode(&mut self, value: &DocPeerState) {
+        self.end += 32;
+        if let Some(name) = &value.name {
+            self.preencode(name);
+        }
     }
 
     fn encode(&mut self, value: &DocPeerState, buffer: &mut [u8]) {
         self.encode_fixed_32(&value.public_key, buffer);
-        let synced: u8 = if value.synced { 1 } else { 0 };
-        self.encode(&synced, buffer);
+        if let Some(name) = &value.name {
+            self.encode(name, buffer);
+        }
     }
 
     fn decode(&mut self, buffer: &[u8]) -> DocPeerState {
         let public_key: [u8; 32] = self.decode_fixed_32(buffer).to_vec().try_into().unwrap();
-        let synced: u8 = self.decode(buffer);
-        DocPeerState {
-            public_key,
-            synced: synced != 0,
-        }
+        let name: Option<String> = if self.start < self.end {
+            Some(self.decode(buffer))
+        } else {
+            None
+        };
+        DocPeerState::new(public_key, name)
     }
 }
 
@@ -248,23 +253,30 @@ impl CompactEncoding<Entry> for State {
         self.preencode(&value.version);
         self.preencode(&(value.entry_type as u8));
         self.preencode(&value.data);
+        if let Some(peer_name) = &value.peer_name {
+            self.preencode(peer_name);
+        }
     }
 
     fn encode(&mut self, value: &Entry, buffer: &mut [u8]) {
         self.encode(&value.version, buffer);
         self.encode(&(value.entry_type as u8), buffer);
         self.encode(&value.data, buffer);
+        if let Some(peer_name) = &value.peer_name {
+            self.encode(peer_name, buffer);
+        }
     }
 
     fn decode(&mut self, buffer: &[u8]) -> Entry {
         let version: u8 = self.decode(buffer);
         let entry_type: u8 = self.decode(buffer);
         let data: Vec<u8> = self.decode(buffer);
-        Entry {
-            version,
-            entry_type: entry_type.try_into().unwrap(),
-            data,
-        }
+        let peer_name: Option<String> = if self.start < self.end {
+            Some(self.decode(buffer))
+        } else {
+            None
+        };
+        Entry::new(version, entry_type.try_into().unwrap(), peer_name, data)
     }
 }
 

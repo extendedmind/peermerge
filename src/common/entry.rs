@@ -1,5 +1,7 @@
 use std::convert::TryFrom;
 
+use automerge::Change;
+
 /// Type of entry stored to a hypercore.
 #[derive(Copy, Clone, Debug, PartialEq)]
 #[repr(u8)]
@@ -26,28 +28,52 @@ impl TryFrom<u8> for EntryType {
 pub(crate) struct Entry {
     pub(crate) version: u8,
     pub(crate) entry_type: EntryType,
+    pub(crate) peer_name: Option<String>,
     pub(crate) data: Vec<u8>,
+    pub(crate) change: Option<Change>,
 }
 impl Entry {
-    pub fn new_init_doc(data: Vec<u8>) -> Self {
-        Self {
-            version: 1,
-            entry_type: EntryType::InitDoc,
-            data,
-        }
+    pub fn new_init_doc(peer_name: &str, data: Vec<u8>) -> Self {
+        Self::new(1, EntryType::InitDoc, Some(peer_name.to_string()), data)
     }
-    pub fn new_init_peer(discovery_key: [u8; 32]) -> Self {
-        Self {
-            version: 1,
-            entry_type: EntryType::InitPeer,
-            data: discovery_key.to_vec(),
-        }
+
+    pub fn new_init_peer(peer_name: &str, discovery_key: [u8; 32]) -> Self {
+        Self::new(
+            1,
+            EntryType::InitPeer,
+            Some(peer_name.to_string()),
+            discovery_key.to_vec(),
+        )
     }
-    pub fn new_change(data: Vec<u8>) -> Self {
+
+    pub fn new_change(mut change: Change) -> Self {
+        let data = change.bytes().to_vec();
         Self {
             version: 1,
             entry_type: EntryType::Change,
+            peer_name: None,
             data,
+            change: Some(change),
+        }
+    }
+
+    pub fn new(
+        version: u8,
+        entry_type: EntryType,
+        peer_name: Option<String>,
+        data: Vec<u8>,
+    ) -> Self {
+        let change: Option<Change> = if entry_type == EntryType::Change {
+            Some(Change::from_bytes(data.clone()).unwrap())
+        } else {
+            None
+        };
+        Self {
+            version,
+            entry_type,
+            peer_name,
+            data,
+            change,
         }
     }
 }

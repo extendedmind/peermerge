@@ -132,7 +132,7 @@ async fn process_joiner_state_event(
     merge_result: Arc<Mutex<ProtocolThreeWritersResult>>,
     append_sync: Arc<(Mutex<bool>, Condvar)>,
 ) -> anyhow::Result<()> {
-    let mut peers_synced = false;
+    let mut creator_synced = false;
     let mut text_id: Option<ObjId> = None;
     let mut document_changes: Vec<Vec<Patch>> = vec![];
     while let Some(event) = joiner_state_event_receiver.next().await {
@@ -142,9 +142,9 @@ async fn process_joiner_state_event(
             document_changes.len()
         );
         match event {
-            StateEvent::PeersSynced(len) => {
-                assert!(len == 1 || len == 2);
-                if !peers_synced {
+            StateEvent::PeerSynced((name, ..)) => {
+                if !creator_synced {
+                    assert_eq!(name, "creator");
                     let (_value, local_texts_id) = hypermerge.get(ROOT, "texts").await?.unwrap();
                     let (_value, local_text_id) =
                         hypermerge.get(&local_texts_id, "text").await?.unwrap();
@@ -153,10 +153,12 @@ async fn process_joiner_state_event(
                     hypermerge
                         .watch(vec![local_texts_id, text_id.clone().unwrap()])
                         .await;
+                    creator_synced = true;
+                } else {
+                    assert!(name == "creator" || name == "latecomer");
                 }
-                peers_synced = true;
             }
-            StateEvent::RemotePeerSynced() => {}
+            StateEvent::RemotePeerSynced(..) => {}
             StateEvent::DocumentChanged(patches) => {
                 if document_changes.len() == 0 {
                     assert_eq!(patches.len(), 5); // "Hello" has 5 chars
@@ -254,10 +256,14 @@ async fn process_creator_state_events(
         );
         let text_id = text_id.clone();
         match event {
-            StateEvent::PeersSynced(len) => {
-                assert_eq!(len, if latecomer_attached { 2 } else { 1 });
+            StateEvent::PeerSynced((name, ..)) => {
+                if latecomer_attached {
+                    assert!(name == "joiner" || name == "latecomer");
+                } else {
+                    assert_eq!(name, "joiner");
+                }
             }
-            StateEvent::RemotePeerSynced() => {
+            StateEvent::RemotePeerSynced(..) => {
                 if !remote_peer_synced {
                     hypermerge
                         .splice_text(&text_id, 0, 0, "Hello")
@@ -392,6 +398,8 @@ async fn process_latecomer_state_event(
 ) -> anyhow::Result<()> {
     let mut text_id: Option<ObjId> = None;
     let mut document_changes: Vec<Vec<Patch>> = vec![];
+    let mut creator_synced = false;
+    let mut joiner_synced = false;
     while let Some(event) = latecomer_state_event_receiver.next().await {
         info!(
             "Received event {:?}, document_changes={}",
@@ -399,26 +407,33 @@ async fn process_latecomer_state_event(
             document_changes.len()
         );
         match event {
-            StateEvent::PeersSynced(len) => {
-                assert_eq!(len, 2);
-                let (_value, local_texts_id) = hypermerge.get(ROOT, "texts").await?.unwrap();
-                let (_value, local_text_id) =
-                    hypermerge.get(&local_texts_id, "text").await?.unwrap();
-                assert_text_equals_either(
-                    &hypermerge,
-                    &local_text_id,
-                    "HellXXYYworld!",
-                    "HellYYXXworld!",
-                )
-                .await;
-                text_id = Some(local_text_id.clone());
-                hypermerge
-                    .watch(vec![local_texts_id, text_id.clone().unwrap()])
+            StateEvent::PeerSynced((name, ..)) => {
+                assert!(name == "creator" || name == "joiner");
+                if name == "creator" {
+                    creator_synced = true;
+                } else if name == "joiner" {
+                    joiner_synced = true;
+                }
+                if creator_synced && joiner_synced {
+                    let (_value, local_texts_id) = hypermerge.get(ROOT, "texts").await?.unwrap();
+                    let (_value, local_text_id) =
+                        hypermerge.get(&local_texts_id, "text").await?.unwrap();
+                    assert_text_equals_either(
+                        &hypermerge,
+                        &local_text_id,
+                        "HellXXYYworld!",
+                        "HellYYXXworld!",
+                    )
                     .await;
-                // Make one final change and see that it propagates through to the creator
-                hypermerge.splice_text(&local_text_id, 13, 0, "ZZ").await?;
+                    text_id = Some(local_text_id.clone());
+                    hypermerge
+                        .watch(vec![local_texts_id, text_id.clone().unwrap()])
+                        .await;
+                    // Make one final change and see that it propagates through to the creator
+                    hypermerge.splice_text(&local_text_id, 13, 0, "ZZ").await?;
+                }
             }
-            StateEvent::RemotePeerSynced() => {}
+            StateEvent::RemotePeerSynced(..) => {}
             StateEvent::DocumentChanged(patches) => {
                 if document_changes.len() == 0 {
                     assert_eq!(patches.len(), 1); // Two local additions as one Splice
