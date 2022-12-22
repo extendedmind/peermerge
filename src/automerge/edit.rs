@@ -131,8 +131,9 @@ pub(crate) fn apply_entries_autocommit(
     let mut result: HashMap<[u8; 32], (u64, Option<String>)> = HashMap::new();
     let mut changes_to_apply: Vec<Change> = vec![];
     let len = entries.len() as u64;
-    let mut index = contiguous_length - len;
+    let mut length = contiguous_length - len;
     for entry in entries {
+        length += 1;
         match entry.entry_type {
             EntryType::Change => {
                 let change = entry.change.as_ref().unwrap();
@@ -143,28 +144,27 @@ pub(crate) fn apply_entries_autocommit(
                 {
                     changes_to_apply.push(change.clone());
                     if let Some(value) = result.get_mut(discovery_key) {
-                        value.0 = index;
+                        value.0 = length;
                     } else {
-                        result.insert(discovery_key.clone(), (index, None));
+                        result.insert(discovery_key.clone(), (length, None));
                     }
                 } else {
                     // All of the deps of this change are not in the doc, add to unapplied
                     // entries.
-                    unapplied_entries.add(discovery_key, index, entry);
+                    unapplied_entries.add(discovery_key, length, entry);
                 };
             }
             EntryType::InitPeer => {
                 let peer_name = entry.peer_name.unwrap();
                 if let Some(value) = result.get_mut(discovery_key) {
-                    value.0 = index;
+                    value.0 = length;
                     value.1 = Some(peer_name);
                 } else {
-                    result.insert(discovery_key.clone(), (index, Some(peer_name)));
+                    result.insert(discovery_key.clone(), (length, Some(peer_name)));
                 }
             }
             _ => panic!("Unexpected entry {:?}", entry),
         }
-        index += 1;
     }
 
     // Consolidate unapplied entries and add them to changes and result
