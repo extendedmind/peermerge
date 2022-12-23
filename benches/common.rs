@@ -66,15 +66,10 @@ pub async fn setup_hypermerge_mesh(
                 }
                 _ => {}
             }
-            println!(
-                "RES {:?}, rsr={}, sr={}",
-                event, remote_sync_remaining, sync_remaining
-            );
             if sync_remaining == 0 && remote_sync_remaining == 0 {
                 break;
             }
         }
-        println!("------------- FINISHED WITH PEER {}", i);
         senders.push(append_index_sender);
     }
 
