@@ -62,7 +62,7 @@ where
         doc_state.watch(ids);
     }
 
-    #[instrument(skip(self, obj, prop), fields(obj = obj.as_ref().to_string()))]
+    #[instrument(skip(self, obj, prop), fields(obj = obj.as_ref().to_string(), peer_name = self.peer_name))]
     pub async fn get<O: AsRef<ObjId>, P: Into<Prop>>(
         &self,
         obj: O,
@@ -94,7 +94,7 @@ where
         Ok(result)
     }
 
-    #[instrument(skip(self, obj), fields(obj = obj.as_ref().to_string()))]
+    #[instrument(skip(self, obj), fields(obj = obj.as_ref().to_string(), peer_name = self.peer_name))]
     pub async fn realize_text<O: AsRef<ObjId>>(&self, obj: O) -> anyhow::Result<Option<String>> {
         let doc_state = &self.doc_state;
         let result = {
@@ -131,7 +131,7 @@ where
         Ok(result)
     }
 
-    #[instrument(skip(self, obj, prop), fields(obj = obj.as_ref().to_string()))]
+    #[instrument(skip(self, obj, prop), fields(obj = obj.as_ref().to_string(), peer_name = self.peer_name))]
     pub async fn put_object<O: AsRef<ObjId>, P: Into<Prop>>(
         &mut self,
         obj: O,
@@ -163,7 +163,7 @@ where
         Ok(id)
     }
 
-    #[instrument(skip(self, obj, prop, value), fields(obj = obj.as_ref().to_string()))]
+    #[instrument(skip(self, obj, prop, value), fields(obj = obj.as_ref().to_string(), peer_name = self.peer_name))]
     pub async fn put_scalar<O: AsRef<ObjId>, P: Into<Prop>, V: Into<ScalarValue>>(
         &mut self,
         obj: O,
@@ -194,7 +194,7 @@ where
         Ok(())
     }
 
-    #[instrument(skip(self, obj), fields(obj = obj.as_ref().to_string()))]
+    #[instrument(skip(self, obj), fields(obj = obj.as_ref().to_string(), peer_name = self.peer_name))]
     pub async fn splice_text<O: AsRef<ObjId>>(
         &mut self,
         obj: O,
@@ -482,14 +482,12 @@ async fn on_peer_event_memory(
                 // This is an FYI message, just continue for now
             }
             PeerEvent::RemotePeerSynced((discovery_key, synced_contiguous_length)) => {
-                println!("### BEFORE");
                 state_event_sender
                     .unbounded_send(StateEvent::RemotePeerSynced((
                         discovery_key,
                         synced_contiguous_length,
                     )))
                     .unwrap();
-                println!("/// AFTER");
             }
             PeerEvent::PeerSynced((discovery_key, synced_contiguous_length)) => {
                 let (peer_sync_events, patches): (Vec<StateEvent>, Vec<Patch>) = {

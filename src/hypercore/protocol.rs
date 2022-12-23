@@ -64,7 +64,7 @@ where
                             unbound_discovery_keys.push(dkey);
                         }
                     }
-                    Event::Channel(channel) => {
+                    Event::Channel(mut channel) => {
                         debug!("Event:Channel: id={}", channel.id());
                         let discovery_key = channel.discovery_key();
                         if let Some(hypercore) = hypercores.get(discovery_key) {
@@ -72,9 +72,13 @@ where
                             let (write_public_key, peer_public_keys) =
                                 public_keys(doc_state.clone()).await;
                             let is_doc_channel = discovery_key == &doc_discovery_key;
+                            let channel_receiver = channel.take_receiver().unwrap();
+                            let channel_sender = channel.local_sender();
                             hypercore.on_channel(
                                 is_doc_channel,
                                 channel,
+                                channel_receiver,
+                                channel_sender,
                                 write_public_key,
                                 peer_public_keys,
                                 peer_event_sender,

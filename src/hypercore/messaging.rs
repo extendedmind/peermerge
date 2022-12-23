@@ -341,6 +341,7 @@ where
                     let hypercore = hypercore.lock().await;
                     hypercore.info()
                 };
+
                 if info.contiguous_length >= length {
                     let range_msg = Range {
                         drop: false,

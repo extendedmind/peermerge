@@ -1,11 +1,11 @@
 use anyhow::Result;
 use async_std::sync::{Arc, Mutex};
-use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender};
+use futures::channel::mpsc::UnboundedSender;
 use futures::stream::StreamExt;
-use hypercore_protocol::{hypercore::Hypercore, Channel, Message};
+use hypercore_protocol::{hypercore::Hypercore, Channel, ChannelReceiver, Message};
 use random_access_storage::RandomAccess;
 use std::fmt::Debug;
-use tracing::{debug, instrument, warn};
+use tracing::{debug, instrument};
 
 use super::{
     messaging::{create_broadcast_message, create_initial_synchronize},
@@ -18,7 +18,7 @@ pub(super) async fn on_peer<T>(
     mut hypercore: Arc<Mutex<Hypercore<T>>>,
     mut peer_state: PeerState,
     mut channel: Channel,
-    mut internal_message_receiver: UnboundedReceiver<Message>,
+    mut channel_receiver: ChannelReceiver<Message>,
     peer_event_sender: &mut UnboundedSender<PeerEvent>,
 ) -> Result<()>
 where
@@ -30,10 +30,7 @@ where
 
     // Start listening on incoming messages or internal messages
     debug!("Start listening on channel messages");
-    while let Some(message) = futures::stream::select(&mut channel, &mut internal_message_receiver)
-        .next()
-        .await
-    {
+    while let Some(message) = channel_receiver.next().await {
         let exit = process_message(
             message,
             &mut hypercore,
@@ -55,7 +52,7 @@ pub(super) async fn on_doc_peer<T>(
     mut hypercore: Arc<Mutex<Hypercore<T>>>,
     mut peer_state: PeerState,
     mut channel: Channel,
-    mut internal_message_receiver: UnboundedReceiver<Message>,
+    mut channel_receiver: ChannelReceiver<Message>,
     peer_event_sender: &mut UnboundedSender<PeerEvent>,
 ) -> Result<()>
 where
@@ -67,10 +64,7 @@ where
 
     // Start listening on incoming messages or internal messages
     debug!("Start listening on doc channel messages");
-    while let Some(message) = futures::stream::select(&mut channel, &mut internal_message_receiver)
-        .next()
-        .await
-    {
+    while let Some(message) = channel_receiver.next().await {
         let exit = process_message(
             message,
             &mut hypercore,

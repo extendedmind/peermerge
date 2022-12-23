@@ -7,7 +7,7 @@ use hypercore_protocol::{
         compact_encoding::{CompactEncoding, State},
         Hypercore,
     },
-    Channel, Message,
+    Channel, ChannelReceiver, ChannelSender, Message,
 };
 #[cfg(not(target_arch = "wasm32"))]
 use random_access_disk::RandomAccessDisk;
@@ -35,7 +35,7 @@ where
 {
     pub(super) public_key: [u8; 32],
     pub(super) hypercore: Arc<Mutex<Hypercore<T>>>,
-    senders: Vec<UnboundedSender<Message>>,
+    channel_senders: Vec<ChannelSender<Message>>,
     corked: bool,
     message_queue: Vec<Message>,
 }
@@ -47,7 +47,7 @@ impl HypercoreWrapper<RandomAccessDisk> {
         HypercoreWrapper {
             public_key,
             hypercore: Arc::new(Mutex::new(hypercore)),
-            senders: vec![],
+            channel_senders: vec![],
             corked: false,
             message_queue: vec![],
         }
@@ -60,7 +60,7 @@ impl HypercoreWrapper<RandomAccessMemory> {
         HypercoreWrapper {
             public_key,
             hypercore: Arc::new(Mutex::new(hypercore)),
-            senders: vec![],
+            channel_senders: vec![],
             corked: false,
             message_queue: vec![],
         }
@@ -76,10 +76,9 @@ where
             let mut hypercore = self.hypercore.lock().await;
             hypercore.append(data).await?
         };
-        if self.senders.len() > 0 {
+        if self.channel_senders.len() > 0 {
             let message = create_internal_append_message(outcome.length);
             self.notify_listeners(&message).await?;
-        } else {
         }
         Ok(outcome.length)
     }
@@ -88,8 +87,10 @@ where
         &mut self,
         contiguous_length: u64,
     ) -> anyhow::Result<()> {
-        let message = create_internal_peer_synced_message(contiguous_length);
-        self.notify_listeners(&message).await?;
+        if self.channel_senders.len() > 0 {
+            let message = create_internal_peer_synced_message(contiguous_length);
+            self.notify_listeners(&message).await?;
+        }
         Ok(())
     }
 
@@ -97,8 +98,10 @@ where
         &mut self,
         public_keys: Vec<[u8; 32]>,
     ) -> anyhow::Result<()> {
-        let message = create_internal_new_peers_created(public_keys);
-        self.notify_listeners(&message).await?;
+        if self.channel_senders.len() > 0 {
+            let message = create_internal_new_peers_created(public_keys);
+            self.notify_listeners(&message).await?;
+        }
         Ok(())
     }
 
@@ -146,15 +149,17 @@ where
         &mut self,
         is_doc: bool,
         channel: Channel,
+        channel_receiver: ChannelReceiver<Message>,
+        channel_sender: ChannelSender<Message>,
         write_public_key: Option<[u8; 32]>,
         peer_public_keys: Vec<[u8; 32]>,
         peer_event_sender: &mut UnboundedSender<PeerEvent>,
     ) {
         debug!("Processing channel id={}", channel.id(),);
+        self.channel_senders.push(channel_sender);
         let peer_state = PeerState::new(is_doc, write_public_key, peer_public_keys);
         let hypercore = self.hypercore.clone();
         let mut peer_event_sender_for_task = peer_event_sender.clone();
-        let internal_message_receiver = self.listen();
         let task_span = tracing::debug_span!("call_on_peer").or_current();
         #[cfg(not(target_arch = "wasm32"))]
         task::spawn(async move {
@@ -164,7 +169,7 @@ where
                     hypercore,
                     peer_state,
                     channel,
-                    internal_message_receiver,
+                    channel_receiver,
                     &mut peer_event_sender_for_task,
                 )
                 .await
@@ -174,7 +179,7 @@ where
                     hypercore,
                     peer_state,
                     channel,
-                    internal_message_receiver,
+                    channel_receiver,
                     &mut peer_event_sender_for_task,
                 )
                 .await
@@ -208,22 +213,15 @@ where
         });
     }
 
-    fn listen(&mut self) -> UnboundedReceiver<Message> {
-        let (sender, receiver): (UnboundedSender<Message>, UnboundedReceiver<Message>) =
-            unbounded();
-        self.senders.push(sender);
-        receiver
-    }
-
     async fn notify_listeners(&mut self, message: &Message) -> anyhow::Result<()> {
         let mut closed_indices: Vec<usize> = vec![];
-        for i in 0..self.senders.len() {
-            if self.senders[i].is_closed() {
+        for i in 0..self.channel_senders.len() {
+            if self.channel_senders[i].is_closed() {
                 closed_indices.push(i);
             } else {
                 let message = message.clone();
                 if !self.corked {
-                    self.senders[i].unbounded_send(message)?;
+                    self.channel_senders[i].send(message).await?;
                 } else {
                     self.message_queue.push(message);
                 }
@@ -232,7 +230,7 @@ where
         closed_indices.sort();
         closed_indices.reverse();
         for i in closed_indices {
-            self.senders.remove(i);
+            self.channel_senders.remove(i);
         }
         Ok(())
     }
