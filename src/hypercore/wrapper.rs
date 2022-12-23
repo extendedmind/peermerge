@@ -1,7 +1,7 @@
-use async_channel::{unbounded, Receiver, Sender};
 use async_std::sync::{Arc, Mutex};
 #[cfg(not(target_arch = "wasm32"))]
 use async_std::task;
+use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use hypercore_protocol::{
     hypercore::{
         compact_encoding::{CompactEncoding, State},
@@ -35,7 +35,7 @@ where
 {
     pub(super) public_key: [u8; 32],
     pub(super) hypercore: Arc<Mutex<Hypercore<T>>>,
-    senders: Vec<Sender<Message>>,
+    senders: Vec<UnboundedSender<Message>>,
     corked: bool,
     message_queue: Vec<Message>,
 }
@@ -148,7 +148,7 @@ where
         channel: Channel,
         write_public_key: Option<[u8; 32]>,
         peer_public_keys: Vec<[u8; 32]>,
-        peer_event_sender: &mut Sender<PeerEvent>,
+        peer_event_sender: &mut UnboundedSender<PeerEvent>,
     ) {
         debug!("Processing channel id={}", channel.id(),);
         let peer_state = PeerState::new(is_doc, write_public_key, peer_public_keys);
@@ -208,8 +208,9 @@ where
         });
     }
 
-    fn listen(&mut self) -> Receiver<Message> {
-        let (sender, receiver): (Sender<Message>, Receiver<Message>) = unbounded();
+    fn listen(&mut self) -> UnboundedReceiver<Message> {
+        let (sender, receiver): (UnboundedSender<Message>, UnboundedReceiver<Message>) =
+            unbounded();
         self.senders.push(sender);
         receiver
     }
@@ -222,7 +223,7 @@ where
             } else {
                 let message = message.clone();
                 if !self.corked {
-                    self.senders[i].send(message).await?;
+                    self.senders[i].unbounded_send(message)?;
                 } else {
                     self.message_queue.push(message);
                 }

@@ -1,8 +1,8 @@
 use anyhow::Result;
 use async_std::net::{TcpListener, TcpStream};
 use async_std::task;
-use futures_lite::stream::StreamExt;
-use futures_lite::Future;
+use futures::stream::StreamExt;
+use futures::Future;
 
 pub async fn tcp_server<F, C>(
     url: &str,

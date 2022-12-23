@@ -1,16 +1,21 @@
-use async_channel::{bounded, unbounded, Receiver, Sender};
-use futures_lite::stream::StreamExt;
+use futures::channel::mpsc::{
+    channel, unbounded, Receiver, Sender, UnboundedReceiver, UnboundedSender,
+};
+use futures::select;
+use futures::stream::StreamExt;
 use hypercore_protocol::{Duplex, Protocol, ProtocolBuilder};
-use hypermerge::{Hypermerge, StateEvent, SynchronizeEvent, ROOT};
+use hypermerge::{Hypermerge, StateEvent, ROOT};
 use random_access_memory::RandomAccessMemory;
 
-pub async fn setup_hypermerge_mesh(peers: usize) -> (Vec<Sender<u64>>, Vec<Receiver<StateEvent>>) {
+pub async fn setup_hypermerge_mesh(
+    peers: usize,
+) -> (Vec<Sender<u64>>, Vec<UnboundedReceiver<StateEvent>>) {
     let mut hypermerge_creator: Hypermerge<RandomAccessMemory> =
         Hypermerge::create_doc_memory("p1", vec![("version", 1)]).await;
     hypermerge_creator.watch(vec![ROOT]).await;
     let (creator_state_event_sender, mut creator_state_event_receiver): (
-        Sender<StateEvent>,
-        Receiver<StateEvent>,
+        UnboundedSender<StateEvent>,
+        UnboundedReceiver<StateEvent>,
     ) = unbounded();
     let mut receivers = Vec::with_capacity(peers);
     let mut senders = Vec::with_capacity(peers);
@@ -33,8 +38,8 @@ pub async fn setup_hypermerge_mesh(peers: usize) -> (Vec<Sender<u64>>, Vec<Recei
         let mut hypermerge_peer = Hypermerge::register_doc_memory(&peer_name, &doc_url).await;
         hypermerge_peer.watch(vec![ROOT]).await;
         let (peer_state_event_sender, mut peer_state_event_receiver): (
-            Sender<StateEvent>,
-            Receiver<StateEvent>,
+            UnboundedSender<StateEvent>,
+            UnboundedReceiver<StateEvent>,
         ) = unbounded();
 
         let hypermerge_peer_for_task = hypermerge_peer.clone();
@@ -47,7 +52,7 @@ pub async fn setup_hypermerge_mesh(peers: usize) -> (Vec<Sender<u64>>, Vec<Recei
             .await;
         });
 
-        let (append_index_sender, append_index_receiver): (Sender<u64>, Receiver<u64>) = bounded(1);
+        let (append_index_sender, append_index_receiver): (Sender<u64>, Receiver<u64>) = channel(1);
         async_std::task::spawn(async move {
             append_value(&peer_name, hypermerge_peer, append_index_receiver).await;
         });
@@ -55,34 +60,25 @@ pub async fn setup_hypermerge_mesh(peers: usize) -> (Vec<Sender<u64>>, Vec<Recei
         // TODO: Check what these should be for peers > 3
         let mut sync_remaining = i + 1;
         let mut remote_sync_remaining = if i == 1 { 2 } else { 5 };
-        let mut events = futures_lite::stream::race(
-            &mut creator_state_event_receiver,
-            &mut peer_state_event_receiver,
-        );
-        while let Some(event) = events.next().await {
-            println!("GOT EVENT {:?}", event);
-            match event {
-                StateEvent::RemotePeerSynced(..) => {
-                    remote_sync_remaining -= 1;
-                    if sync_remaining == 0 && remote_sync_remaining == 0 {
-                        break;
-                    }
+
+        while sync_remaining > 0 || remote_sync_remaining > 0 {
+            select!(
+                event = creator_state_event_receiver.next() => {
+                    println!("CREATOR RES {:?}", event);
+                    handle_event(&event.unwrap(), &mut sync_remaining, &mut remote_sync_remaining);
+                },
+                event = peer_state_event_receiver.next() => {
+                    println!("PEER {} RES {:?}", i, event);
+                    handle_event(&event.unwrap(), &mut sync_remaining, &mut remote_sync_remaining);
                 }
-                StateEvent::PeerSynced(..) => {
-                    sync_remaining -= 1;
-                    if sync_remaining == 0 && remote_sync_remaining == 0 {
-                        break;
-                    }
-                }
-                _ => {}
-            }
+            );
         }
         println!("------------- FINISHED WITH PEER {}", i);
         senders.push(append_index_sender);
         receivers.push(peer_state_event_receiver);
     }
 
-    let (append_index_sender, append_index_receiver): (Sender<u64>, Receiver<u64>) = bounded(1);
+    let (append_index_sender, append_index_receiver): (Sender<u64>, Receiver<u64>) = channel(1);
     async_std::task::spawn(async move {
         append_value("p1", hypermerge_creator, append_index_receiver).await;
     });
@@ -90,6 +86,18 @@ pub async fn setup_hypermerge_mesh(peers: usize) -> (Vec<Sender<u64>>, Vec<Recei
     receivers.push(creator_state_event_receiver);
 
     (senders, receivers)
+}
+
+fn handle_event(event: &StateEvent, sync_remaining: &mut usize, remote_sync_remaining: &mut usize) {
+    match event {
+        StateEvent::RemotePeerSynced(..) => {
+            *remote_sync_remaining -= 1;
+        }
+        StateEvent::PeerSynced(..) => {
+            *sync_remaining -= 1;
+        }
+        _ => {}
+    }
 }
 
 type MemoryProtocol = Protocol<Duplex<sluice::pipe::PipeReader, sluice::pipe::PipeWriter>>;
@@ -107,21 +115,10 @@ async fn create_pair_memory() -> (MemoryProtocol, MemoryProtocol) {
 async fn connect(
     mut hypermerge: Hypermerge<RandomAccessMemory>,
     mut protocol: MemoryProtocol,
-    state_event_sender: Sender<StateEvent>,
+    mut state_event_sender: UnboundedSender<StateEvent>,
 ) {
-    let (mut sync_event_sender, mut sync_event_receiver): (
-        Sender<SynchronizeEvent>,
-        Receiver<SynchronizeEvent>,
-    ) = unbounded();
-    let mut hypermerge_for_task = hypermerge.clone();
-    async_std::task::spawn(async move {
-        hypermerge_for_task
-            .connect_document(state_event_sender, &mut sync_event_receiver)
-            .await
-            .expect("connect_document should not throw error");
-    });
     hypermerge
-        .connect_protocol_memory(&mut protocol, &mut sync_event_sender)
+        .connect_protocol_memory(&mut protocol, &mut state_event_sender)
         .await
         .expect("connect_protocol_memory should not throw error");
 }

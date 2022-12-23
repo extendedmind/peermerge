@@ -16,8 +16,7 @@ random-access-memory = { git = "https://github.com/ttiurani/random-access-memory
 anyhow = "1.0.28"
 hex = "0.4"
 async-std = { version = "1.9.0", features = ["attributes", "unstable"], optional = true }
-futures-lite = "1.12"
-async-channel = "1.8.0"
+futures = "0.3.25"
 wasm-bindgen-futures = { version = "0.4.33", optional = true }
 derivative = "2.2.0"
 dashmap = "5.4.0"

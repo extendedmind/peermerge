@@ -1,22 +1,22 @@
 #![allow(dead_code, unused_imports)]
 
-use async_channel::{unbounded, Receiver, Sender};
 use async_std::net::TcpStream;
 use async_std::prelude::*;
 use async_std::sync::{Arc, Condvar, Mutex};
 use async_std::task;
 use automerge::ObjId;
 use automerge::ROOT;
-use futures_lite::io::{AsyncRead, AsyncWrite};
-use futures_lite::stream::StreamExt;
+use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
+use futures::io::{AsyncRead, AsyncWrite};
+use futures::stream::StreamExt;
 use hypercore_protocol::{discovery_key, Channel, Event, Message, Protocol, ProtocolBuilder};
 use hypercore_protocol::{schema::*, DiscoveryKey};
 use hypermerge::Hypermerge;
 use hypermerge::Patch;
 use hypermerge::StateEvent;
-use hypermerge::SynchronizeEvent;
 use hypermerge::Value;
 use random_access_memory::RandomAccessMemory;
+use std::collections::HashMap;
 use std::io;
 use std::time::Duration;
 use test_log::test;
@@ -41,12 +41,12 @@ async fn protocol_three_writers() -> anyhow::Result<()> {
     let (proto_responder, proto_initiator) = create_pair_memory().await;
 
     let (creator_state_event_sender, creator_state_event_receiver): (
-        Sender<StateEvent>,
-        Receiver<StateEvent>,
+        UnboundedSender<StateEvent>,
+        UnboundedReceiver<StateEvent>,
     ) = unbounded();
     let (joiner_state_event_sender, joiner_state_event_receiver): (
-        Sender<StateEvent>,
-        Receiver<StateEvent>,
+        UnboundedSender<StateEvent>,
+        UnboundedReceiver<StateEvent>,
     ) = unbounded();
     let mut hypermerge_creator =
         Hypermerge::create_doc_memory("creator", vec![("version", 1)]).await;
@@ -127,14 +127,15 @@ async fn protocol_three_writers() -> anyhow::Result<()> {
 #[instrument(skip_all)]
 async fn process_joiner_state_event(
     mut hypermerge: Hypermerge<RandomAccessMemory>,
-    mut joiner_state_event_receiver: Receiver<StateEvent>,
+    mut joiner_state_event_receiver: UnboundedReceiver<StateEvent>,
     cork_sync: Arc<(Mutex<bool>, Condvar)>,
     merge_result: Arc<Mutex<ProtocolThreeWritersResult>>,
     append_sync: Arc<(Mutex<bool>, Condvar)>,
 ) -> anyhow::Result<()> {
-    let mut creator_synced = false;
     let mut text_id: Option<ObjId> = None;
     let mut document_changes: Vec<Vec<Patch>> = vec![];
+    let mut peer_synced: HashMap<String, u64> = HashMap::new();
+    let mut remote_peer_synced: HashMap<[u8; 32], u64> = HashMap::new();
     while let Some(event) = joiner_state_event_receiver.next().await {
         info!(
             "Received event {:?}, document_changes={}",
@@ -142,8 +143,8 @@ async fn process_joiner_state_event(
             document_changes.len()
         );
         match event {
-            StateEvent::PeerSynced((name, ..)) => {
-                if !creator_synced {
+            StateEvent::PeerSynced((name, _, len)) => {
+                if !peer_synced.contains_key("creator") {
                     assert_eq!(name, "creator");
                     let (_value, local_texts_id) = hypermerge.get(ROOT, "texts").await?.unwrap();
                     let (_value, local_text_id) =
@@ -153,12 +154,14 @@ async fn process_joiner_state_event(
                     hypermerge
                         .watch(vec![local_texts_id, text_id.clone().unwrap()])
                         .await;
-                    creator_synced = true;
                 } else {
                     assert!(name == "creator" || name == "latecomer");
                 }
+                peer_synced.insert(name.clone(), len);
             }
-            StateEvent::RemotePeerSynced(..) => {}
+            StateEvent::RemotePeerSynced((discovery_key, len)) => {
+                remote_peer_synced.insert(discovery_key, len);
+            }
             StateEvent::DocumentChanged(patches) => {
                 if document_changes.len() == 0 {
                     assert_eq!(patches.len(), 5); // "Hello" has 5 chars
@@ -224,6 +227,10 @@ async fn process_joiner_state_event(
                     let mut appended = lock.lock().await;
                     *appended = true;
                     cvar.notify_all();
+
+                    println!("#### JOINER VALUES #####");
+                    println!("PS: {:?}", peer_synced);
+                    println!("RPS: {:?}", remote_peer_synced);
                     break;
                 } else {
                     panic!("Did not expect more joiner document changes");
@@ -237,16 +244,17 @@ async fn process_joiner_state_event(
 #[instrument(skip_all)]
 async fn process_creator_state_events(
     mut hypermerge: Hypermerge<RandomAccessMemory>,
-    creator_state_event_sender: Sender<StateEvent>,
-    mut creator_state_event_receiver: Receiver<StateEvent>,
+    creator_state_event_sender: UnboundedSender<StateEvent>,
+    mut creator_state_event_receiver: UnboundedReceiver<StateEvent>,
     text_id: ObjId,
     cork_sync: Arc<(Mutex<bool>, Condvar)>,
     merge_result: Arc<Mutex<ProtocolThreeWritersResult>>,
     append_sync: Arc<(Mutex<bool>, Condvar)>,
 ) -> anyhow::Result<()> {
     let mut document_changes: Vec<Vec<Patch>> = vec![];
-    let mut remote_peer_synced = false;
     let mut latecomer_attached = false;
+    let mut peer_synced: HashMap<String, u64> = HashMap::new();
+    let mut remote_peer_synced: HashMap<[u8; 32], u64> = HashMap::new();
 
     while let Some(event) = creator_state_event_receiver.next().await {
         info!(
@@ -256,22 +264,23 @@ async fn process_creator_state_events(
         );
         let text_id = text_id.clone();
         match event {
-            StateEvent::PeerSynced((name, ..)) => {
+            StateEvent::PeerSynced((name, _, len)) => {
+                peer_synced.insert(name.clone(), len);
                 if latecomer_attached {
                     assert!(name == "joiner" || name == "latecomer");
                 } else {
                     assert_eq!(name, "joiner");
                 }
             }
-            StateEvent::RemotePeerSynced(..) => {
-                if !remote_peer_synced {
+            StateEvent::RemotePeerSynced((discovery_key, len)) => {
+                if remote_peer_synced.is_empty() {
                     hypermerge
                         .splice_text(&text_id, 0, 0, "Hello")
                         .await
                         .unwrap();
                     assert_text_equals(&hypermerge, &text_id, "Hello").await;
-                    remote_peer_synced = true;
                 }
+                remote_peer_synced.insert(discovery_key, len);
             }
             StateEvent::DocumentChanged(patches) => {
                 if document_changes.len() == 0 {
@@ -328,8 +337,8 @@ async fn process_creator_state_events(
                     latecomer_attached = true;
                     let (proto_responder, proto_initiator) = create_pair_memory().await;
                     let (latecomer_state_event_sender, latecomer_state_event_receiver): (
-                        Sender<StateEvent>,
-                        Receiver<StateEvent>,
+                        UnboundedSender<StateEvent>,
+                        UnboundedReceiver<StateEvent>,
                     ) = unbounded();
                     let hypermerge_latecomer =
                         Hypermerge::register_doc_memory("latecomer", &hypermerge.doc_url()).await;
@@ -380,6 +389,9 @@ async fn process_creator_state_events(
                     while !*appended {
                         appended = cvar.wait(appended).await;
                     }
+                    println!("#### CREATOR VALUES #####");
+                    println!("PS: {:?}", peer_synced);
+                    println!("RPS: {:?}", remote_peer_synced);
                     break;
                 } else {
                     panic!("Did not expect more creator document changes");
@@ -393,13 +405,13 @@ async fn process_creator_state_events(
 #[instrument(skip_all)]
 async fn process_latecomer_state_event(
     mut hypermerge: Hypermerge<RandomAccessMemory>,
-    mut latecomer_state_event_receiver: Receiver<StateEvent>,
+    mut latecomer_state_event_receiver: UnboundedReceiver<StateEvent>,
     append_sync: Arc<(Mutex<bool>, Condvar)>,
 ) -> anyhow::Result<()> {
     let mut text_id: Option<ObjId> = None;
     let mut document_changes: Vec<Vec<Patch>> = vec![];
-    let mut creator_synced = false;
-    let mut joiner_synced = false;
+    let mut peer_synced: HashMap<String, u64> = HashMap::new();
+    let mut remote_peer_synced: HashMap<[u8; 32], u64> = HashMap::new();
     while let Some(event) = latecomer_state_event_receiver.next().await {
         info!(
             "Received event {:?}, document_changes={}",
@@ -407,14 +419,10 @@ async fn process_latecomer_state_event(
             document_changes.len()
         );
         match event {
-            StateEvent::PeerSynced((name, ..)) => {
+            StateEvent::PeerSynced((name, _, len)) => {
                 assert!(name == "creator" || name == "joiner");
-                if name == "creator" {
-                    creator_synced = true;
-                } else if name == "joiner" {
-                    joiner_synced = true;
-                }
-                if creator_synced && joiner_synced {
+                peer_synced.insert(name.clone(), len);
+                if peer_synced.contains_key("creator") && peer_synced.contains_key("joiner") {
                     let (_value, local_texts_id) = hypermerge.get(ROOT, "texts").await?.unwrap();
                     let (_value, local_text_id) =
                         hypermerge.get(&local_texts_id, "text").await?.unwrap();
@@ -433,7 +441,9 @@ async fn process_latecomer_state_event(
                     hypermerge.splice_text(&local_text_id, 13, 0, "ZZ").await?;
                 }
             }
-            StateEvent::RemotePeerSynced(..) => {}
+            StateEvent::RemotePeerSynced((discovery_key, len)) => {
+                remote_peer_synced.insert(discovery_key, len);
+            }
             StateEvent::DocumentChanged(patches) => {
                 if document_changes.len() == 0 {
                     assert_eq!(patches.len(), 1); // Two local additions as one Splice
@@ -452,6 +462,10 @@ async fn process_latecomer_state_event(
                     while !*appended {
                         appended = cvar.wait(appended).await;
                     }
+                    println!("#### LATECOMER VALUES #####");
+                    println!("PS: {:?}", peer_synced);
+                    println!("RPS: {:?}", remote_peer_synced);
+
                     break;
                 }
             }
@@ -463,21 +477,10 @@ async fn process_latecomer_state_event(
 async fn connect(
     mut hypermerge: Hypermerge<RandomAccessMemory>,
     mut protocol: MemoryProtocol,
-    state_event_sender: Sender<StateEvent>,
+    mut state_event_sender: UnboundedSender<StateEvent>,
 ) -> anyhow::Result<()> {
-    let (mut sync_event_sender, mut sync_event_receiver): (
-        Sender<SynchronizeEvent>,
-        Receiver<SynchronizeEvent>,
-    ) = unbounded();
-    let mut hypermerge_for_task = hypermerge.clone();
-    task::spawn(async move {
-        hypermerge_for_task
-            .connect_document(state_event_sender, &mut sync_event_receiver)
-            .await
-            .expect("Connect should not throw error");
-    });
     hypermerge
-        .connect_protocol_memory(&mut protocol, &mut sync_event_sender)
+        .connect_protocol_memory(&mut protocol, &mut state_event_sender)
         .await?;
     Ok(())
 }

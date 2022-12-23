@@ -13,7 +13,7 @@ mod core;
 mod hypercore;
 mod repository;
 
-pub use crate::common::{StateEvent, SynchronizeEvent};
+pub use crate::common::StateEvent;
 pub use crate::core::Hypermerge;
 pub use crate::repository::Repository;
 pub use ::automerge::*;

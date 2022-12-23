@@ -1,7 +1,7 @@
-use async_channel::Sender;
 use async_std::sync::{Arc, Mutex};
 use dashmap::DashMap;
-use futures_lite::{AsyncRead, AsyncWrite, StreamExt};
+use futures::channel::mpsc::UnboundedSender;
+use futures::{AsyncRead, AsyncWrite, StreamExt};
 use hypercore_protocol::hypercore::compact_encoding::{CompactEncoding, State};
 use hypercore_protocol::{Event, Protocol};
 use random_access_storage::RandomAccess;
@@ -23,7 +23,7 @@ pub(crate) async fn on_protocol<T, IO>(
     protocol: &mut Protocol<IO>,
     doc_state: Arc<Mutex<DocStateWrapper<T>>>,
     hypercores: Arc<DashMap<[u8; 32], Arc<Mutex<HypercoreWrapper<T>>>>>,
-    peer_event_sender: &mut Sender<PeerEvent>,
+    peer_event_sender: &mut UnboundedSender<PeerEvent>,
 ) -> anyhow::Result<()>
 where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send + 'static,

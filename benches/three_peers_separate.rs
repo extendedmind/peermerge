@@ -1,10 +1,10 @@
 use std::time::Instant;
 
-use async_channel::{Receiver, Sender};
 use criterion::async_executor::AsyncStdExecutor;
 use criterion::Criterion;
 use criterion::{black_box, criterion_group, criterion_main};
-use futures_lite::stream::StreamExt;
+use futures::channel::mpsc::{Receiver, Sender, UnboundedReceiver, UnboundedSender};
+use futures::stream::StreamExt;
 use hypermerge::StateEvent;
 use pprof::criterion::{Output, PProfProfiler};
 
@@ -14,18 +14,18 @@ use common::setup_hypermerge_mesh;
 async fn append_three(
     i: u64,
     senders: Vec<Sender<u64>>,
-    mut peer_1_receiver: Receiver<StateEvent>,
-    mut peer_2_receiver: Receiver<StateEvent>,
-    mut peer_3_receiver: Receiver<StateEvent>,
+    peer_1_receiver: &mut UnboundedReceiver<StateEvent>,
+    peer_2_receiver: &mut UnboundedReceiver<StateEvent>,
+    peer_3_receiver: &mut UnboundedReceiver<StateEvent>,
 ) -> u64 {
-    for sender in senders {
-        sender.send(i).await.unwrap();
+    for mut sender in senders {
+        sender.try_send(i).unwrap();
     }
     let mut peers_synced: usize = 0;
     let mut document_changed: usize = 0;
-    let mut events = futures_lite::stream::race(
-        &mut peer_1_receiver,
-        futures_lite::stream::race(&mut peer_2_receiver, &mut peer_3_receiver),
+    let mut events = futures::stream::select(
+        peer_1_receiver,
+        futures::stream::select(peer_2_receiver, peer_3_receiver),
     );
     while let Some(event) = events.next().await {
         match event {
@@ -72,17 +72,20 @@ fn bench_append_three(c: &mut Criterion) {
                     // .with_max_level(tracing::Level::DEBUG)
                     .init();
                 println!("ITERING {}", iters);
-                let (senders, receivers) = setup_hypermerge_mesh(3).await;
+                let (senders, mut receivers) = setup_hypermerge_mesh(3).await;
                 println!("CREATED");
                 let start = Instant::now();
+                let mut receiver_3 = receivers.pop().unwrap();
+                let mut receiver_2 = receivers.pop().unwrap();
+                let mut receiver_1 = receivers.pop().unwrap();
                 for i in 0..iters {
                     black_box(
                         append_three(
                             i,
                             senders.clone(),
-                            receivers[0].clone(),
-                            receivers[1].clone(),
-                            receivers[2].clone(),
+                            &mut receiver_1,
+                            &mut receiver_2,
+                            &mut receiver_3,
                         )
                         .await,
                     );

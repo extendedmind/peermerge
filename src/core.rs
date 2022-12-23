@@ -1,11 +1,11 @@
-use async_channel::{unbounded, Receiver, Sender};
 use async_std::sync::{Arc, Mutex};
 #[cfg(not(target_arch = "wasm32"))]
 use async_std::task;
 use automerge::Change;
 use automerge::{transaction::Transactable, ObjId, ObjType, Patch, Prop, ScalarValue, Value};
 use dashmap::DashMap;
-use futures_lite::{AsyncRead, AsyncWrite, StreamExt};
+use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
+use futures::{AsyncRead, AsyncWrite, StreamExt};
 use hypercore_protocol::hypercore::compact_encoding::{CompactEncoding, State};
 use hypercore_protocol::Protocol;
 use random_access_memory::RandomAccessMemory;
@@ -33,7 +33,7 @@ use crate::{
         create_new_read_memory_hypercore, create_new_write_memory_hypercore, generate_keys,
         keys_from_public_key, HypercoreWrapper,
     },
-    StateEvent, SynchronizeEvent,
+    StateEvent,
 };
 
 /// Hypermerge is the main abstraction.
@@ -45,7 +45,7 @@ where
 {
     hypercores: Arc<DashMap<[u8; 32], Arc<Mutex<HypercoreWrapper<T>>>>>,
     doc_state: Arc<Mutex<DocStateWrapper<T>>>,
-    state_event_sender: Arc<Mutex<Option<Sender<StateEvent>>>>,
+    state_event_sender: Arc<Mutex<Option<UnboundedSender<StateEvent>>>>,
     prefix: PathBuf,
     peer_name: String,
     discovery_key: [u8; 32],
@@ -246,49 +246,6 @@ where
     }
 
     #[instrument(skip(self))]
-    pub async fn connect_document(
-        &mut self,
-        state_event_sender: Sender<StateEvent>,
-        sync_event_receiver: &mut Receiver<SynchronizeEvent>,
-    ) -> anyhow::Result<()> {
-        // First let's drain any patches that are not yet sent out, and push them out
-        {
-            *self.state_event_sender.lock().await = Some(state_event_sender.clone());
-        }
-        {
-            self.notify_of_document_changes().await;
-        }
-        // Then start listening for any sync events
-        debug!("Start listening for SynchronizeEvents");
-        while let Some(event) = sync_event_receiver.next().await {
-            match event {
-                SynchronizeEvent::DocumentChanged(patches) => {
-                    state_event_sender
-                        .send(StateEvent::DocumentChanged(patches))
-                        .await
-                        .unwrap();
-                }
-                SynchronizeEvent::PeerSynced(sync_info) => {
-                    state_event_sender
-                        .send(StateEvent::PeerSynced(sync_info))
-                        .await
-                        .unwrap();
-                }
-                SynchronizeEvent::RemotePeerSynced((discovery_key, synced_contiguous_length)) => {
-                    state_event_sender
-                        .send(StateEvent::RemotePeerSynced((
-                            discovery_key,
-                            synced_contiguous_length,
-                        )))
-                        .await
-                        .unwrap();
-                }
-            }
-        }
-        Ok(())
-    }
-
-    #[instrument(skip(self))]
     pub fn doc_url(&self) -> String {
         self.doc_url.clone()
     }
@@ -304,8 +261,7 @@ where
                     let patches = doc.observer().take_patches();
                     if patches.len() > 0 {
                         sender
-                            .send(StateEvent::DocumentChanged(patches))
-                            .await
+                            .unbounded_send(StateEvent::DocumentChanged(patches))
                             .unwrap();
                     }
                 }
@@ -386,15 +342,25 @@ impl Hypermerge<RandomAccessMemory> {
     pub async fn connect_protocol_memory<IO>(
         &mut self,
         protocol: &mut Protocol<IO>,
-        sync_event_sender: &mut Sender<SynchronizeEvent>,
+        state_event_sender: &mut UnboundedSender<StateEvent>,
     ) -> anyhow::Result<()>
     where
         IO: AsyncWrite + AsyncRead + Send + Unpin + 'static,
     {
-        let (mut peer_event_sender, peer_event_receiver): (Sender<PeerEvent>, Receiver<PeerEvent>) =
-            unbounded();
+        // First let's drain any patches that are not yet sent out, and push them out. These can
+        // be created
+        {
+            *self.state_event_sender.lock().await = Some(state_event_sender.clone());
+        }
+        {
+            self.notify_of_document_changes().await;
+        }
+        let (mut peer_event_sender, peer_event_receiver): (
+            UnboundedSender<PeerEvent>,
+            UnboundedReceiver<PeerEvent>,
+        ) = unbounded();
 
-        let sync_event_sender_for_task = sync_event_sender.clone();
+        let state_event_sender_for_task = state_event_sender.clone();
         let doc_state = self.doc_state.clone();
         let discovery_key_for_task = self.discovery_key.clone();
         let hypercores_for_task = self.hypercores.clone();
@@ -406,7 +372,7 @@ impl Hypermerge<RandomAccessMemory> {
             on_peer_event_memory(
                 &discovery_key_for_task,
                 peer_event_receiver,
-                sync_event_sender_for_task,
+                state_event_sender_for_task,
                 doc_state,
                 hypercores_for_task,
                 &peer_name_for_task,
@@ -419,7 +385,7 @@ impl Hypermerge<RandomAccessMemory> {
             on_peer_event_memory(
                 &discovery_key_for_task,
                 peer_event_receiver,
-                sync_event_sender_for_task,
+                state_event_sender_for_task,
                 doc_state,
                 hypercores_for_task,
                 &peer_name_for_task,
@@ -475,8 +441,8 @@ impl Hypermerge<RandomAccessMemory> {
 #[instrument(level = "debug", skip_all)]
 async fn on_peer_event_memory(
     doc_discovery_key: &[u8; 32],
-    mut peer_event_receiver: Receiver<PeerEvent>,
-    sync_event_sender: Sender<SynchronizeEvent>,
+    mut peer_event_receiver: UnboundedReceiver<PeerEvent>,
+    state_event_sender: UnboundedSender<StateEvent>,
     doc_state: Arc<Mutex<DocStateWrapper<RandomAccessMemory>>>,
     hypercores: Arc<DashMap<[u8; 32], Arc<Mutex<HypercoreWrapper<RandomAccessMemory>>>>>,
     peer_name: &str,
@@ -516,16 +482,17 @@ async fn on_peer_event_memory(
                 // This is an FYI message, just continue for now
             }
             PeerEvent::RemotePeerSynced((discovery_key, synced_contiguous_length)) => {
-                sync_event_sender
-                    .send(SynchronizeEvent::RemotePeerSynced((
+                println!("### BEFORE");
+                state_event_sender
+                    .unbounded_send(StateEvent::RemotePeerSynced((
                         discovery_key,
                         synced_contiguous_length,
                     )))
-                    .await
                     .unwrap();
+                println!("/// AFTER");
             }
             PeerEvent::PeerSynced((discovery_key, synced_contiguous_length)) => {
-                let (peer_sync_events, patches): (Vec<SynchronizeEvent>, Vec<Patch>) = {
+                let (peer_sync_events, patches): (Vec<StateEvent>, Vec<Patch>) = {
                     // Sync doc state exclusively...
                     let mut doc_state = doc_state.lock().await;
                     let (mut patches, peer_syncs) = if let Some((content, unapplied_entries)) =
@@ -581,11 +548,11 @@ async fn on_peer_event_memory(
                         Patch::Splice { obj, .. } => watched_ids.contains(obj),
                     });
 
-                    let peer_synced_events: Vec<SynchronizeEvent> = peer_syncs
+                    let peer_synced_events: Vec<StateEvent> = peer_syncs
                         .iter()
                         .map(|sync| {
                             let name = doc_state.peer_name(&sync.0);
-                            SynchronizeEvent::PeerSynced((name, sync.0.clone(), sync.1))
+                            StateEvent::PeerSynced((name, sync.0.clone(), sync.1))
                         })
                         .collect();
                     (peer_synced_events, patches)
@@ -593,12 +560,11 @@ async fn on_peer_event_memory(
                 };
 
                 for peer_sync_event in peer_sync_events {
-                    sync_event_sender.send(peer_sync_event).await.unwrap();
+                    state_event_sender.unbounded_send(peer_sync_event).unwrap();
                 }
                 if patches.len() > 0 {
-                    sync_event_sender
-                        .send(SynchronizeEvent::DocumentChanged(patches))
-                        .await
+                    state_event_sender
+                        .unbounded_send(StateEvent::DocumentChanged(patches))
                         .unwrap();
                 }
 
