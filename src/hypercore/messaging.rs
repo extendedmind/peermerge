@@ -103,6 +103,7 @@ where
         downloading: true,
     };
 
+    peer_state.sync_sent = true;
     if info.contiguous_length > 0 {
         let range_msg = Range {
             drop: false,
@@ -135,7 +136,6 @@ where
             };
             let same_fork = message.fork == info.fork;
 
-            peer_state.sync_received = true;
             peer_state.remote_fork = message.fork;
             peer_state.remote_length = message.length;
             peer_state.remote_can_upgrade = message.can_upgrade;
@@ -384,7 +384,7 @@ where
                 let mut messages = vec![create_broadcast_message(&peer_state)];
 
                 // If sync has not been started, start it now
-                if !peer_state.sync_received {
+                if !peer_state.sync_sent {
                     messages.extend(create_initial_synchronize(hypercore, peer_state).await);
                 }
                 channel.send_batch(&messages).await?;
