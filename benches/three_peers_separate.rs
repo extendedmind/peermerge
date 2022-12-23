@@ -14,20 +14,14 @@ use common::setup_hypermerge_mesh;
 async fn append_three(
     i: u64,
     senders: Vec<Sender<u64>>,
-    peer_1_receiver: &mut UnboundedReceiver<StateEvent>,
-    peer_2_receiver: &mut UnboundedReceiver<StateEvent>,
-    peer_3_receiver: &mut UnboundedReceiver<StateEvent>,
+    receiver: &mut UnboundedReceiver<StateEvent>,
 ) -> u64 {
     for mut sender in senders {
         sender.try_send(i).unwrap();
     }
     let mut peers_synced: usize = 0;
     let mut document_changed: usize = 0;
-    let mut events = futures::stream::select(
-        peer_1_receiver,
-        futures::stream::select(peer_2_receiver, peer_3_receiver),
-    );
-    while let Some(event) = events.next().await {
+    while let Some(event) = receiver.next().await {
         match event {
             StateEvent::PeerSynced(_) => {
                 peers_synced += 1;
@@ -72,23 +66,11 @@ fn bench_append_three(c: &mut Criterion) {
                     // .with_max_level(tracing::Level::DEBUG)
                     .init();
                 println!("ITERING {}", iters);
-                let (senders, mut receivers) = setup_hypermerge_mesh(3).await;
+                let (senders, mut receiver) = setup_hypermerge_mesh(3).await;
                 println!("CREATED");
                 let start = Instant::now();
-                let mut receiver_3 = receivers.pop().unwrap();
-                let mut receiver_2 = receivers.pop().unwrap();
-                let mut receiver_1 = receivers.pop().unwrap();
                 for i in 0..iters {
-                    black_box(
-                        append_three(
-                            i,
-                            senders.clone(),
-                            &mut receiver_1,
-                            &mut receiver_2,
-                            &mut receiver_3,
-                        )
-                        .await,
-                    );
+                    black_box(append_three(i, senders.clone(), &mut receiver).await);
                 }
                 start.elapsed()
             });
