@@ -110,6 +110,7 @@ where
             start: 0,
             length: info.contiguous_length,
         };
+        peer_state.contiguous_range_sent = info.contiguous_length;
         vec![Message::Synchronize(sync_msg), Message::Range(range_msg)]
     } else {
         vec![Message::Synchronize(sync_msg)]
@@ -259,12 +260,15 @@ where
                         length: 1,
                     }));
                 }
-                if old_info.contiguous_length < new_info.contiguous_length {
+                if old_info.contiguous_length < new_info.contiguous_length
+                    && peer_state.contiguous_range_sent < new_info.contiguous_length
+                {
                     messages.push(Message::Range(Range {
                         drop: false,
                         start: 0,
                         length: new_info.contiguous_length,
                     }));
+                    peer_state.contiguous_range_sent = new_info.contiguous_length;
                 }
             }
             if let Some(request) = request {
@@ -281,11 +285,17 @@ where
                     if info.contiguous_length == message.length
                         && peer_state.remote_length == message.length
                     {
-                        // The peer has advertised that they now have what we have
-                        Some(PeerEvent::RemotePeerSynced((
-                            *channel.discovery_key(),
-                            message.length,
-                        )))
+                        if peer_state.notified_remote_synced_contiguous_length < message.length {
+                            // The peer has advertised that they now have what we have
+                            let event = Some(PeerEvent::RemotePeerSynced((
+                                *channel.discovery_key(),
+                                message.length,
+                            )));
+                            peer_state.notified_remote_synced_contiguous_length = message.length;
+                            event
+                        } else {
+                            None
+                        }
                     } else {
                         // If the other side advertises more than we have, and more than the peer length,
                         // we have recorded, then we need to request the rest of the blocks.
@@ -299,7 +309,7 @@ where
                         None
                     }
                 } else {
-                    // TODO: For now, let's just ignore messages that don't broadcast
+                    // TODO: For now, let's just ignore messages that don't indicate
                     // a contiguous length. When we add support for deleting entries
                     // from the hypercore, this needs proper bitfield support.
                     None
@@ -327,8 +337,12 @@ where
                         &broadcast_message.peer_public_keys,
                     )
                 {
-                    let messages = create_initial_synchronize(hypercore, peer_state).await;
-                    channel.send_batch(&messages).await?;
+                    // Don't re-initialize if this has already been synced, meaning this is a
+                    // broadcast that notifies a new third party peer after the initial handshake.
+                    if !peer_state.sync_sent {
+                        let messages = create_initial_synchronize(hypercore, peer_state).await;
+                        channel.send_batch(&messages).await?;
+                    }
                 } else if !new_remote_public_keys.is_empty() {
                     // New peers found, return a peer event
                     return Ok(Some(PeerEvent::NewPeersBroadcasted(new_remote_public_keys)));
@@ -342,25 +356,29 @@ where
                     hypercore.info()
                 };
 
-                if info.contiguous_length >= length {
+                if info.contiguous_length >= length && peer_state.contiguous_range_sent < length {
                     let range_msg = Range {
                         drop: false,
                         start: 0,
                         length,
                     };
+                    peer_state.contiguous_range_sent = length;
                     channel.send(Message::Range(range_msg)).await?;
                 }
             }
             HYPERMERGE_INTERNAL_PEER_SYNCED_MSG => {
                 let mut dec_state = State::from_buffer(&message.message);
                 let contiguous_length: u64 = dec_state.decode(&message.message);
-                if contiguous_length > peer_state.synced_contiguous_length {
+                if contiguous_length > peer_state.synced_contiguous_length
+                    && peer_state.contiguous_range_sent < contiguous_length
+                {
                     peer_state.synced_contiguous_length = contiguous_length;
                     let range_msg = Range {
                         drop: false,
                         start: 0,
                         length: contiguous_length,
                     };
+                    peer_state.contiguous_range_sent = contiguous_length;
                     channel.send(Message::Range(range_msg)).await?;
                 }
             }

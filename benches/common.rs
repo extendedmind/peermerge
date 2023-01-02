@@ -54,7 +54,7 @@ pub async fn setup_hypermerge_mesh(
 
         // TODO: Check what these should be for peers > 3
         let mut sync_remaining = i * 2;
-        let mut remote_sync_remaining = if i == 1 { 2 } else { 5 };
+        let mut remote_sync_remaining = i * 2;
 
         while let Some(event) = state_event_receiver.next().await {
             match event {
@@ -64,7 +64,9 @@ pub async fn setup_hypermerge_mesh(
                 StateEvent::PeerSynced(..) => {
                     sync_remaining -= 1;
                 }
-                _ => {}
+                StateEvent::DocumentChanged(..) => {
+                    // Ignore
+                }
             }
             if sync_remaining == 0 && remote_sync_remaining == 0 {
                 break;

@@ -12,7 +12,7 @@ use random_access_memory::RandomAccessMemory;
 use random_access_storage::RandomAccess;
 use std::collections::HashMap;
 use std::{fmt::Debug, path::PathBuf};
-use tracing::{debug, instrument};
+use tracing::{debug, instrument, warn};
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_futures::spawn_local;
 
@@ -482,12 +482,18 @@ async fn on_peer_event_memory(
                 // This is an FYI message, just continue for now
             }
             PeerEvent::RemotePeerSynced((discovery_key, synced_contiguous_length)) => {
-                state_event_sender
-                    .unbounded_send(StateEvent::RemotePeerSynced((
-                        discovery_key,
+                match state_event_sender.unbounded_send(StateEvent::RemotePeerSynced((
+                    discovery_key,
+                    synced_contiguous_length,
+                ))) {
+                    Ok(()) => {}
+                    Err(err) => warn!(
+                        "{}: could not notify remote peer synced to len {}, err {}",
+                        peer_name.to_string(),
                         synced_contiguous_length,
-                    )))
-                    .unwrap();
+                        err
+                    ),
+                }
             }
             PeerEvent::PeerSynced((discovery_key, synced_contiguous_length)) => {
                 let (peer_sync_events, patches): (Vec<StateEvent>, Vec<Patch>) = {
@@ -549,7 +555,7 @@ async fn on_peer_event_memory(
                     let peer_synced_events: Vec<StateEvent> = peer_syncs
                         .iter()
                         .map(|sync| {
-                            let name = doc_state.peer_name(&sync.0);
+                            let name = doc_state.peer_name(&sync.0).unwrap();
                             StateEvent::PeerSynced((name, sync.0.clone(), sync.1))
                         })
                         .collect();

@@ -227,10 +227,6 @@ async fn process_joiner_state_event(
                     let mut appended = lock.lock().await;
                     *appended = true;
                     cvar.notify_all();
-
-                    println!("#### JOINER VALUES #####");
-                    println!("PS: {:?}", peer_synced);
-                    println!("RPS: {:?}", remote_peer_synced);
                     break;
                 } else {
                     panic!("Did not expect more joiner document changes");
@@ -389,9 +385,6 @@ async fn process_creator_state_events(
                     while !*appended {
                         appended = cvar.wait(appended).await;
                     }
-                    println!("#### CREATOR VALUES #####");
-                    println!("PS: {:?}", peer_synced);
-                    println!("RPS: {:?}", remote_peer_synced);
                     break;
                 } else {
                     panic!("Did not expect more creator document changes");
@@ -422,7 +415,10 @@ async fn process_latecomer_state_event(
             StateEvent::PeerSynced((name, _, len)) => {
                 assert!(name == "creator" || name == "joiner");
                 peer_synced.insert(name.clone(), len);
-                if peer_synced.contains_key("creator") && peer_synced.contains_key("joiner") {
+                if peer_synced.contains_key("creator")
+                    && peer_synced.contains_key("joiner")
+                    && text_id.is_none()
+                {
                     let (_value, local_texts_id) = hypermerge.get(ROOT, "texts").await?.unwrap();
                     let (_value, local_text_id) =
                         hypermerge.get(&local_texts_id, "text").await?.unwrap();
@@ -462,10 +458,6 @@ async fn process_latecomer_state_event(
                     while !*appended {
                         appended = cvar.wait(appended).await;
                     }
-                    println!("#### LATECOMER VALUES #####");
-                    println!("PS: {:?}", peer_synced);
-                    println!("RPS: {:?}", remote_peer_synced);
-
                     break;
                 }
             }

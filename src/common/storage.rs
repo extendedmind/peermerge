@@ -120,14 +120,12 @@ where
         write_doc_state(&self.state, &mut self.storage).await;
     }
 
-    pub fn peer_name(&mut self, discovery_key: &[u8; 32]) -> String {
-        let peer = self
-            .state
+    pub fn peer_name(&self, discovery_key: &[u8; 32]) -> Option<String> {
+        self.state
             .peers
             .iter()
             .find(|peer| &peer.discovery_key == discovery_key)
-            .unwrap();
-        peer.name.clone().unwrap()
+            .and_then(|peer| peer.name.clone())
     }
 
     pub async fn persist_content_and_new_peer_names(

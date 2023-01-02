@@ -11,16 +11,29 @@ pub(super) struct PeerState {
     pub(super) is_doc: bool,
     pub(super) write_public_key: Option<[u8; 32]>,
     pub(super) peer_public_keys: Vec<[u8; 32]>,
-    pub(super) sync_sent: bool,
     pub(super) can_upgrade: bool,
     pub(super) remote_fork: u64,
     pub(super) remote_length: u64,
     pub(super) remote_can_upgrade: bool,
     pub(super) remote_uploading: bool,
     pub(super) remote_downloading: bool,
-    pub(super) synced_contiguous_length: u64,
     pub(super) length_acked: u64,
     pub(super) inflight: InflightTracker,
+
+    // Receiving message sent
+    /// The length up to which the remote peer has given us contiguous
+    /// data.
+    pub(super) synced_contiguous_length: u64,
+    /// The length to which we have sent the remote peer contiguous as
+    /// demonstrated by a received Range, and have notified it as
+    /// a PeerEvent.
+    pub(super) notified_remote_synced_contiguous_length: u64,
+
+    // Sending messaging state
+    /// Has the initial Synchronize message been sent to the remote.
+    pub(super) sync_sent: bool,
+    /// The largest contiguous Range that has been sent to the remote.
+    pub(super) contiguous_range_sent: u64,
 }
 impl PeerState {
     pub fn new(
@@ -32,16 +45,18 @@ impl PeerState {
             is_doc,
             write_public_key,
             peer_public_keys,
-            sync_sent: false,
             can_upgrade: true,
             remote_fork: 0,
             remote_length: 0,
             remote_can_upgrade: false,
             remote_uploading: true,
             remote_downloading: true,
-            synced_contiguous_length: 0,
             length_acked: 0,
             inflight: InflightTracker::default(),
+            synced_contiguous_length: 0,
+            notified_remote_synced_contiguous_length: 0,
+            sync_sent: false,
+            contiguous_range_sent: 0,
         }
     }
 
