@@ -23,8 +23,8 @@ const HYPERMERGE_BROADCAST_MSG: &str = "hypermerge/v1/broadcast";
 
 // Local signals
 const APPEND_LOCAL_SIGNAL_NAME: &str = "append";
-const INTERNAL_PEER_SYNCED_LOCAL_SIGNAL_NAME: &str = "peer_synced";
-pub(super) const INTERNAL_NEW_PEERS_CREATED_LOCAL_SIGNAL_NAME: &str = "new_peers_created";
+const PEER_SYNCED_LOCAL_SIGNAL_NAME: &str = "peer_synced";
+pub(super) const NEW_PEERS_CREATED_LOCAL_SIGNAL_NAME: &str = "new_peers_created";
 
 pub(super) fn create_broadcast_message(peer_state: &PeerState) -> Message {
     let broadcast_message: BroadcastMessage = BroadcastMessage {
@@ -41,7 +41,7 @@ pub(super) fn create_broadcast_message(peer_state: &PeerState) -> Message {
     })
 }
 
-pub(super) fn create_internal_append_local_signal(length: u64) -> Message {
+pub(super) fn create_append_local_signal(length: u64) -> Message {
     let mut enc_state = State::new();
     enc_state.preencode(&length);
     let mut buffer = enc_state.create_buffer();
@@ -49,27 +49,22 @@ pub(super) fn create_internal_append_local_signal(length: u64) -> Message {
     Message::LocalSignal((APPEND_LOCAL_SIGNAL_NAME.to_string(), buffer.to_vec()))
 }
 
-pub(super) fn create_internal_peer_synced_local_signal(contiguous_length: u64) -> Message {
+pub(super) fn create_peer_synced_local_signal(contiguous_length: u64) -> Message {
     let mut enc_state = State::new();
     enc_state.preencode(&contiguous_length);
     let mut buffer = enc_state.create_buffer();
     enc_state.encode(&contiguous_length, &mut buffer);
-    Message::LocalSignal((
-        INTERNAL_PEER_SYNCED_LOCAL_SIGNAL_NAME.to_string(),
-        buffer.to_vec(),
-    ))
+    Message::LocalSignal((PEER_SYNCED_LOCAL_SIGNAL_NAME.to_string(), buffer.to_vec()))
 }
 
-pub(super) fn create_internal_new_peers_created_local_signal(
-    public_keys: Vec<[u8; 32]>,
-) -> Message {
+pub(super) fn create_new_peers_created_local_signal(public_keys: Vec<[u8; 32]>) -> Message {
     let message = NewPeersCreatedMessage { public_keys };
     let mut enc_state = State::new();
     enc_state.preencode(&message);
     let mut buffer = enc_state.create_buffer();
     enc_state.encode(&message, &mut buffer);
     Message::LocalSignal((
-        INTERNAL_NEW_PEERS_CREATED_LOCAL_SIGNAL_NAME.to_string(),
+        NEW_PEERS_CREATED_LOCAL_SIGNAL_NAME.to_string(),
         buffer.to_vec(),
     ))
 }
@@ -373,7 +368,7 @@ where
                     channel.send(Message::Range(range_msg)).await?;
                 }
             }
-            INTERNAL_PEER_SYNCED_LOCAL_SIGNAL_NAME => {
+            PEER_SYNCED_LOCAL_SIGNAL_NAME => {
                 let mut dec_state = State::from_buffer(&data);
                 let contiguous_length: u64 = dec_state.decode(&data);
                 if contiguous_length > peer_state.synced_contiguous_length
@@ -389,7 +384,7 @@ where
                     channel.send(Message::Range(range_msg)).await?;
                 }
             }
-            INTERNAL_NEW_PEERS_CREATED_LOCAL_SIGNAL_NAME => {
+            NEW_PEERS_CREATED_LOCAL_SIGNAL_NAME => {
                 assert!(
                     peer_state.is_doc,
                     "Only doc peer should ever get new peers created messages"
@@ -402,7 +397,7 @@ where
 
                 // Transmit this event forward to the protocol
                 channel
-                    .signal_local_protocol(INTERNAL_NEW_PEERS_CREATED_LOCAL_SIGNAL_NAME, data)
+                    .signal_local_protocol(NEW_PEERS_CREATED_LOCAL_SIGNAL_NAME, data)
                     .await?;
 
                 // Create new broadcast message

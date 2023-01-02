@@ -10,8 +10,7 @@ use std::io::ErrorKind;
 use tracing::{debug, instrument};
 
 use super::{
-    discovery_key_from_public_key, messaging::INTERNAL_NEW_PEERS_CREATED_LOCAL_SIGNAL_NAME,
-    HypercoreWrapper,
+    discovery_key_from_public_key, messaging::NEW_PEERS_CREATED_LOCAL_SIGNAL_NAME, HypercoreWrapper,
 };
 use crate::common::{message::NewPeersCreatedMessage, storage::DocStateWrapper, PeerEvent};
 
@@ -94,7 +93,7 @@ where
                         // For now, just ignore
                     }
                     Event::LocalSignal((name, data)) => match name.as_str() {
-                        INTERNAL_NEW_PEERS_CREATED_LOCAL_SIGNAL_NAME => {
+                        NEW_PEERS_CREATED_LOCAL_SIGNAL_NAME => {
                             let mut dec_state = State::from_buffer(&data);
                             let message: NewPeersCreatedMessage = dec_state.decode(&data);
                             let discovery_keys_to_open: Vec<[u8; 32]> = message
