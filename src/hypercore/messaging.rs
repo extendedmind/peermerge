@@ -18,10 +18,13 @@ use crate::common::{
     PeerEvent,
 };
 
+// Messages sent over-the-wire
 const HYPERMERGE_BROADCAST_MSG: &str = "hypermerge/v1/broadcast";
-const HYPERMERGE_INTERNAL_APPEND_MSG: &str = "hypermerge/__append";
-const HYPERMERGE_INTERNAL_PEER_SYNCED_MSG: &str = "hypermerge/__peer-synced";
-pub(super) const HYPERMERGE_INTERNAL_NEW_PEERS_CREATED_MSG: &str = "hypermerge/__new-peers-created";
+
+// Local signals
+const APPEND_LOCAL_SIGNAL_NAME: &str = "append";
+const INTERNAL_PEER_SYNCED_LOCAL_SIGNAL_NAME: &str = "peer_synced";
+pub(super) const INTERNAL_NEW_PEERS_CREATED_LOCAL_SIGNAL_NAME: &str = "new_peers_created";
 
 pub(super) fn create_broadcast_message(peer_state: &PeerState) -> Message {
     let broadcast_message: BroadcastMessage = BroadcastMessage {
@@ -38,38 +41,37 @@ pub(super) fn create_broadcast_message(peer_state: &PeerState) -> Message {
     })
 }
 
-pub(super) fn create_internal_append_message(length: u64) -> Message {
+pub(super) fn create_internal_append_local_signal(length: u64) -> Message {
     let mut enc_state = State::new();
     enc_state.preencode(&length);
     let mut buffer = enc_state.create_buffer();
     enc_state.encode(&length, &mut buffer);
-    Message::Extension(Extension {
-        name: HYPERMERGE_INTERNAL_APPEND_MSG.to_string(),
-        message: buffer.to_vec(),
-    })
+    Message::LocalSignal((APPEND_LOCAL_SIGNAL_NAME.to_string(), buffer.to_vec()))
 }
 
-pub(super) fn create_internal_peer_synced_message(contiguous_length: u64) -> Message {
+pub(super) fn create_internal_peer_synced_local_signal(contiguous_length: u64) -> Message {
     let mut enc_state = State::new();
     enc_state.preencode(&contiguous_length);
     let mut buffer = enc_state.create_buffer();
     enc_state.encode(&contiguous_length, &mut buffer);
-    Message::Extension(Extension {
-        name: HYPERMERGE_INTERNAL_PEER_SYNCED_MSG.to_string(),
-        message: buffer.to_vec(),
-    })
+    Message::LocalSignal((
+        INTERNAL_PEER_SYNCED_LOCAL_SIGNAL_NAME.to_string(),
+        buffer.to_vec(),
+    ))
 }
 
-pub(super) fn create_internal_new_peers_created(public_keys: Vec<[u8; 32]>) -> Message {
+pub(super) fn create_internal_new_peers_created_local_signal(
+    public_keys: Vec<[u8; 32]>,
+) -> Message {
     let message = NewPeersCreatedMessage { public_keys };
     let mut enc_state = State::new();
     enc_state.preencode(&message);
     let mut buffer = enc_state.create_buffer();
     enc_state.encode(&message, &mut buffer);
-    Message::Extension(Extension {
-        name: HYPERMERGE_INTERNAL_NEW_PEERS_CREATED_MSG.to_string(),
-        message: buffer.to_vec(),
-    })
+    Message::LocalSignal((
+        INTERNAL_NEW_PEERS_CREATED_LOCAL_SIGNAL_NAME.to_string(),
+        buffer.to_vec(),
+    ))
 }
 
 pub(super) async fn create_initial_synchronize<T>(
@@ -348,9 +350,14 @@ where
                     return Ok(Some(PeerEvent::NewPeersBroadcasted(new_remote_public_keys)));
                 }
             }
-            HYPERMERGE_INTERNAL_APPEND_MSG => {
-                let mut dec_state = State::from_buffer(&message.message);
-                let length: u64 = dec_state.decode(&message.message);
+            _ => {
+                panic!("Received unexpected extension message {:?}", message);
+            }
+        },
+        Message::LocalSignal((name, data)) => match name.as_str() {
+            APPEND_LOCAL_SIGNAL_NAME => {
+                let mut dec_state = State::from_buffer(&data);
+                let length: u64 = dec_state.decode(&data);
                 let info = {
                     let hypercore = hypercore.lock().await;
                     hypercore.info()
@@ -366,9 +373,9 @@ where
                     channel.send(Message::Range(range_msg)).await?;
                 }
             }
-            HYPERMERGE_INTERNAL_PEER_SYNCED_MSG => {
-                let mut dec_state = State::from_buffer(&message.message);
-                let contiguous_length: u64 = dec_state.decode(&message.message);
+            INTERNAL_PEER_SYNCED_LOCAL_SIGNAL_NAME => {
+                let mut dec_state = State::from_buffer(&data);
+                let contiguous_length: u64 = dec_state.decode(&data);
                 if contiguous_length > peer_state.synced_contiguous_length
                     && peer_state.contiguous_range_sent < contiguous_length
                 {
@@ -382,20 +389,20 @@ where
                     channel.send(Message::Range(range_msg)).await?;
                 }
             }
-            HYPERMERGE_INTERNAL_NEW_PEERS_CREATED_MSG => {
+            INTERNAL_NEW_PEERS_CREATED_LOCAL_SIGNAL_NAME => {
                 assert!(
                     peer_state.is_doc,
                     "Only doc peer should ever get new peers created messages"
                 );
-                let mut dec_state = State::from_buffer(&message.message);
-                let new_peers: NewPeersCreatedMessage = dec_state.decode(&message.message);
+                let mut dec_state = State::from_buffer(&data);
+                let new_peers: NewPeersCreatedMessage = dec_state.decode(&data);
 
                 // Save new peers to the peer state
                 peer_state.peer_public_keys.extend(new_peers.public_keys);
 
                 // Transmit this event forward to the protocol
                 channel
-                    .signal_local(HYPERMERGE_INTERNAL_NEW_PEERS_CREATED_MSG, message.message)
+                    .signal_local_protocol(INTERNAL_NEW_PEERS_CREATED_LOCAL_SIGNAL_NAME, data)
                     .await?;
 
                 // Create new broadcast message
@@ -408,7 +415,7 @@ where
                 channel.send_batch(&messages).await?;
             }
             _ => {
-                panic!("Received unexpected extension message {:?}", message);
+                panic!("Received unexpected local signal {}", name);
             }
         },
         Message::Close(message) => {

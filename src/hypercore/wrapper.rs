@@ -1,7 +1,7 @@
 use async_std::sync::{Arc, Mutex};
 #[cfg(not(target_arch = "wasm32"))]
 use async_std::task;
-use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
+use futures::channel::mpsc::UnboundedSender;
 use hypercore_protocol::{
     hypercore::{
         compact_encoding::{CompactEncoding, State},
@@ -22,8 +22,8 @@ use crate::common::{entry::Entry, PeerEvent};
 
 use super::{
     messaging::{
-        create_internal_append_message, create_internal_new_peers_created,
-        create_internal_peer_synced_message,
+        create_internal_append_local_signal, create_internal_new_peers_created_local_signal,
+        create_internal_peer_synced_local_signal,
     },
     on_doc_peer, on_peer, PeerState,
 };
@@ -77,7 +77,7 @@ where
             hypercore.append(data).await?
         };
         if self.channel_senders.len() > 0 {
-            let message = create_internal_append_message(outcome.length);
+            let message = create_internal_append_local_signal(outcome.length);
             self.notify_listeners(&message).await?;
         }
         Ok(outcome.length)
@@ -88,7 +88,7 @@ where
         contiguous_length: u64,
     ) -> anyhow::Result<()> {
         if self.channel_senders.len() > 0 {
-            let message = create_internal_peer_synced_message(contiguous_length);
+            let message = create_internal_peer_synced_local_signal(contiguous_length);
             self.notify_listeners(&message).await?;
         }
         Ok(())
@@ -99,7 +99,7 @@ where
         public_keys: Vec<[u8; 32]>,
     ) -> anyhow::Result<()> {
         if self.channel_senders.len() > 0 {
-            let message = create_internal_new_peers_created(public_keys);
+            let message = create_internal_new_peers_created_local_signal(public_keys);
             self.notify_listeners(&message).await?;
         }
         Ok(())
@@ -194,7 +194,7 @@ where
                     hypercore,
                     peer_state,
                     channel,
-                    internal_message_receiver,
+                    channel_receiver,
                     &mut peer_event_sender_for_task,
                 )
                 .await
@@ -204,7 +204,7 @@ where
                     hypercore,
                     peer_state,
                     channel,
-                    internal_message_receiver,
+                    channel_receiver,
                     &mut peer_event_sender_for_task,
                 )
                 .await
