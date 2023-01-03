@@ -279,9 +279,8 @@ where
                 let mut hypercore = hypercore.lock().await;
                 let info = hypercore.info();
                 let event: Option<PeerEvent> = if message.start == 0 {
-                    if info.contiguous_length == message.length
-                        && peer_state.remote_length == message.length
-                    {
+                    if info.contiguous_length == message.length {
+                        peer_state.remote_length = message.length;
                         if peer_state.notified_remote_synced_contiguous_length < message.length {
                             // The peer has advertised that they now have what we have
                             let event = Some(PeerEvent::RemotePeerSynced((
@@ -296,7 +295,8 @@ where
                     } else {
                         // If the other side advertises more than we have, and more than the peer length,
                         // we have recorded, then we need to request the rest of the blocks.
-                        if info.length < message.length && peer_state.remote_length < message.length
+                        if info.contiguous_length < message.length
+                            && peer_state.remote_length < message.length
                         {
                             peer_state.remote_length = message.length;
                             if let Some(request) = next_request(&mut hypercore, peer_state).await? {

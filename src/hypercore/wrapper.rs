@@ -160,7 +160,11 @@ where
         let peer_state = PeerState::new(is_doc, write_public_key, peer_public_keys);
         let hypercore = self.hypercore.clone();
         let mut peer_event_sender_for_task = peer_event_sender.clone();
-        let task_span = tracing::debug_span!("call_on_peer").or_current();
+        let task_span = if is_doc {
+            tracing::debug_span!("call_on_doc_peer").or_current()
+        } else {
+            tracing::debug_span!("call_on_peer").or_current()
+        };
         #[cfg(not(target_arch = "wasm32"))]
         task::spawn(async move {
             let _entered = task_span.enter();
