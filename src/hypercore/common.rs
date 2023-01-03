@@ -113,20 +113,12 @@ pub(super) struct InflightTracker {
 
 impl InflightTracker {
     pub fn add(&mut self, request: &mut Request) {
-        let id = self
-            .freed_ids
-            .pop()
-            .unwrap_or_else(|| self.requests.len() as u64 + 1);
+        let id = self.freed_ids.pop().unwrap_or_else(|| {
+            self.requests.push(None);
+            return self.requests.len() as u64;
+        });
         request.id = id;
-        self.requests.push(Some(request.clone()));
-    }
-
-    pub fn get(&self, id: u64) -> Option<Request> {
-        if id as usize <= self.requests.len() {
-            self.requests[id as usize - 1].clone()
-        } else {
-            None
-        }
+        self.requests[id as usize - 1] = Some(request.clone());
     }
 
     pub fn get_highest_upgrade(&self) -> Option<RequestUpgrade> {
