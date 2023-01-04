@@ -38,7 +38,9 @@ pub async fn setup_hypermerge_mesh(
 
         let hypermerge_peer_for_task = hypermerge_peer.clone();
         let state_event_sender_for_task = state_event_sender.clone();
+        let task_span = tracing::debug_span!("call_connect").or_current();
         async_std::task::spawn(async move {
+            let _entered = task_span.enter();
             connect(
                 hypermerge_peer_for_task,
                 proto_initiator,
@@ -48,7 +50,9 @@ pub async fn setup_hypermerge_mesh(
         });
 
         let (append_index_sender, append_index_receiver): (Sender<u64>, Receiver<u64>) = channel(1);
+        let task_span = tracing::debug_span!("call_append_value").or_current();
         async_std::task::spawn(async move {
+            let _entered = task_span.enter();
             append_value(&peer_name, hypermerge_peer, append_index_receiver).await;
         });
 
@@ -76,7 +80,9 @@ pub async fn setup_hypermerge_mesh(
     }
 
     let (append_index_sender, append_index_receiver): (Sender<u64>, Receiver<u64>) = channel(1);
+    let task_span = tracing::debug_span!("call_append_value").or_current();
     async_std::task::spawn(async move {
+        let _entered = task_span.enter();
         append_value("p1", hypermerge_creator, append_index_receiver).await;
     });
     senders.push(append_index_sender);
