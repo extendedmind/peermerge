@@ -72,7 +72,7 @@ async fn create_new_disk_hypercore(
     init_data: Option<Vec<u8>>,
 ) -> (u64, HypercoreWrapper<RandomAccessDisk>) {
     let hypercore_dir = get_path_from_discovery_key(prefix, discovery_key);
-    let storage = Storage::new_disk(&hypercore_dir, true).await.unwrap();
+    let storage = Storage::new_disk(&hypercore_dir, false).await.unwrap();
     let mut hypercore = Hypercore::new_with_key_pair(storage, key_pair)
         .await
         .unwrap();
