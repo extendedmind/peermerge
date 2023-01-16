@@ -26,18 +26,18 @@ mod common;
 use common::*;
 
 #[derive(Clone, Debug, Default)]
-struct ProtocolThreeWritersResult {
+struct MemoryThreeWritersResult {
     joiner_merge: Option<String>,
     creator_merge: Option<String>,
 }
-impl ProtocolThreeWritersResult {
+impl MemoryThreeWritersResult {
     pub fn merge_equals(&self) -> bool {
         self.joiner_merge.as_ref().unwrap() == self.creator_merge.as_ref().unwrap()
     }
 }
 
 #[test(async_std::test)]
-async fn protocol_three_writers() -> anyhow::Result<()> {
+async fn memory_three_writers() -> anyhow::Result<()> {
     let (proto_responder, proto_initiator) = create_pair_memory().await;
 
     let (creator_state_event_sender, creator_state_event_receiver): (
@@ -93,7 +93,7 @@ async fn protocol_three_writers() -> anyhow::Result<()> {
 
     let cork_sync_creator = Arc::new((Mutex::new(false), Condvar::new()));
     let cork_sync_joiner = Arc::clone(&cork_sync_creator);
-    let merge_result_for_creator = Arc::new(Mutex::new(ProtocolThreeWritersResult::default()));
+    let merge_result_for_creator = Arc::new(Mutex::new(MemoryThreeWritersResult::default()));
     let merge_result_for_joiner = merge_result_for_creator.clone();
     let append_sync_creator = Arc::new((Mutex::new(false), Condvar::new()));
     let append_sync_joiner = Arc::clone(&append_sync_creator);
@@ -129,7 +129,7 @@ async fn process_joiner_state_event(
     mut hypermerge: Hypermerge<RandomAccessMemory>,
     mut joiner_state_event_receiver: UnboundedReceiver<StateEvent>,
     cork_sync: Arc<(Mutex<bool>, Condvar)>,
-    merge_result: Arc<Mutex<ProtocolThreeWritersResult>>,
+    merge_result: Arc<Mutex<MemoryThreeWritersResult>>,
     append_sync: Arc<(Mutex<bool>, Condvar)>,
 ) -> anyhow::Result<()> {
     let mut text_id: Option<ObjId> = None;
@@ -244,7 +244,7 @@ async fn process_creator_state_events(
     mut creator_state_event_receiver: UnboundedReceiver<StateEvent>,
     text_id: ObjId,
     cork_sync: Arc<(Mutex<bool>, Condvar)>,
-    merge_result: Arc<Mutex<ProtocolThreeWritersResult>>,
+    merge_result: Arc<Mutex<MemoryThreeWritersResult>>,
     append_sync: Arc<(Mutex<bool>, Condvar)>,
 ) -> anyhow::Result<()> {
     let mut document_changes: Vec<Vec<Patch>> = vec![];
