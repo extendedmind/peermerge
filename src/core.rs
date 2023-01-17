@@ -21,9 +21,11 @@ use crate::automerge::{
     apply_entries_autocommit, init_doc_from_entries, put_scalar_autocommit, splice_text,
     AutomergeDoc, UnappliedEntries,
 };
+use crate::common::cipher::{doc_url_to_public_key, keys_to_doc_url};
 use crate::common::PeerEvent;
 use crate::hypercore::{
-    discovery_key_from_public_key, on_protocol, open_read_disk_hypercore, open_write_disk_hypercore,
+    create_new_write_disk_hypercore, discovery_key_from_public_key, on_protocol,
+    open_read_disk_hypercore,
 };
 use crate::{
     automerge::{init_doc_with_root_scalars, put_object_autocommit},
@@ -34,7 +36,7 @@ use crate::{
     },
     hypercore::{
         create_new_read_memory_hypercore, create_new_write_memory_hypercore, generate_keys,
-        keys_from_public_key, HypercoreWrapper,
+        HypercoreWrapper,
     },
     StateEvent,
 };
@@ -281,13 +283,15 @@ impl Hypermerge<RandomAccessMemory> {
     pub async fn create_doc_memory<P: Into<Prop>, V: Into<ScalarValue>>(
         peer_name: &str,
         root_scalars: Vec<(P, V)>,
+        encrypted: bool,
     ) -> Self {
         let result = prepare_create(peer_name, root_scalars).await;
 
         // Create the memory hypercore
-        let (length, hypercore) = create_new_write_memory_hypercore(
+        let (length, hypercore, encryption_key) = create_new_write_memory_hypercore(
             result.key_pair,
             serialize_entry(&Entry::new_init_doc(peer_name, result.data.clone())),
+            encrypted,
         )
         .await;
         let content = DocContent::new(
@@ -313,18 +317,20 @@ impl Hypermerge<RandomAccessMemory> {
 
     pub async fn register_doc_memory(peer_name: &str, doc_url: &str) -> Self {
         // Process keys from doc URL
-        let doc_public_key = to_public_key(doc_url);
-        let (doc_public_key, doc_discovery_key) = keys_from_public_key(&doc_public_key);
+        let doc_public_key = doc_url_to_public_key(doc_url, None);
+        let doc_discovery_key = discovery_key_from_public_key(&doc_public_key);
 
         // Create the doc hypercore
-        let (_, doc_hypercore) = create_new_read_memory_hypercore(&doc_public_key).await;
+        let (_, doc_hypercore, encryption_key) =
+            create_new_read_memory_hypercore(&doc_public_key).await;
 
         // Create the write hypercore
         let (write_key_pair, _, write_discovery_key) = generate_keys();
         let write_public_key = *write_key_pair.public.as_bytes();
-        let (_, write_hypercore) = create_new_write_memory_hypercore(
+        let (_, write_hypercore, encryption_key) = create_new_write_memory_hypercore(
             write_key_pair,
             serialize_entry(&Entry::new_init_peer(peer_name, doc_discovery_key)),
+            false, // TODO
         )
         .await;
 
@@ -509,7 +515,8 @@ async fn create_and_insert_read_memory_hypercores(
                 debug!("Concurrent creating of hypercores noticed, continuing.");
             }
             dashmap::mapref::entry::Entry::Vacant(vacant) => {
-                let (_, hypercore) = create_new_read_memory_hypercore(&public_key).await;
+                let (_, hypercore, encryption_key) =
+                    create_new_read_memory_hypercore(&public_key).await;
                 vacant.insert(Arc::new(Mutex::new(hypercore)));
             }
         }
@@ -522,19 +529,21 @@ async fn create_and_insert_read_memory_hypercores(
 
 #[cfg(not(target_arch = "wasm32"))]
 impl Hypermerge<RandomAccessDisk> {
-    pub async fn open_doc_disk<P: Into<Prop>, V: Into<ScalarValue>>(
+    pub async fn create_doc_disk<P: Into<Prop>, V: Into<ScalarValue>>(
         peer_name: &str,
         root_scalars: Vec<(P, V)>,
+        encrypted: bool,
         data_root_dir: PathBuf,
     ) -> Self {
         let result = prepare_create(peer_name, root_scalars).await;
 
         // Create the disk hypercore
-        let (length, hypercore) = open_write_disk_hypercore(
+        let (length, hypercore, encryption_key) = create_new_write_disk_hypercore(
             &data_root_dir,
             result.key_pair,
             &result.discovery_key,
             serialize_entry(&Entry::new_init_doc(peer_name, result.data.clone())),
+            encrypted,
         )
         .await;
         let content = DocContent::new(
@@ -562,8 +571,8 @@ impl Hypermerge<RandomAccessDisk> {
 
     pub async fn register_doc_disk(peer_name: &str, doc_url: &str, data_root_dir: PathBuf) -> Self {
         // Process keys from doc URL
-        let doc_public_key = to_public_key(doc_url);
-        let (doc_public_key, doc_discovery_key) = keys_from_public_key(&doc_public_key);
+        let doc_public_key = doc_url_to_public_key(doc_url, None);
+        let doc_discovery_key = discovery_key_from_public_key(&doc_public_key);
 
         // Create/open the doc hypercore
         let (_, doc_hypercore) =
@@ -572,11 +581,12 @@ impl Hypermerge<RandomAccessDisk> {
         // Create the write hypercore
         let (write_key_pair, _, write_discovery_key) = generate_keys();
         let write_public_key = *write_key_pair.public.as_bytes();
-        let (_, write_hypercore) = open_write_disk_hypercore(
+        let (_, write_hypercore, encryption_key) = create_new_write_disk_hypercore(
             &data_root_dir,
             write_key_pair,
             &write_discovery_key,
             serialize_entry(&Entry::new_init_peer(peer_name, doc_discovery_key)),
+            false, // TODO
         )
         .await;
 
@@ -943,7 +953,7 @@ async fn prepare_create<P: Into<Prop>, V: Into<ScalarValue>>(
     let (key_pair, encoded_doc_public_key, discovery_key) = generate_keys();
     let (doc, data) = init_doc_with_root_scalars(peer_name, &discovery_key, root_scalars);
     let doc_public_key = *key_pair.public.as_bytes();
-    let doc_url = to_doc_url(&encoded_doc_public_key);
+    let doc_url = keys_to_doc_url(&encoded_doc_public_key, None);
     PrepareCreateResult {
         key_pair,
         discovery_key,
@@ -1090,12 +1100,4 @@ fn serialize_entry(entry: &Entry) -> Vec<u8> {
     let mut buffer = enc_state.create_buffer();
     enc_state.encode(entry, &mut buffer);
     buffer.to_vec()
-}
-
-fn to_doc_url(public_key: &str) -> String {
-    format!("hypermerge:/{}", public_key)
-}
-
-fn to_public_key(doc_url: &str) -> String {
-    doc_url[12..].to_string()
 }

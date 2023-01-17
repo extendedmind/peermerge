@@ -49,7 +49,7 @@ async fn memory_three_writers() -> anyhow::Result<()> {
         UnboundedReceiver<StateEvent>,
     ) = unbounded();
     let mut hypermerge_creator =
-        Hypermerge::create_doc_memory("creator", vec![("version", 1)]).await;
+        Hypermerge::create_doc_memory("creator", vec![("version", 1)], false).await;
 
     // Insert a map with a text field to the document
     let texts_id = hypermerge_creator

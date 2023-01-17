@@ -1,10 +1,6 @@
 use async_std::sync::{Arc, Mutex};
 #[cfg(not(target_arch = "wasm32"))]
 use async_std::task;
-use chacha20poly1305::{
-    aead::{Aead, KeyInit},
-    XChaCha20Poly1305, XNonce,
-};
 use futures::channel::mpsc::UnboundedSender;
 use hypercore_protocol::{
     hypercore::{
@@ -22,7 +18,7 @@ use tracing::{debug, instrument};
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_futures::spawn_local;
 
-use crate::common::{entry::Entry, PeerEvent};
+use crate::common::{cipher::EntryCipher, entry::Entry, PeerEvent};
 
 use super::{
     messaging::{
@@ -31,16 +27,6 @@ use super::{
     },
     on_doc_peer, on_peer, PeerState,
 };
-
-struct EntryCipher {
-    cipher: XChaCha20Poly1305,
-}
-
-impl Debug for EntryCipher {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "EntryCipherSuite(undisclosed)")
-    }
-}
 
 #[derive(Debug)]
 pub struct HypercoreWrapper<T>
@@ -58,32 +44,48 @@ where
 
 #[cfg(not(target_arch = "wasm32"))]
 impl HypercoreWrapper<RandomAccessDisk> {
-    pub fn from_disk_hypercore(hypercore: Hypercore<RandomAccessDisk>) -> Self {
+    pub fn from_disk_hypercore(
+        hypercore: Hypercore<RandomAccessDisk>,
+        encrypted: bool,
+        existing_encryption_key: Option<Vec<u8>>,
+        generate_if_missing: bool,
+    ) -> (Self, Option<Vec<u8>>) {
         let public_key = hypercore.key_pair().public.to_bytes();
-        HypercoreWrapper {
+        let (entry_cipher, key) =
+            prepare_entry_cipher(encrypted, existing_encryption_key, generate_if_missing);
+        let wrapper = HypercoreWrapper {
             public_key,
             hypercore: Arc::new(Mutex::new(hypercore)),
-            encrypted: false,
-            entry_cipher: None,
+            encrypted,
+            entry_cipher,
             channel_senders: vec![],
             corked: false,
             message_queue: vec![],
-        }
+        };
+        (wrapper, key)
     }
 }
 
 impl HypercoreWrapper<RandomAccessMemory> {
-    pub fn from_memory_hypercore(hypercore: Hypercore<RandomAccessMemory>) -> Self {
+    pub fn from_memory_hypercore(
+        hypercore: Hypercore<RandomAccessMemory>,
+        encrypted: bool,
+        existing_encryption_key: Option<Vec<u8>>,
+        generate_if_missing: bool,
+    ) -> (Self, Option<Vec<u8>>) {
         let public_key = hypercore.key_pair().public.to_bytes();
-        HypercoreWrapper {
+        let (entry_cipher, key) =
+            prepare_entry_cipher(encrypted, existing_encryption_key, generate_if_missing);
+        let mut wrapper = HypercoreWrapper {
             public_key,
             hypercore: Arc::new(Mutex::new(hypercore)),
-            encrypted: false,
-            entry_cipher: None,
+            encrypted,
+            entry_cipher,
             channel_senders: vec![],
             corked: false,
             message_queue: vec![],
-        }
+        };
+        (wrapper, key)
     }
 }
 
@@ -91,17 +93,6 @@ impl<T> HypercoreWrapper<T>
 where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send + 'static,
 {
-    pub(crate) fn set_encrypted(&mut self, encrypted: bool) {
-        self.encrypted = encrypted;
-    }
-
-    pub(crate) fn set_encryption_key(&mut self, key: &[u8]) {
-        self.entry_cipher = Some(EntryCipher {
-            cipher: XChaCha20Poly1305::new_from_slice(key).unwrap(),
-        });
-        self.encrypted = true;
-    }
-
     pub(crate) async fn append(&mut self, data: &[u8]) -> anyhow::Result<u64> {
         let outcome = {
             let mut hypercore = self.hypercore.lock().await;
@@ -110,8 +101,8 @@ where
                 if !self.encrypted {
                     panic!("Trying to append encrypted entry to an unencrypted hypercore");
                 }
-                let nonce = generate_nonce(&self.public_key, hypercore.info().length);
-                let encrypted = entry_cipher.cipher.encrypt(&nonce, data).unwrap();
+                let encrypted =
+                    entry_cipher.encrypt(&self.public_key, hypercore.info().length, data);
                 hypercore.append(&encrypted).await?
             } else if self.encrypted {
                 panic!("Trying to append to an encrypted hypercore without a key provided");
@@ -283,8 +274,24 @@ where
     }
 }
 
-fn generate_nonce(public_key: &[u8; 32], index: u64) -> XNonce {
-    let mut nonce = public_key[..16].to_vec();
-    nonce.extend(index.to_le_bytes());
-    XNonce::clone_from_slice(&nonce)
+fn prepare_entry_cipher(
+    encrypted: bool,
+    existing_encryption_key: Option<Vec<u8>>,
+    generate_if_missing: bool,
+) -> (Option<EntryCipher>, Option<Vec<u8>>) {
+    if encrypted {
+        if let Some(encryption_key) = existing_encryption_key {
+            (
+                Some(EntryCipher::from_encryption_key(&encryption_key)),
+                None,
+            )
+        } else if generate_if_missing {
+            let (entry_cipher, key) = EntryCipher::from_generated_key();
+            (Some(entry_cipher), Some(key))
+        } else {
+            (None, None)
+        }
+    } else {
+        (None, None)
+    }
 }
