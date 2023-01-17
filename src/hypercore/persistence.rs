@@ -28,13 +28,13 @@ pub(crate) fn discovery_key_from_public_key(public_key: &[u8; 32]) -> [u8; 32] {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) async fn create_new_write_disk_hypercore(
+pub(crate) async fn open_write_disk_hypercore(
     prefix: &PathBuf,
     key_pair: Keypair,
     discovery_key: &[u8; 32],
     init_data: Vec<u8>,
 ) -> (u64, HypercoreWrapper<RandomAccessDisk>) {
-    create_new_disk_hypercore(
+    open_disk_hypercore(
         prefix,
         PartialKeypair {
             public: key_pair.public,
@@ -47,12 +47,12 @@ pub(crate) async fn create_new_write_disk_hypercore(
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) async fn create_new_read_disk_hypercore(
+pub(crate) async fn open_read_disk_hypercore(
     prefix: &PathBuf,
     public_key: &[u8; 32],
     discovery_key: &[u8; 32],
 ) -> (u64, HypercoreWrapper<RandomAccessDisk>) {
-    create_new_disk_hypercore(
+    open_disk_hypercore(
         prefix,
         PartialKeypair {
             public: PublicKey::from_bytes(public_key).unwrap(),
@@ -65,7 +65,7 @@ pub(crate) async fn create_new_read_disk_hypercore(
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-async fn create_new_disk_hypercore(
+async fn open_disk_hypercore(
     prefix: &PathBuf,
     key_pair: PartialKeypair,
     discovery_key: &[u8; 32],

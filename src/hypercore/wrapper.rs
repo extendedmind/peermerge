@@ -1,6 +1,10 @@
 use async_std::sync::{Arc, Mutex};
 #[cfg(not(target_arch = "wasm32"))]
 use async_std::task;
+use chacha20poly1305::{
+    aead::{Aead, KeyInit},
+    XChaCha20Poly1305, XNonce,
+};
 use futures::channel::mpsc::UnboundedSender;
 use hypercore_protocol::{
     hypercore::{
@@ -28,13 +32,25 @@ use super::{
     on_doc_peer, on_peer, PeerState,
 };
 
-#[derive(Debug, Clone)]
+struct EntryCipher {
+    cipher: XChaCha20Poly1305,
+}
+
+impl Debug for EntryCipher {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "EntryCipherSuite(undisclosed)")
+    }
+}
+
+#[derive(Debug)]
 pub struct HypercoreWrapper<T>
 where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send,
 {
     pub(super) public_key: [u8; 32],
     pub(super) hypercore: Arc<Mutex<Hypercore<T>>>,
+    pub(crate) encrypted: bool,
+    entry_cipher: Option<EntryCipher>,
     channel_senders: Vec<ChannelSender<Message>>,
     corked: bool,
     message_queue: Vec<Message>,
@@ -47,6 +63,8 @@ impl HypercoreWrapper<RandomAccessDisk> {
         HypercoreWrapper {
             public_key,
             hypercore: Arc::new(Mutex::new(hypercore)),
+            encrypted: false,
+            entry_cipher: None,
             channel_senders: vec![],
             corked: false,
             message_queue: vec![],
@@ -60,6 +78,8 @@ impl HypercoreWrapper<RandomAccessMemory> {
         HypercoreWrapper {
             public_key,
             hypercore: Arc::new(Mutex::new(hypercore)),
+            encrypted: false,
+            entry_cipher: None,
             channel_senders: vec![],
             corked: false,
             message_queue: vec![],
@@ -71,10 +91,33 @@ impl<T> HypercoreWrapper<T>
 where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send + 'static,
 {
+    pub(crate) fn set_encrypted(&mut self, encrypted: bool) {
+        self.encrypted = encrypted;
+    }
+
+    pub(crate) fn set_encryption_key(&mut self, key: &[u8]) {
+        self.entry_cipher = Some(EntryCipher {
+            cipher: XChaCha20Poly1305::new_from_slice(key).unwrap(),
+        });
+        self.encrypted = true;
+    }
+
     pub(crate) async fn append(&mut self, data: &[u8]) -> anyhow::Result<u64> {
         let outcome = {
             let mut hypercore = self.hypercore.lock().await;
-            hypercore.append(data).await?
+
+            if let Some(entry_cipher) = &self.entry_cipher {
+                if !self.encrypted {
+                    panic!("Trying to append encrypted entry to an unencrypted hypercore");
+                }
+                let nonce = generate_nonce(&self.public_key, hypercore.info().length);
+                let encrypted = entry_cipher.cipher.encrypt(&nonce, data).unwrap();
+                hypercore.append(&encrypted).await?
+            } else if self.encrypted {
+                panic!("Trying to append to an encrypted hypercore without a key provided");
+            } else {
+                hypercore.append(data).await?
+            }
         };
         if self.channel_senders.len() > 0 {
             let message = create_append_local_signal(outcome.length);
@@ -238,4 +281,10 @@ where
         }
         Ok(())
     }
+}
+
+fn generate_nonce(public_key: &[u8; 32], index: u64) -> XNonce {
+    let mut nonce = public_key[..16].to_vec();
+    nonce.extend(index.to_le_bytes());
+    XNonce::clone_from_slice(&nonce)
 }

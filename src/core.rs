@@ -23,8 +23,7 @@ use crate::automerge::{
 };
 use crate::common::PeerEvent;
 use crate::hypercore::{
-    create_new_read_disk_hypercore, create_new_write_disk_hypercore, discovery_key_from_public_key,
-    on_protocol,
+    discovery_key_from_public_key, on_protocol, open_read_disk_hypercore, open_write_disk_hypercore,
 };
 use crate::{
     automerge::{init_doc_with_root_scalars, put_object_autocommit},
@@ -274,6 +273,10 @@ where
     }
 }
 
+//////////////////////////////////////////////////////
+//
+// RandomAccessMemory
+
 impl Hypermerge<RandomAccessMemory> {
     pub async fn create_doc_memory<P: Into<Prop>, V: Into<ScalarValue>>(
         peer_name: &str,
@@ -513,9 +516,13 @@ async fn create_and_insert_read_memory_hypercores(
     }
 }
 
+//////////////////////////////////////////////////////
+//
+// RandomAccessDisk
+
 #[cfg(not(target_arch = "wasm32"))]
 impl Hypermerge<RandomAccessDisk> {
-    pub async fn create_doc_disk<P: Into<Prop>, V: Into<ScalarValue>>(
+    pub async fn open_doc_disk<P: Into<Prop>, V: Into<ScalarValue>>(
         peer_name: &str,
         root_scalars: Vec<(P, V)>,
         data_root_dir: PathBuf,
@@ -523,7 +530,7 @@ impl Hypermerge<RandomAccessDisk> {
         let result = prepare_create(peer_name, root_scalars).await;
 
         // Create the disk hypercore
-        let (length, hypercore) = create_new_write_disk_hypercore(
+        let (length, hypercore) = open_write_disk_hypercore(
             &data_root_dir,
             result.key_pair,
             &result.discovery_key,
@@ -553,60 +560,19 @@ impl Hypermerge<RandomAccessDisk> {
         .await
     }
 
-    async fn new_disk(
-        write_hypercore: ([u8; 32], [u8; 32], HypercoreWrapper<RandomAccessDisk>),
-        peer_hypercores: Vec<([u8; 32], [u8; 32], HypercoreWrapper<RandomAccessDisk>)>,
-        content: Option<DocContent>,
-        discovery_key: [u8; 32],
-        peer_name: &str,
-        doc_public_key: [u8; 32],
-        doc_url: &str,
-        data_root_dir: PathBuf,
-    ) -> Self {
-        let hypercores: DashMap<[u8; 32], Arc<Mutex<HypercoreWrapper<RandomAccessDisk>>>> =
-            DashMap::new();
-        let (write_public_key, write_discovery_key, write_hypercore) = write_hypercore;
-        hypercores.insert(write_discovery_key, Arc::new(Mutex::new(write_hypercore)));
-        let mut peer_public_keys = vec![];
-        for (peer_public_key, peer_discovery_key, peer_hypercore) in peer_hypercores {
-            hypercores.insert(peer_discovery_key, Arc::new(Mutex::new(peer_hypercore)));
-            peer_public_keys.push(peer_public_key);
-        }
-        let mut doc_state = DocStateWrapper::new_disk(
-            doc_public_key,
-            Some(write_public_key),
-            content,
-            &data_root_dir,
-        )
-        .await;
-        doc_state
-            .add_peer_public_keys_to_state(peer_public_keys)
-            .await;
-        Self {
-            hypercores: Arc::new(hypercores),
-            doc_state: Arc::new(Mutex::new(doc_state)),
-            state_event_sender: Arc::new(Mutex::new(None)),
-            prefix: data_root_dir,
-            discovery_key,
-            doc_url: doc_url.to_string(),
-            peer_name: peer_name.to_string(),
-        }
-    }
-
     pub async fn register_doc_disk(peer_name: &str, doc_url: &str, data_root_dir: PathBuf) -> Self {
         // Process keys from doc URL
         let doc_public_key = to_public_key(doc_url);
         let (doc_public_key, doc_discovery_key) = keys_from_public_key(&doc_public_key);
 
-        // Create the doc hypercore
+        // Create/open the doc hypercore
         let (_, doc_hypercore) =
-            create_new_read_disk_hypercore(&data_root_dir, &doc_public_key, &doc_discovery_key)
-                .await;
+            open_read_disk_hypercore(&data_root_dir, &doc_public_key, &doc_discovery_key).await;
 
         // Create the write hypercore
         let (write_key_pair, _, write_discovery_key) = generate_keys();
         let write_public_key = *write_key_pair.public.as_bytes();
-        let (_, write_hypercore) = create_new_write_disk_hypercore(
+        let (_, write_hypercore) = open_write_disk_hypercore(
             &data_root_dir,
             write_key_pair,
             &write_discovery_key,
@@ -699,8 +665,49 @@ impl Hypermerge<RandomAccessDisk> {
         .await?;
         Ok(())
     }
+
+    async fn new_disk(
+        write_hypercore: ([u8; 32], [u8; 32], HypercoreWrapper<RandomAccessDisk>),
+        peer_hypercores: Vec<([u8; 32], [u8; 32], HypercoreWrapper<RandomAccessDisk>)>,
+        content: Option<DocContent>,
+        discovery_key: [u8; 32],
+        peer_name: &str,
+        doc_public_key: [u8; 32],
+        doc_url: &str,
+        data_root_dir: PathBuf,
+    ) -> Self {
+        let hypercores: DashMap<[u8; 32], Arc<Mutex<HypercoreWrapper<RandomAccessDisk>>>> =
+            DashMap::new();
+        let (write_public_key, write_discovery_key, write_hypercore) = write_hypercore;
+        hypercores.insert(write_discovery_key, Arc::new(Mutex::new(write_hypercore)));
+        let mut peer_public_keys = vec![];
+        for (peer_public_key, peer_discovery_key, peer_hypercore) in peer_hypercores {
+            hypercores.insert(peer_discovery_key, Arc::new(Mutex::new(peer_hypercore)));
+            peer_public_keys.push(peer_public_key);
+        }
+        let mut doc_state = DocStateWrapper::new_disk(
+            doc_public_key,
+            Some(write_public_key),
+            content,
+            &data_root_dir,
+        )
+        .await;
+        doc_state
+            .add_peer_public_keys_to_state(peer_public_keys)
+            .await;
+        Self {
+            hypercores: Arc::new(hypercores),
+            doc_state: Arc::new(Mutex::new(doc_state)),
+            state_event_sender: Arc::new(Mutex::new(None)),
+            prefix: data_root_dir,
+            discovery_key,
+            doc_url: doc_url.to_string(),
+            peer_name: peer_name.to_string(),
+        }
+    }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[instrument(level = "debug", skip_all)]
 async fn on_peer_event_disk(
     doc_discovery_key: &[u8; 32],
@@ -753,6 +760,7 @@ async fn on_peer_event_disk(
     debug!("Exiting");
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 async fn create_and_insert_read_disk_hypercores(
     public_keys: Vec<[u8; 32]>,
     hypercores: Arc<DashMap<[u8; 32], Arc<Mutex<HypercoreWrapper<RandomAccessDisk>>>>>,
@@ -769,13 +777,16 @@ async fn create_and_insert_read_disk_hypercores(
             }
             dashmap::mapref::entry::Entry::Vacant(vacant) => {
                 let (_, hypercore) =
-                    create_new_read_disk_hypercore(&data_root_dir, &public_key, &discovery_key)
-                        .await;
+                    open_read_disk_hypercore(&data_root_dir, &public_key, &discovery_key).await;
                 vacant.insert(Arc::new(Mutex::new(hypercore)));
             }
         }
     }
 }
+
+//////////////////////////////////////////////////////
+//
+// Utilities
 
 #[instrument(level = "debug", skip_all)]
 async fn notify_new_peers_created<T>(

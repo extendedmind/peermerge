@@ -63,7 +63,7 @@ async fn disk_two_peers(encrypted: bool) -> anyhow::Result<()> {
         UnboundedReceiver<StateEvent>,
     ) = unbounded();
     let hypermerge_creator =
-        Hypermerge::create_doc_disk("creator", vec![("version", 1)], creator_dir).await;
+        Hypermerge::open_doc_disk("creator", vec![("version", 1)], creator_dir).await;
 
     let mut hypermerge_creator_for_task = hypermerge_creator.clone();
     task::spawn(async move {
