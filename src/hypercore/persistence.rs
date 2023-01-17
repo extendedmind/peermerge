@@ -10,11 +10,10 @@ use std::path::PathBuf;
 
 use super::HypercoreWrapper;
 
-pub(crate) fn generate_keys() -> (Keypair, String, [u8; 32]) {
+pub(crate) fn generate_keys() -> (Keypair, [u8; 32]) {
     let key_pair = generate_keypair();
     let discovery_key = discovery_key(&key_pair.public.to_bytes());
-    let encoded_public_key = hex::encode(key_pair.public);
-    (key_pair, encoded_public_key, discovery_key)
+    (key_pair, discovery_key)
 }
 
 pub(crate) fn discovery_key_from_public_key(public_key: &[u8; 32]) -> [u8; 32] {

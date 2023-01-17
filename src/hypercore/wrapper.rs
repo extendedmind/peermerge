@@ -47,12 +47,15 @@ impl HypercoreWrapper<RandomAccessDisk> {
     pub fn from_disk_hypercore(
         hypercore: Hypercore<RandomAccessDisk>,
         encrypted: bool,
-        existing_encryption_key: Option<Vec<u8>>,
-        generate_if_missing: bool,
+        encryption_key: Option<Vec<u8>>,
+        generate_encryption_key_if_missing: bool,
     ) -> (Self, Option<Vec<u8>>) {
         let public_key = hypercore.key_pair().public.to_bytes();
-        let (entry_cipher, key) =
-            prepare_entry_cipher(encrypted, existing_encryption_key, generate_if_missing);
+        let (entry_cipher, key) = prepare_entry_cipher(
+            encrypted,
+            encryption_key,
+            generate_encryption_key_if_missing,
+        );
         let wrapper = HypercoreWrapper {
             public_key,
             hypercore: Arc::new(Mutex::new(hypercore)),
@@ -70,13 +73,16 @@ impl HypercoreWrapper<RandomAccessMemory> {
     pub fn from_memory_hypercore(
         hypercore: Hypercore<RandomAccessMemory>,
         encrypted: bool,
-        existing_encryption_key: Option<Vec<u8>>,
-        generate_if_missing: bool,
+        encryption_key: Option<Vec<u8>>,
+        generate_encryption_key_if_missing: bool,
     ) -> (Self, Option<Vec<u8>>) {
         let public_key = hypercore.key_pair().public.to_bytes();
-        let (entry_cipher, key) =
-            prepare_entry_cipher(encrypted, existing_encryption_key, generate_if_missing);
-        let mut wrapper = HypercoreWrapper {
+        let (entry_cipher, key) = prepare_entry_cipher(
+            encrypted,
+            encryption_key,
+            generate_encryption_key_if_missing,
+        );
+        let wrapper = HypercoreWrapper {
             public_key,
             hypercore: Arc::new(Mutex::new(hypercore)),
             encrypted,
@@ -276,16 +282,16 @@ where
 
 fn prepare_entry_cipher(
     encrypted: bool,
-    existing_encryption_key: Option<Vec<u8>>,
-    generate_if_missing: bool,
+    encryption_key: Option<Vec<u8>>,
+    generate_encryption_key_if_missing: bool,
 ) -> (Option<EntryCipher>, Option<Vec<u8>>) {
     if encrypted {
-        if let Some(encryption_key) = existing_encryption_key {
+        if let Some(encryption_key) = encryption_key {
             (
                 Some(EntryCipher::from_encryption_key(&encryption_key)),
                 None,
             )
-        } else if generate_if_missing {
+        } else if generate_encryption_key_if_missing {
             let (entry_cipher, key) = EntryCipher::from_generated_key();
             (Some(entry_cipher), Some(key))
         } else {

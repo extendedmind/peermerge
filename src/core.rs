@@ -317,7 +317,7 @@ impl Hypermerge<RandomAccessMemory> {
 
     pub async fn register_doc_memory(peer_name: &str, doc_url: &str) -> Self {
         // Process keys from doc URL
-        let doc_public_key = doc_url_to_public_key(doc_url, None);
+        let (doc_public_key, encrypted) = doc_url_to_public_key(doc_url, None);
         let doc_discovery_key = discovery_key_from_public_key(&doc_public_key);
 
         // Create the doc hypercore
@@ -325,7 +325,7 @@ impl Hypermerge<RandomAccessMemory> {
             create_new_read_memory_hypercore(&doc_public_key).await;
 
         // Create the write hypercore
-        let (write_key_pair, _, write_discovery_key) = generate_keys();
+        let (write_key_pair, write_discovery_key) = generate_keys();
         let write_public_key = *write_key_pair.public.as_bytes();
         let (_, write_hypercore, encryption_key) = create_new_write_memory_hypercore(
             write_key_pair,
@@ -571,7 +571,7 @@ impl Hypermerge<RandomAccessDisk> {
 
     pub async fn register_doc_disk(peer_name: &str, doc_url: &str, data_root_dir: PathBuf) -> Self {
         // Process keys from doc URL
-        let doc_public_key = doc_url_to_public_key(doc_url, None);
+        let (doc_public_key, encrypted) = doc_url_to_public_key(doc_url, None);
         let doc_discovery_key = discovery_key_from_public_key(&doc_public_key);
 
         // Create/open the doc hypercore
@@ -579,7 +579,7 @@ impl Hypermerge<RandomAccessDisk> {
             open_read_disk_hypercore(&data_root_dir, &doc_public_key, &doc_discovery_key).await;
 
         // Create the write hypercore
-        let (write_key_pair, _, write_discovery_key) = generate_keys();
+        let (write_key_pair, write_discovery_key) = generate_keys();
         let write_public_key = *write_key_pair.public.as_bytes();
         let (_, write_hypercore, encryption_key) = create_new_write_disk_hypercore(
             &data_root_dir,
@@ -950,10 +950,10 @@ async fn prepare_create<P: Into<Prop>, V: Into<ScalarValue>>(
     root_scalars: Vec<(P, V)>,
 ) -> PrepareCreateResult {
     // Generate a key pair, its discovery key and the public key string
-    let (key_pair, encoded_doc_public_key, discovery_key) = generate_keys();
+    let (key_pair, discovery_key) = generate_keys();
     let (doc, data) = init_doc_with_root_scalars(peer_name, &discovery_key, root_scalars);
     let doc_public_key = *key_pair.public.as_bytes();
-    let doc_url = keys_to_doc_url(&encoded_doc_public_key, None);
+    let doc_url = keys_to_doc_url(&doc_public_key, None);
     PrepareCreateResult {
         key_pair,
         discovery_key,

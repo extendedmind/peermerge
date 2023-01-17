@@ -231,9 +231,9 @@ mod tests {
         let peer_name = "test";
         let int_prop = "number";
         let int_value = 1;
-        let (_, _, doc_discovery_key) = generate_keys();
-        let (_, _, peer_1_discovery_key) = generate_keys();
-        let (_, _, peer_2_discovery_key) = generate_keys();
+        let (_, doc_discovery_key) = generate_keys();
+        let (_, peer_1_discovery_key) = generate_keys();
+        let (_, peer_2_discovery_key) = generate_keys();
         let (mut doc, data) =
             init_doc_with_root_scalars(peer_name, &doc_discovery_key, vec![("version", 1)]);
 
