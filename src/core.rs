@@ -55,6 +55,8 @@ where
     peer_name: String,
     discovery_key: [u8; 32],
     doc_url: String,
+    encrypted: bool,
+    encryption_key: Option<Vec<u8>>,
 }
 
 impl<T> Hypermerge<T>
@@ -280,7 +282,7 @@ where
 // RandomAccessMemory
 
 impl Hypermerge<RandomAccessMemory> {
-    pub async fn create_doc_memory<P: Into<Prop>, V: Into<ScalarValue>>(
+    pub async fn create_new_memory<P: Into<Prop>, V: Into<ScalarValue>>(
         peer_name: &str,
         root_scalars: Vec<(P, V)>,
         encrypted: bool,
@@ -311,13 +313,19 @@ impl Hypermerge<RandomAccessMemory> {
             peer_name,
             result.doc_public_key,
             &result.doc_url,
+            encrypted,
+            encryption_key,
         )
         .await
     }
 
-    pub async fn register_doc_memory(peer_name: &str, doc_url: &str) -> Self {
+    pub async fn attach_new_peer_memory(
+        peer_name: &str,
+        doc_url: &str,
+        encryption_key: Option<Vec<u8>>,
+    ) -> Self {
         // Process keys from doc URL
-        let (doc_public_key, encrypted) = doc_url_to_public_key(doc_url, None);
+        let (doc_public_key, encrypted) = doc_url_to_public_key(doc_url, encryption_key);
         let doc_discovery_key = discovery_key_from_public_key(&doc_public_key);
 
         // Create the doc hypercore
@@ -346,6 +354,8 @@ impl Hypermerge<RandomAccessMemory> {
             peer_name,
             doc_public_key,
             doc_url,
+            encrypted,
+            encryption_key,
         )
         .await
     }
@@ -424,6 +434,8 @@ impl Hypermerge<RandomAccessMemory> {
         peer_name: &str,
         doc_public_key: [u8; 32],
         doc_url: &str,
+        encrypted: bool,
+        encryption_key: Option<Vec<u8>>,
     ) -> Self {
         let hypercores: DashMap<[u8; 32], Arc<Mutex<HypercoreWrapper<RandomAccessMemory>>>> =
             DashMap::new();
@@ -447,6 +459,8 @@ impl Hypermerge<RandomAccessMemory> {
             discovery_key,
             doc_url: doc_url.to_string(),
             peer_name: peer_name.to_string(),
+            encrypted,
+            encryption_key,
         }
     }
 }
@@ -529,7 +543,7 @@ async fn create_and_insert_read_memory_hypercores(
 
 #[cfg(not(target_arch = "wasm32"))]
 impl Hypermerge<RandomAccessDisk> {
-    pub async fn create_doc_disk<P: Into<Prop>, V: Into<ScalarValue>>(
+    pub async fn create_new_disk<P: Into<Prop>, V: Into<ScalarValue>>(
         peer_name: &str,
         root_scalars: Vec<(P, V)>,
         encrypted: bool,
@@ -564,14 +578,21 @@ impl Hypermerge<RandomAccessDisk> {
             peer_name,
             result.doc_public_key,
             &result.doc_url,
+            encrypted,
+            encryption_key,
             data_root_dir,
         )
         .await
     }
 
-    pub async fn register_doc_disk(peer_name: &str, doc_url: &str, data_root_dir: PathBuf) -> Self {
+    pub async fn attach_new_peer_disk(
+        peer_name: &str,
+        doc_url: &str,
+        encryption_key: Option<Vec<u8>>,
+        data_root_dir: PathBuf,
+    ) -> Self {
         // Process keys from doc URL
-        let (doc_public_key, encrypted) = doc_url_to_public_key(doc_url, None);
+        let (doc_public_key, encrypted) = doc_url_to_public_key(doc_url, encryption_key);
         let doc_discovery_key = discovery_key_from_public_key(&doc_public_key);
 
         // Create/open the doc hypercore
@@ -602,6 +623,8 @@ impl Hypermerge<RandomAccessDisk> {
             peer_name,
             doc_public_key,
             doc_url,
+            encrypted,
+            encryption_key,
             data_root_dir,
         )
         .await
@@ -684,6 +707,8 @@ impl Hypermerge<RandomAccessDisk> {
         peer_name: &str,
         doc_public_key: [u8; 32],
         doc_url: &str,
+        encrypted: bool,
+        encryption_key: Option<Vec<u8>>,
         data_root_dir: PathBuf,
     ) -> Self {
         let hypercores: DashMap<[u8; 32], Arc<Mutex<HypercoreWrapper<RandomAccessDisk>>>> =
@@ -713,6 +738,8 @@ impl Hypermerge<RandomAccessDisk> {
             discovery_key,
             doc_url: doc_url.to_string(),
             peer_name: peer_name.to_string(),
+            encrypted,
+            encryption_key,
         }
     }
 }

@@ -56,7 +56,7 @@ pub(crate) fn doc_url_to_public_key(
 ) -> ([u8; 32], bool) {
     let public_key_hex = doc_url[12..76].to_string();
     let public_key = hex::decode(public_key_hex).unwrap().try_into().unwrap();
-    let encrypted = if doc_url.len() > 81 && doc_url[76..81] == "?enc=".to_string() {
+    let encrypted = if doc_url_encrypted(doc_url) {
         // The url indicates that its encrypted. If an encryption key is given, test that it works.
         if let Some(encryption_key) = encryption_key_to_validate {
             let enc: Vec<u8> = hex::decode(doc_url[81..].to_string()).unwrap();
@@ -73,6 +73,10 @@ pub(crate) fn doc_url_to_public_key(
         false
     };
     (public_key, encrypted)
+}
+
+pub fn doc_url_encrypted(doc_url: &str) -> bool {
+    doc_url.len() > 81 && doc_url[76..81] == "?enc=".to_string()
 }
 
 fn generate_nonce(public_key: &[u8; 32], index: u64) -> XNonce {

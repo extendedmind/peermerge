@@ -13,6 +13,7 @@ mod core;
 mod hypercore;
 mod repository;
 
+pub use crate::common::cipher::doc_url_encrypted;
 pub use crate::common::StateEvent;
 pub use crate::core::Hypermerge;
 pub use crate::repository::Repository;

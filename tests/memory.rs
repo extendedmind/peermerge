@@ -49,7 +49,7 @@ async fn memory_three_writers() -> anyhow::Result<()> {
         UnboundedReceiver<StateEvent>,
     ) = unbounded();
     let mut hypermerge_creator =
-        Hypermerge::create_doc_memory("creator", vec![("version", 1)], false).await;
+        Hypermerge::create_new_memory("creator", vec![("version", 1)], false).await;
 
     // Insert a map with a text field to the document
     let texts_id = hypermerge_creator
@@ -79,7 +79,7 @@ async fn memory_three_writers() -> anyhow::Result<()> {
     });
 
     let hypermerge_joiner =
-        Hypermerge::register_doc_memory("joiner", &hypermerge_creator.doc_url()).await;
+        Hypermerge::attach_new_peer_memory("joiner", &hypermerge_creator.doc_url(), None).await;
     let hypermerge_joiner_for_task = hypermerge_joiner.clone();
     task::spawn(async move {
         connect(
@@ -336,8 +336,12 @@ async fn process_creator_state_events(
                         UnboundedSender<StateEvent>,
                         UnboundedReceiver<StateEvent>,
                     ) = unbounded();
-                    let hypermerge_latecomer =
-                        Hypermerge::register_doc_memory("latecomer", &hypermerge.doc_url()).await;
+                    let hypermerge_latecomer = Hypermerge::attach_new_peer_memory(
+                        "latecomer",
+                        &hypermerge.doc_url(),
+                        None,
+                    )
+                    .await;
                     let hypermerge_latecomer_for_task = hypermerge_latecomer.clone();
                     let hypermerge_creator_for_task = hypermerge.clone();
                     let creator_state_event_sender_for_task = creator_state_event_sender.clone();
