@@ -125,7 +125,7 @@ async fn process_joiner_state_event(
             event, document_changes
         );
         match event {
-            StateEvent::PeerSynced((name, _, len)) => {
+            StateEvent::PeerSynced((Some(name), _, len)) => {
                 assert_eq!(name, "creator");
                 assert_eq!(len, 1);
                 let (value, _) = hypermerge.get(ROOT, "version").await?.unwrap();
@@ -135,6 +135,9 @@ async fn process_joiner_state_event(
             StateEvent::DocumentChanged(patches) => {
                 document_changes.push(patches);
                 break;
+            }
+            _ => {
+                panic!("Unkown event {:?}", event);
             }
         }
     }
@@ -153,7 +156,7 @@ async fn process_creator_state_events(
             event, document_changes
         );
         match event {
-            StateEvent::PeerSynced((name, _, len)) => {
+            StateEvent::PeerSynced((Some(name), _, len)) => {
                 assert_eq!(name, "joiner");
                 assert_eq!(len, 1);
                 let (value, _) = hypermerge.get(ROOT, "version").await?.unwrap();
@@ -163,6 +166,9 @@ async fn process_creator_state_events(
             StateEvent::RemotePeerSynced(_) => {}
             StateEvent::DocumentChanged(patches) => {
                 document_changes.push(patches);
+            }
+            _ => {
+                panic!("Unkown event {:?}", event);
             }
         }
     }

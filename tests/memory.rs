@@ -143,7 +143,7 @@ async fn process_joiner_state_event(
             document_changes.len()
         );
         match event {
-            StateEvent::PeerSynced((name, _, len)) => {
+            StateEvent::PeerSynced((Some(name), _, len)) => {
                 if !peer_synced.contains_key("creator") {
                     assert_eq!(name, "creator");
                     let (_value, local_texts_id) = hypermerge.get(ROOT, "texts").await?.unwrap();
@@ -232,6 +232,9 @@ async fn process_joiner_state_event(
                     panic!("Did not expect more joiner document changes");
                 }
             }
+            _ => {
+                panic!("Unkown event {:?}", event);
+            }
         }
     }
     Ok(())
@@ -260,7 +263,7 @@ async fn process_creator_state_events(
         );
         let text_id = text_id.clone();
         match event {
-            StateEvent::PeerSynced((name, _, len)) => {
+            StateEvent::PeerSynced((Some(name), _, len)) => {
                 peer_synced.insert(name.clone(), len);
                 if latecomer_attached {
                     assert!(name == "joiner" || name == "latecomer");
@@ -394,6 +397,9 @@ async fn process_creator_state_events(
                     panic!("Did not expect more creator document changes");
                 }
             }
+            _ => {
+                panic!("Unkown event {:?}", event);
+            }
         }
     }
     Ok(())
@@ -416,7 +422,7 @@ async fn process_latecomer_state_event(
             document_changes.len()
         );
         match event {
-            StateEvent::PeerSynced((name, _, len)) => {
+            StateEvent::PeerSynced((Some(name), _, len)) => {
                 assert!(name == "creator" || name == "joiner");
                 peer_synced.insert(name.clone(), len);
                 if peer_synced.contains_key("creator")
@@ -464,6 +470,9 @@ async fn process_latecomer_state_event(
                     }
                     break;
                 }
+            }
+            _ => {
+                panic!("Unkown event {:?}", event);
             }
         }
     }

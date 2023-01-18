@@ -53,6 +53,7 @@ where
     state_event_sender: Arc<Mutex<Option<UnboundedSender<StateEvent>>>>,
     prefix: PathBuf,
     peer_name: String,
+    proxy_peer: bool,
     discovery_key: [u8; 32],
     doc_url: String,
     encrypted: bool,
@@ -295,33 +296,34 @@ impl Hypermerge<RandomAccessMemory> {
         let result = prepare_create(peer_name, root_scalars).await;
 
         // Create the memory hypercore
-        let (length, hypercore, encryption_key) = create_new_write_memory_hypercore(
+        let (length, hypercore, generated_encryption_key) = create_new_write_memory_hypercore(
             result.key_pair,
             serialize_entry(&Entry::new_init_doc(peer_name, result.data.clone())),
             encrypted,
             &None,
         )
         .await;
-        let doc_url = keys_to_doc_url(&result.doc_public_key, &encryption_key);
+        let doc_url = keys_to_doc_url(&result.doc_public_key, &generated_encryption_key);
         let content = DocContent::new(
             result.data,
             vec![DocCursor::new(result.discovery_key.clone(), length)],
             result.doc,
         );
         Self::new_memory(
-            (
+            Some((
                 result.doc_public_key.clone(),
                 result.discovery_key.clone(),
                 hypercore,
-            ),
+            )),
             vec![],
             Some(content),
             result.discovery_key,
             peer_name,
+            false,
             result.doc_public_key,
             &doc_url,
             encrypted,
-            encryption_key,
+            generated_encryption_key,
         )
         .await
     }
@@ -331,6 +333,8 @@ impl Hypermerge<RandomAccessMemory> {
         doc_url: &str,
         encryption_key: &Option<Vec<u8>>,
     ) -> Self {
+        let proxy_peer = false;
+
         // Process keys from doc URL
         let (doc_public_key, encrypted) = doc_url_to_public_key(doc_url, &encryption_key);
         if encrypted && encryption_key.is_none() {
@@ -339,13 +343,18 @@ impl Hypermerge<RandomAccessMemory> {
         let doc_discovery_key = discovery_key_from_public_key(&doc_public_key);
 
         // Create the doc hypercore
-        let (_, doc_hypercore, encryption_key) =
-            create_new_read_memory_hypercore(&doc_public_key, encrypted, encryption_key).await;
+        let (_, doc_hypercore) = create_new_read_memory_hypercore(
+            &doc_public_key,
+            proxy_peer,
+            encrypted,
+            encryption_key,
+        )
+        .await;
 
         // Create the write hypercore
         let (write_key_pair, write_discovery_key) = generate_keys();
         let write_public_key = *write_key_pair.public.as_bytes();
-        let (_, write_hypercore, encryption_key) = create_new_write_memory_hypercore(
+        let (_, write_hypercore, _) = create_new_write_memory_hypercore(
             write_key_pair,
             serialize_entry(&Entry::new_init_peer(peer_name, doc_discovery_key)),
             encrypted,
@@ -354,7 +363,7 @@ impl Hypermerge<RandomAccessMemory> {
         .await;
 
         Self::new_memory(
-            (write_public_key, write_discovery_key, write_hypercore),
+            Some((write_public_key, write_discovery_key, write_hypercore)),
             vec![(
                 doc_public_key.clone(),
                 doc_discovery_key.clone(),
@@ -363,10 +372,41 @@ impl Hypermerge<RandomAccessMemory> {
             None,
             doc_discovery_key,
             peer_name,
+            proxy_peer,
             doc_public_key,
             doc_url,
             encrypted,
-            encryption_key,
+            encryption_key.clone(),
+        )
+        .await
+    }
+
+    pub async fn attach_proxy_peer_memory(peer_name: &str, doc_url: &str) -> Self {
+        let proxy_peer = true;
+
+        // Process keys from doc URL
+        let (doc_public_key, encrypted) = doc_url_to_public_key(doc_url, &None);
+        let doc_discovery_key = discovery_key_from_public_key(&doc_public_key);
+
+        // Create the doc hypercore
+        let (_, doc_hypercore) =
+            create_new_read_memory_hypercore(&doc_public_key, proxy_peer, encrypted, &None).await;
+
+        Self::new_memory(
+            None,
+            vec![(
+                doc_public_key.clone(),
+                doc_discovery_key.clone(),
+                doc_hypercore,
+            )],
+            None,
+            doc_discovery_key,
+            peer_name,
+            proxy_peer,
+            doc_public_key,
+            doc_url,
+            encrypted,
+            None,
         )
         .await
     }
@@ -401,7 +441,7 @@ impl Hypermerge<RandomAccessMemory> {
         let peer_name_for_task = self.peer_name.clone();
         let task_span = tracing::debug_span!("call_on_peer_event_memory").or_current();
         let encryption_key_for_task = self.encryption_key.clone();
-        let encrypted = self.encrypted;
+        let proxy_peer = self.proxy_peer;
         #[cfg(not(target_arch = "wasm32"))]
         task::spawn(async move {
             let _entered = task_span.enter();
@@ -412,7 +452,7 @@ impl Hypermerge<RandomAccessMemory> {
                 doc_state,
                 hypercores_for_task,
                 &peer_name_for_task,
-                encrypted,
+                proxy_peer,
                 &encryption_key_for_task,
             )
             .await;
@@ -427,7 +467,7 @@ impl Hypermerge<RandomAccessMemory> {
                 doc_state,
                 hypercores_for_task,
                 &peer_name_for_task,
-                encrypted,
+                proxy_peer,
                 &encryption_key_for_task,
             )
             .await;
@@ -444,11 +484,12 @@ impl Hypermerge<RandomAccessMemory> {
     }
 
     async fn new_memory(
-        write_hypercore: ([u8; 32], [u8; 32], HypercoreWrapper<RandomAccessMemory>),
+        write_hypercore: Option<([u8; 32], [u8; 32], HypercoreWrapper<RandomAccessMemory>)>,
         peer_hypercores: Vec<([u8; 32], [u8; 32], HypercoreWrapper<RandomAccessMemory>)>,
         content: Option<DocContent>,
         discovery_key: [u8; 32],
         peer_name: &str,
+        proxy_peer: bool,
         doc_public_key: [u8; 32],
         doc_url: &str,
         encrypted: bool,
@@ -456,15 +497,21 @@ impl Hypermerge<RandomAccessMemory> {
     ) -> Self {
         let hypercores: DashMap<[u8; 32], Arc<Mutex<HypercoreWrapper<RandomAccessMemory>>>> =
             DashMap::new();
-        let (write_public_key, write_discovery_key, write_hypercore) = write_hypercore;
-        hypercores.insert(write_discovery_key, Arc::new(Mutex::new(write_hypercore)));
+        let write_public_key =
+            if let Some((write_public_key, write_discovery_key, write_hypercore)) = write_hypercore
+            {
+                hypercores.insert(write_discovery_key, Arc::new(Mutex::new(write_hypercore)));
+                Some(write_public_key)
+            } else {
+                None
+            };
         let mut peer_public_keys = vec![];
         for (peer_public_key, peer_discovery_key, peer_hypercore) in peer_hypercores {
             hypercores.insert(peer_discovery_key, Arc::new(Mutex::new(peer_hypercore)));
             peer_public_keys.push(peer_public_key);
         }
         let mut doc_state =
-            DocStateWrapper::new_memory(doc_public_key, Some(write_public_key), content).await;
+            DocStateWrapper::new_memory(doc_public_key, write_public_key, content).await;
         doc_state
             .add_peer_public_keys_to_state(peer_public_keys)
             .await;
@@ -476,6 +523,7 @@ impl Hypermerge<RandomAccessMemory> {
             discovery_key,
             doc_url: doc_url.to_string(),
             peer_name: peer_name.to_string(),
+            proxy_peer,
             encrypted,
             encryption_key,
         }
@@ -490,7 +538,7 @@ async fn on_peer_event_memory(
     mut doc_state: Arc<Mutex<DocStateWrapper<RandomAccessMemory>>>,
     mut hypercores: Arc<DashMap<[u8; 32], Arc<Mutex<HypercoreWrapper<RandomAccessMemory>>>>>,
     peer_name: &str,
-    encrypted: bool,
+    proxy_peer: bool,
     encryption_key: &Option<Vec<u8>>,
 ) {
     while let Some(event) = peer_event_receiver.next().await {
@@ -509,7 +557,7 @@ async fn on_peer_event_memory(
                         create_and_insert_read_memory_hypercores(
                             public_keys.clone(),
                             hypercores.clone(),
-                            encrypted,
+                            proxy_peer,
                             encryption_key,
                         )
                         .await;
@@ -528,6 +576,7 @@ async fn on_peer_event_memory(
                     &mut doc_state,
                     &mut hypercores,
                     peer_name,
+                    proxy_peer,
                 )
                 .await
             }
@@ -539,7 +588,7 @@ async fn on_peer_event_memory(
 async fn create_and_insert_read_memory_hypercores(
     public_keys: Vec<[u8; 32]>,
     hypercores: Arc<DashMap<[u8; 32], Arc<Mutex<HypercoreWrapper<RandomAccessMemory>>>>>,
-    encrypted: bool,
+    proxy_peer: bool,
     encryption_key: &Option<Vec<u8>>,
 ) {
     for public_key in public_keys {
@@ -552,8 +601,13 @@ async fn create_and_insert_read_memory_hypercores(
                 debug!("Concurrent creating of hypercores noticed, continuing.");
             }
             dashmap::mapref::entry::Entry::Vacant(vacant) => {
-                let (_, hypercore, encryption_key) =
-                    create_new_read_memory_hypercore(&public_key, encrypted, encryption_key).await;
+                let (_, hypercore) = create_new_read_memory_hypercore(
+                    &public_key,
+                    proxy_peer,
+                    encryption_key.is_some(),
+                    encryption_key,
+                )
+                .await;
                 vacant.insert(Arc::new(Mutex::new(hypercore)));
             }
         }
@@ -592,15 +646,16 @@ impl Hypermerge<RandomAccessDisk> {
         );
 
         Self::new_disk(
-            (
+            Some((
                 result.doc_public_key.clone(),
                 result.discovery_key.clone(),
                 hypercore,
-            ),
+            )),
             vec![],
             Some(content),
             result.discovery_key,
             peer_name,
+            false,
             result.doc_public_key,
             &doc_url,
             encrypted,
@@ -616,6 +671,8 @@ impl Hypermerge<RandomAccessDisk> {
         encryption_key: &Option<Vec<u8>>,
         data_root_dir: PathBuf,
     ) -> Self {
+        let proxy_peer = false;
+
         // Process keys from doc URL
         let (doc_public_key, encrypted) = doc_url_to_public_key(doc_url, &encryption_key);
         if encrypted && encryption_key.is_none() {
@@ -628,6 +685,7 @@ impl Hypermerge<RandomAccessDisk> {
             &data_root_dir,
             &doc_public_key,
             &doc_discovery_key,
+            proxy_peer,
             encrypted,
             encryption_key,
         )
@@ -647,7 +705,7 @@ impl Hypermerge<RandomAccessDisk> {
         .await;
 
         Self::new_disk(
-            (write_public_key, write_discovery_key, write_hypercore),
+            Some((write_public_key, write_discovery_key, write_hypercore)),
             vec![(
                 doc_public_key.clone(),
                 doc_discovery_key.clone(),
@@ -656,10 +714,53 @@ impl Hypermerge<RandomAccessDisk> {
             None,
             doc_discovery_key,
             peer_name,
+            proxy_peer,
             doc_public_key,
             doc_url,
             encrypted,
             encryption_key,
+            data_root_dir,
+        )
+        .await
+    }
+
+    pub async fn attach_proxy_peer_disk(
+        peer_name: &str,
+        doc_url: &str,
+        data_root_dir: PathBuf,
+    ) -> Self {
+        let proxy_peer = true;
+
+        // Process keys from doc URL
+        let (doc_public_key, encrypted) = doc_url_to_public_key(doc_url, &None);
+        let doc_discovery_key = discovery_key_from_public_key(&doc_public_key);
+
+        // Create/open the doc hypercore
+        let (_, doc_hypercore) = open_read_disk_hypercore(
+            &data_root_dir,
+            &doc_public_key,
+            &doc_discovery_key,
+            proxy_peer,
+            encrypted,
+            &None,
+        )
+        .await;
+
+        Self::new_disk(
+            None,
+            vec![(
+                doc_public_key.clone(),
+                doc_discovery_key.clone(),
+                doc_hypercore,
+            )],
+            None,
+            doc_discovery_key,
+            peer_name,
+            proxy_peer,
+            doc_public_key,
+            doc_url,
+            encrypted,
+            None,
             data_root_dir,
         )
         .await
@@ -696,7 +797,7 @@ impl Hypermerge<RandomAccessDisk> {
         let data_root_dir = self.prefix.clone();
         let task_span = tracing::debug_span!("call_on_peer_event_memory").or_current();
         let encryption_key_for_task = self.encryption_key.clone();
-        let encrypted = self.encrypted;
+        let proxy_peer = self.proxy_peer;
         #[cfg(not(target_arch = "wasm32"))]
         task::spawn(async move {
             let _entered = task_span.enter();
@@ -707,7 +808,7 @@ impl Hypermerge<RandomAccessDisk> {
                 doc_state,
                 hypercores_for_task,
                 &peer_name_for_task,
-                encrypted,
+                proxy_peer,
                 &encryption_key_for_task,
                 &data_root_dir,
             )
@@ -723,7 +824,7 @@ impl Hypermerge<RandomAccessDisk> {
                 doc_state,
                 hypercores_for_task,
                 &peer_name_for_task,
-                encrypted,
+                proxy_peer,
                 &encryption_key_for_task,
                 &data_root_dir,
             )
@@ -741,11 +842,12 @@ impl Hypermerge<RandomAccessDisk> {
     }
 
     async fn new_disk(
-        write_hypercore: ([u8; 32], [u8; 32], HypercoreWrapper<RandomAccessDisk>),
+        write_hypercore: Option<([u8; 32], [u8; 32], HypercoreWrapper<RandomAccessDisk>)>,
         peer_hypercores: Vec<([u8; 32], [u8; 32], HypercoreWrapper<RandomAccessDisk>)>,
         content: Option<DocContent>,
         discovery_key: [u8; 32],
         peer_name: &str,
+        proxy_peer: bool,
         doc_public_key: [u8; 32],
         doc_url: &str,
         encrypted: bool,
@@ -754,20 +856,22 @@ impl Hypermerge<RandomAccessDisk> {
     ) -> Self {
         let hypercores: DashMap<[u8; 32], Arc<Mutex<HypercoreWrapper<RandomAccessDisk>>>> =
             DashMap::new();
-        let (write_public_key, write_discovery_key, write_hypercore) = write_hypercore;
-        hypercores.insert(write_discovery_key, Arc::new(Mutex::new(write_hypercore)));
+        let write_public_key =
+            if let Some((write_public_key, write_discovery_key, write_hypercore)) = write_hypercore
+            {
+                hypercores.insert(write_discovery_key, Arc::new(Mutex::new(write_hypercore)));
+                Some(write_public_key)
+            } else {
+                None
+            };
         let mut peer_public_keys = vec![];
         for (peer_public_key, peer_discovery_key, peer_hypercore) in peer_hypercores {
             hypercores.insert(peer_discovery_key, Arc::new(Mutex::new(peer_hypercore)));
             peer_public_keys.push(peer_public_key);
         }
-        let mut doc_state = DocStateWrapper::new_disk(
-            doc_public_key,
-            Some(write_public_key),
-            content,
-            &data_root_dir,
-        )
-        .await;
+        let mut doc_state =
+            DocStateWrapper::new_disk(doc_public_key, write_public_key, content, &data_root_dir)
+                .await;
         doc_state
             .add_peer_public_keys_to_state(peer_public_keys)
             .await;
@@ -779,6 +883,7 @@ impl Hypermerge<RandomAccessDisk> {
             discovery_key,
             doc_url: doc_url.to_string(),
             peer_name: peer_name.to_string(),
+            proxy_peer,
             encrypted,
             encryption_key,
         }
@@ -794,7 +899,7 @@ async fn on_peer_event_disk(
     mut doc_state: Arc<Mutex<DocStateWrapper<RandomAccessDisk>>>,
     mut hypercores: Arc<DashMap<[u8; 32], Arc<Mutex<HypercoreWrapper<RandomAccessDisk>>>>>,
     peer_name: &str,
-    encrypted: bool,
+    proxy_peer: bool,
     encryption_key: &Option<Vec<u8>>,
     data_root_dir: &PathBuf,
 ) {
@@ -814,7 +919,7 @@ async fn on_peer_event_disk(
                         create_and_insert_read_disk_hypercores(
                             public_keys.clone(),
                             hypercores.clone(),
-                            encrypted,
+                            proxy_peer,
                             encryption_key,
                             data_root_dir,
                         )
@@ -834,6 +939,7 @@ async fn on_peer_event_disk(
                     &mut doc_state,
                     &mut hypercores,
                     peer_name,
+                    proxy_peer,
                 )
                 .await
             }
@@ -846,7 +952,7 @@ async fn on_peer_event_disk(
 async fn create_and_insert_read_disk_hypercores(
     public_keys: Vec<[u8; 32]>,
     hypercores: Arc<DashMap<[u8; 32], Arc<Mutex<HypercoreWrapper<RandomAccessDisk>>>>>,
-    encrypted: bool,
+    proxy_peer: bool,
     encryption_key: &Option<Vec<u8>>,
     data_root_dir: &PathBuf,
 ) {
@@ -864,7 +970,8 @@ async fn create_and_insert_read_disk_hypercores(
                     &data_root_dir,
                     &public_key,
                     &discovery_key,
-                    encrypted,
+                    proxy_peer,
+                    encryption_key.is_some(),
                     encryption_key,
                 )
                 .await;
@@ -904,6 +1011,7 @@ async fn process_peer_event<T>(
     doc_state: &mut Arc<Mutex<DocStateWrapper<T>>>,
     hypercores: &mut Arc<DashMap<[u8; 32], Arc<Mutex<HypercoreWrapper<T>>>>>,
     peer_name: &str,
+    proxy_peer: bool,
 ) where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send + 'static,
 {
@@ -927,6 +1035,23 @@ async fn process_peer_event<T>(
             }
         }
         PeerEvent::PeerSynced((discovery_key, synced_contiguous_length)) => {
+            if proxy_peer {
+                // Just notify a peer sync forward
+                match state_event_sender.unbounded_send(StateEvent::PeerSynced((
+                    None,
+                    discovery_key,
+                    synced_contiguous_length,
+                ))) {
+                    Ok(()) => {}
+                    Err(err) => warn!(
+                        "{}: could not notify peer synced to len {}, err {}",
+                        peer_name.to_string(),
+                        synced_contiguous_length,
+                        err
+                    ),
+                };
+                return;
+            }
             let (peer_sync_events, patches): (Vec<StateEvent>, Vec<Patch>) = {
                 // Sync doc state exclusively...
                 let mut doc_state = doc_state.lock().await;
@@ -986,7 +1111,7 @@ async fn process_peer_event<T>(
                     .iter()
                     .map(|sync| {
                         let name = doc_state.peer_name(&sync.0).unwrap();
-                        StateEvent::PeerSynced((name, sync.0.clone(), sync.1))
+                        StateEvent::PeerSynced((Some(name), sync.0.clone(), sync.1))
                     })
                     .collect();
                 (peer_synced_events, patches)

@@ -35,7 +35,7 @@ where
 {
     pub(super) public_key: [u8; 32],
     pub(super) hypercore: Arc<Mutex<Hypercore<T>>>,
-    pub(crate) encrypted: bool,
+    proxy: bool,
     entry_cipher: Option<EntryCipher>,
     channel_senders: Vec<ChannelSender<Message>>,
     corked: bool,
@@ -46,12 +46,14 @@ where
 impl HypercoreWrapper<RandomAccessDisk> {
     pub fn from_disk_hypercore(
         hypercore: Hypercore<RandomAccessDisk>,
+        proxy: bool,
         encrypted: bool,
         encryption_key: &Option<Vec<u8>>,
         generate_encryption_key_if_missing: bool,
     ) -> (Self, Option<Vec<u8>>) {
         let public_key = hypercore.key_pair().public.to_bytes();
         let (entry_cipher, key) = prepare_entry_cipher(
+            proxy,
             encrypted,
             encryption_key,
             generate_encryption_key_if_missing,
@@ -59,7 +61,7 @@ impl HypercoreWrapper<RandomAccessDisk> {
         let wrapper = HypercoreWrapper {
             public_key,
             hypercore: Arc::new(Mutex::new(hypercore)),
-            encrypted,
+            proxy,
             entry_cipher,
             channel_senders: vec![],
             corked: false,
@@ -72,12 +74,14 @@ impl HypercoreWrapper<RandomAccessDisk> {
 impl HypercoreWrapper<RandomAccessMemory> {
     pub fn from_memory_hypercore(
         hypercore: Hypercore<RandomAccessMemory>,
+        proxy: bool,
         encrypted: bool,
         encryption_key: &Option<Vec<u8>>,
         generate_encryption_key_if_missing: bool,
     ) -> (Self, Option<Vec<u8>>) {
         let public_key = hypercore.key_pair().public.to_bytes();
         let (entry_cipher, key) = prepare_entry_cipher(
+            proxy,
             encrypted,
             encryption_key,
             generate_encryption_key_if_missing,
@@ -85,7 +89,7 @@ impl HypercoreWrapper<RandomAccessMemory> {
         let wrapper = HypercoreWrapper {
             public_key,
             hypercore: Arc::new(Mutex::new(hypercore)),
-            encrypted,
+            proxy,
             entry_cipher,
             channel_senders: vec![],
             corked: false,
@@ -100,18 +104,16 @@ where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send + 'static,
 {
     pub(crate) async fn append(&mut self, data: &[u8]) -> anyhow::Result<u64> {
+        if self.proxy {
+            panic!("Can not append to a proxy");
+        }
         let outcome = {
             let mut hypercore = self.hypercore.lock().await;
 
             if let Some(entry_cipher) = &self.entry_cipher {
-                if !self.encrypted {
-                    panic!("Trying to append encrypted entry to an unencrypted hypercore");
-                }
                 let encrypted =
                     entry_cipher.encrypt(&self.public_key, hypercore.info().length, data);
                 hypercore.append(&encrypted).await?
-            } else if self.encrypted {
-                panic!("Trying to append to an encrypted hypercore without a key provided");
             } else {
                 hypercore.append(data).await?
             }
@@ -169,13 +171,13 @@ where
     }
 
     pub(crate) async fn entries(&mut self, index: u64, len: u64) -> anyhow::Result<Vec<Entry>> {
+        if self.proxy {
+            panic!("Can not get entries from a proxy");
+        }
         let mut hypercore = self.hypercore.lock().await;
         let mut entries: Vec<Entry> = vec![];
         for i in index..len {
             let data = if let Some(entry_cipher) = &self.entry_cipher {
-                if !self.encrypted {
-                    panic!("Trying to decrypt entry from an unencrypted hypercore");
-                }
                 let data = hypercore.get(i).await.unwrap().unwrap();
                 entry_cipher.decrypt(&self.public_key, i, &data)
             } else {
@@ -289,11 +291,12 @@ where
 }
 
 fn prepare_entry_cipher(
+    proxy: bool,
     encrypted: bool,
     encryption_key: &Option<Vec<u8>>,
     generate_encryption_key_if_missing: bool,
 ) -> (Option<EntryCipher>, Option<Vec<u8>>) {
-    if encrypted {
+    if !proxy && encrypted {
         if let Some(encryption_key) = encryption_key {
             (Some(EntryCipher::from_encryption_key(encryption_key)), None)
         } else if generate_encryption_key_if_missing {

@@ -2,7 +2,7 @@ use automerge::Patch;
 
 #[derive(Clone, Debug)]
 pub enum StateEvent {
-    PeerSynced((String, [u8; 32], u64)),
+    PeerSynced((Option<String>, [u8; 32], u64)),
     RemotePeerSynced(([u8; 32], u64)),
     DocumentChanged(Vec<Patch>),
 }

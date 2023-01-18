@@ -82,7 +82,7 @@ fn bench_setup_mesh_of_three_encrypted(c: &mut Criterion) {
 fn bench_setup_mesh_of_three(c: &mut Criterion, encrypted: bool) {
     let name = format!(
         "mesh_of_three_{}",
-        if encrypted { "plain" } else { "encrypted" }
+        if encrypted { "encrypted" } else { "plain" }
     );
     let mut group = c.benchmark_group("slow_call");
     group.bench_function(name, move |b| {
@@ -115,7 +115,7 @@ fn bench_append_three(c: &mut Criterion, encrypted: bool) {
     let mut group = c.benchmark_group("slow_call");
     let name = format!(
         "append_three_{}",
-        if encrypted { "plain" } else { "encrypted" }
+        if encrypted { "encrypted" } else { "plain" }
     );
     group.bench_function(name, move |b| {
         b.to_async(AsyncStdExecutor)
