@@ -34,9 +34,14 @@ impl EntryCipher {
         let nonce = generate_nonce(public_key, index);
         self.cipher.encrypt(&nonce, data).unwrap()
     }
+
+    pub(crate) fn decrypt(&self, public_key: &[u8; 32], index: u64, data: &[u8]) -> Vec<u8> {
+        let nonce = generate_nonce(public_key, index);
+        self.cipher.decrypt(&nonce, data).unwrap()
+    }
 }
 
-pub(crate) fn keys_to_doc_url(public_key: &[u8; 32], encryption_key: Option<Vec<u8>>) -> String {
+pub(crate) fn keys_to_doc_url(public_key: &[u8; 32], encryption_key: &Option<Vec<u8>>) -> String {
     let encoded_public_key = hex::encode(public_key);
     let postfix: String = if let Some(encryption_key) = encryption_key {
         let nonce = generate_nonce(&public_key, 0);
@@ -52,7 +57,7 @@ pub(crate) fn keys_to_doc_url(public_key: &[u8; 32], encryption_key: Option<Vec<
 
 pub(crate) fn doc_url_to_public_key(
     doc_url: &str,
-    encryption_key_to_validate: Option<Vec<u8>>,
+    encryption_key_to_validate: &Option<Vec<u8>>,
 ) -> ([u8; 32], bool) {
     let public_key_hex = doc_url[12..76].to_string();
     let public_key = hex::decode(public_key_hex).unwrap().try_into().unwrap();

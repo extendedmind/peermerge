@@ -15,6 +15,7 @@ use hypermerge::Hypermerge;
 use hypermerge::Patch;
 use hypermerge::StateEvent;
 use hypermerge::Value;
+use hypermerge::doc_url_encrypted;
 use random_access_disk::RandomAccessDisk;
 use random_access_memory::RandomAccessMemory;
 use std::collections::HashMap;
@@ -43,6 +44,11 @@ async fn disk_two_peers_plain() -> anyhow::Result<()> {
     disk_two_peers(false).await
 }
 
+#[test(async_std::test)]
+async fn disk_two_peers_encrypted() -> anyhow::Result<()> {
+    disk_two_peers(true).await
+}
+
 async fn disk_two_peers(encrypted: bool) -> anyhow::Result<()> {
     let (mut proto_responder, mut proto_initiator) = create_pair_memory().await;
     let creator_dir = Builder::new()
@@ -64,6 +70,10 @@ async fn disk_two_peers(encrypted: bool) -> anyhow::Result<()> {
     ) = unbounded();
     let hypermerge_creator =
         Hypermerge::create_new_disk("creator", vec![("version", 1)], encrypted, creator_dir).await;
+    let doc_url = hypermerge_creator.doc_url();
+    let encryption_key = hypermerge_creator.encryption_key();
+    assert_eq!(doc_url_encrypted(&doc_url), encrypted);
+    assert_eq!(encryption_key.is_some(), encrypted);
 
     let mut hypermerge_creator_for_task = hypermerge_creator.clone();
     task::spawn(async move {
@@ -82,7 +92,7 @@ async fn disk_two_peers(encrypted: bool) -> anyhow::Result<()> {
         .unwrap()
         .into_path();
     let hypermerge_joiner =
-        Hypermerge::attach_new_peer_disk("joiner", &hypermerge_creator.doc_url(), None, joiner_dir)
+        Hypermerge::attach_new_peer_disk("joiner", &doc_url, &encryption_key, joiner_dir)
             .await;
     let mut hypermerge_joiner_for_task = hypermerge_joiner.clone();
     task::spawn(async move {

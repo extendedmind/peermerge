@@ -47,7 +47,7 @@ impl HypercoreWrapper<RandomAccessDisk> {
     pub fn from_disk_hypercore(
         hypercore: Hypercore<RandomAccessDisk>,
         encrypted: bool,
-        encryption_key: Option<Vec<u8>>,
+        encryption_key: &Option<Vec<u8>>,
         generate_encryption_key_if_missing: bool,
     ) -> (Self, Option<Vec<u8>>) {
         let public_key = hypercore.key_pair().public.to_bytes();
@@ -73,7 +73,7 @@ impl HypercoreWrapper<RandomAccessMemory> {
     pub fn from_memory_hypercore(
         hypercore: Hypercore<RandomAccessMemory>,
         encrypted: bool,
-        encryption_key: Option<Vec<u8>>,
+        encryption_key: &Option<Vec<u8>>,
         generate_encryption_key_if_missing: bool,
     ) -> (Self, Option<Vec<u8>>) {
         let public_key = hypercore.key_pair().public.to_bytes();
@@ -172,7 +172,15 @@ where
         let mut hypercore = self.hypercore.lock().await;
         let mut entries: Vec<Entry> = vec![];
         for i in index..len {
-            let data = hypercore.get(i).await.unwrap().unwrap();
+            let data = if let Some(entry_cipher) = &self.entry_cipher {
+                if !self.encrypted {
+                    panic!("Trying to decrypt entry from an unencrypted hypercore");
+                }
+                let data = hypercore.get(i).await.unwrap().unwrap();
+                entry_cipher.decrypt(&self.public_key, i, &data)
+            } else {
+                hypercore.get(i).await.unwrap().unwrap()
+            };
             let mut dec_state = State::from_buffer(&data);
             let entry: Entry = dec_state.decode(&data);
             entries.push(entry);
@@ -282,15 +290,12 @@ where
 
 fn prepare_entry_cipher(
     encrypted: bool,
-    encryption_key: Option<Vec<u8>>,
+    encryption_key: &Option<Vec<u8>>,
     generate_encryption_key_if_missing: bool,
 ) -> (Option<EntryCipher>, Option<Vec<u8>>) {
     if encrypted {
         if let Some(encryption_key) = encryption_key {
-            (
-                Some(EntryCipher::from_encryption_key(&encryption_key)),
-                None,
-            )
+            (Some(EntryCipher::from_encryption_key(encryption_key)), None)
         } else if generate_encryption_key_if_missing {
             let (entry_cipher, key) = EntryCipher::from_generated_key();
             (Some(entry_cipher), Some(key))
