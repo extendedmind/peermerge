@@ -24,13 +24,13 @@ async fn append_three(
     let mut document_changed_remaining = 9;
 
     while let Some(event) = receiver.next().await {
-        // println!(
-        //     "i={} sr={}, rsr={}, dcr={}",
-        //     i, sync_remaining, remote_sync_remaining, document_changed_remaining
-        // );
         match event {
             StateEvent::PeerSynced(_) => {
                 sync_remaining -= 1;
+                // println!(
+                //     "PS i={} sr={}, rsr={}, dcr={}",
+                //     i, sync_remaining, remote_sync_remaining, document_changed_remaining
+                // );
                 if sync_remaining == 0
                     && remote_sync_remaining == 0
                     && document_changed_remaining == 0
@@ -40,6 +40,11 @@ async fn append_three(
             }
             StateEvent::DocumentChanged(_) => {
                 document_changed_remaining -= 1;
+                // TODO: Sometimes one DC is missing
+                // println!(
+                //     "DC: i={} sr={}, rsr={}, dcr={}",
+                //     i, sync_remaining, remote_sync_remaining, document_changed_remaining
+                // );
                 if sync_remaining == 0
                     && remote_sync_remaining == 0
                     && document_changed_remaining == 0
@@ -49,6 +54,11 @@ async fn append_three(
             }
             StateEvent::RemotePeerSynced(..) => {
                 remote_sync_remaining -= 1;
+                // TODO: Sometimes there is one extra RPS
+                // println!(
+                //     "RPS: i={} sr={}, rsr={}, dcr={}",
+                //     i, sync_remaining, remote_sync_remaining, document_changed_remaining
+                // );
                 if sync_remaining == 0
                     && remote_sync_remaining == 0
                     && document_changed_remaining == 0
