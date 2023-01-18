@@ -8,9 +8,11 @@ use random_access_memory::RandomAccessMemory;
 
 pub async fn setup_hypermerge_mesh(
     peers: usize,
+    encrypted: bool,
 ) -> (Vec<Sender<u64>>, UnboundedReceiver<StateEvent>) {
     let mut hypermerge_creator: Hypermerge<RandomAccessMemory> =
-        Hypermerge::create_new_memory("p1", vec![("version", 1)], false).await;
+        Hypermerge::create_new_memory("p1", vec![("version", 1)], encrypted).await;
+    let encryption_key = hypermerge_creator.encryption_key();
     hypermerge_creator.watch(vec![ROOT]).await;
     let (state_event_sender, mut state_event_receiver): (
         UnboundedSender<StateEvent>,
@@ -34,7 +36,7 @@ pub async fn setup_hypermerge_mesh(
 
         let peer_name = format!("p{}", i + 1);
         let mut hypermerge_peer =
-            Hypermerge::attach_new_peer_memory(&peer_name, &doc_url, None).await;
+            Hypermerge::attach_new_peer_memory(&peer_name, &doc_url, &encryption_key).await;
         hypermerge_peer.watch(vec![ROOT]).await;
 
         let hypermerge_peer_for_task = hypermerge_peer.clone();

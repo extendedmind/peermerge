@@ -71,9 +71,21 @@ async fn append_three(
     0
 }
 
-fn bench_setup_mesh_of_three(c: &mut Criterion) {
+fn bench_setup_mesh_of_three_plain(c: &mut Criterion) {
+    bench_setup_mesh_of_three(c, false);
+}
+
+fn bench_setup_mesh_of_three_encrypted(c: &mut Criterion) {
+    bench_setup_mesh_of_three(c, true);
+}
+
+fn bench_setup_mesh_of_three(c: &mut Criterion, encrypted: bool) {
+    let name = format!(
+        "mesh_of_three_{}",
+        if encrypted { "plain" } else { "encrypted" }
+    );
     let mut group = c.benchmark_group("slow_call");
-    group.bench_function("mesh_of_three", move |b| {
+    group.bench_function(name, move |b| {
         b.to_async(AsyncStdExecutor)
             .iter_custom(|iters| async move {
                 // println!("MESH ITERING {}", iters);
@@ -83,7 +95,7 @@ fn bench_setup_mesh_of_three(c: &mut Criterion) {
 
                 let start = Instant::now();
                 for _ in 0..iters {
-                    black_box(setup_hypermerge_mesh(3).await);
+                    black_box(setup_hypermerge_mesh(3, encrypted).await);
                 }
                 start.elapsed()
             });
@@ -91,9 +103,21 @@ fn bench_setup_mesh_of_three(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_append_three(c: &mut Criterion) {
+fn bench_append_three_plain(c: &mut Criterion) {
+    bench_append_three(c, false);
+}
+
+fn bench_append_three_encrypted(c: &mut Criterion) {
+    bench_append_three(c, true);
+}
+
+fn bench_append_three(c: &mut Criterion, encrypted: bool) {
     let mut group = c.benchmark_group("slow_call");
-    group.bench_function("append_three", move |b| {
+    let name = format!(
+        "append_three_{}",
+        if encrypted { "plain" } else { "encrypted" }
+    );
+    group.bench_function(name, move |b| {
         b.to_async(AsyncStdExecutor)
             .iter_custom(|iters| async move {
                 // println!("APPEND ITERING {}", iters);
@@ -101,7 +125,7 @@ fn bench_append_three(c: &mut Criterion) {
                 //     .with_max_level(tracing::Level::DEBUG)
                 //     .try_init()
                 //     .ok();
-                let (senders, mut receiver) = setup_hypermerge_mesh(3).await;
+                let (senders, mut receiver) = setup_hypermerge_mesh(3, encrypted).await;
                 // async_std::task::sleep(std::time::Duration::from_millis(100)).await;
                 let start = Instant::now();
                 for i in 0..iters {
@@ -113,6 +137,7 @@ fn bench_append_three(c: &mut Criterion) {
     });
     group.finish();
 }
+
 criterion_main!(benches);
 criterion_group! {
     name = benches;
@@ -120,5 +145,5 @@ criterion_group! {
         .with_profiler(
             PProfProfiler::new(100, Output::Flamegraph(None))
         );
-    targets = bench_setup_mesh_of_three, bench_append_three
+    targets = bench_setup_mesh_of_three_plain, bench_append_three_plain, bench_setup_mesh_of_three_encrypted, bench_append_three_encrypted,
 }
