@@ -143,5 +143,6 @@ async fn create_new_memory_hypercore(
 
 #[cfg(not(target_arch = "wasm32"))]
 fn get_path_from_discovery_key(prefix: &PathBuf, discovery_key: &[u8; 32]) -> PathBuf {
-    prefix.join(PathBuf::from(hex::encode(discovery_key)))
+    let encoded = data_encoding::BASE32_NOPAD.encode(discovery_key);
+    prefix.join(PathBuf::from(encoded))
 }

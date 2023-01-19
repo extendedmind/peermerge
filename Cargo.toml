@@ -14,7 +14,7 @@ hypercore-protocol = { git = "https://github.com/ttiurani/hypercore-protocol-rs"
 random-access-storage = { git = "https://github.com/ttiurani/random-access-storage", branch = "v10" }
 random-access-memory = { git = "https://github.com/ttiurani/random-access-memory", branch = "v10" }
 anyhow = "1.0.28"
-hex = "0.4"
+data-encoding = "2.3.3"
 async-std = { version = "1.9.0", features = ["attributes", "unstable"], optional = true }
 futures = "0.3.25"
 wasm-bindgen-futures = { version = "0.4.33", optional = true }
