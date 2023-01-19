@@ -66,6 +66,9 @@ where
 {
     #[instrument(skip(self))]
     pub async fn watch(&mut self, ids: Vec<ObjId>) {
+        if self.proxy_peer {
+            panic!("Can not watch on a proxy peer");
+        }
         let mut doc_state = self.doc_state.lock().await;
         doc_state.watch(ids);
     }
@@ -76,6 +79,9 @@ where
         obj: O,
         prop: P,
     ) -> anyhow::Result<Option<(Value, ObjId)>> {
+        if self.proxy_peer {
+            panic!("Can not get document values on a proxy peer");
+        }
         let doc_state = &self.doc_state;
         let result = {
             let doc_state = doc_state.lock().await;
@@ -104,6 +110,9 @@ where
 
     #[instrument(skip(self, obj), fields(obj = obj.as_ref().to_string(), peer_name = self.peer_name))]
     pub async fn realize_text<O: AsRef<ObjId>>(&self, obj: O) -> anyhow::Result<Option<String>> {
+        if self.proxy_peer {
+            panic!("Can not realize text on a proxy peer");
+        }
         let doc_state = &self.doc_state;
         let result = {
             let doc_state = doc_state.lock().await;
@@ -146,6 +155,9 @@ where
         prop: P,
         object: ObjType,
     ) -> anyhow::Result<ObjId> {
+        if self.proxy_peer {
+            panic!("Can not put object on a proxy peer");
+        }
         let id = {
             let mut doc_state = self.doc_state.lock().await;
             let (entry, id) = if let Some(doc) = doc_state.doc_mut() {
@@ -178,6 +190,9 @@ where
         prop: P,
         value: V,
     ) -> anyhow::Result<()> {
+        if self.proxy_peer {
+            panic!("Can not put scalar on a proxy peer");
+        }
         {
             let mut doc_state = self.doc_state.lock().await;
             let entry = if let Some(doc) = doc_state.doc_mut() {
@@ -210,6 +225,9 @@ where
         delete: usize,
         text: &str,
     ) -> anyhow::Result<()> {
+        if self.proxy_peer {
+            panic!("Can not splice text on a proxy peer");
+        }
         {
             let mut doc_state = self.doc_state.lock().await;
             let entry = if let Some(doc) = doc_state.doc_mut() {
@@ -236,6 +254,9 @@ where
 
     #[instrument(skip(self))]
     pub async fn cork(&mut self) {
+        if self.proxy_peer {
+            panic!("Can not cork a proxy peer");
+        }
         let doc_state = self.doc_state.lock().await;
         let write_discovery_key = doc_state.write_discovery_key();
         let write_hypercore_wrapper = self.hypercores.get_mut(&write_discovery_key).unwrap();
@@ -245,6 +266,9 @@ where
 
     #[instrument(skip(self))]
     pub async fn uncork(&mut self) -> anyhow::Result<()> {
+        if self.proxy_peer {
+            panic!("Can not uncork a proxy peer");
+        }
         let doc_state = self.doc_state.lock().await;
         let write_discovery_key = doc_state.write_discovery_key();
         let write_hypercore_wrapper = self.hypercores.get_mut(&write_discovery_key).unwrap();
@@ -260,6 +284,9 @@ where
 
     #[instrument(skip(self))]
     pub fn encryption_key(&self) -> Option<Vec<u8>> {
+        if self.proxy_peer {
+            panic!("A proxy peer does not store the encryption key");
+        }
         self.encryption_key.clone()
     }
 
@@ -328,7 +355,7 @@ impl Hypermerge<RandomAccessMemory> {
         .await
     }
 
-    pub async fn attach_new_peer_memory(
+    pub async fn attach_write_peer_memory(
         peer_name: &str,
         doc_url: &str,
         encryption_key: &Option<Vec<u8>>,
@@ -665,7 +692,7 @@ impl Hypermerge<RandomAccessDisk> {
         .await
     }
 
-    pub async fn attach_new_peer_disk(
+    pub async fn attach_write_peer_disk(
         peer_name: &str,
         doc_url: &str,
         encryption_key: &Option<Vec<u8>>,

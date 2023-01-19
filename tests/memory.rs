@@ -79,7 +79,7 @@ async fn memory_three_writers() -> anyhow::Result<()> {
     });
 
     let hypermerge_joiner =
-        Hypermerge::attach_new_peer_memory("joiner", &hypermerge_creator.doc_url(), &None).await;
+        Hypermerge::attach_write_peer_memory("joiner", &hypermerge_creator.doc_url(), &None).await;
     let hypermerge_joiner_for_task = hypermerge_joiner.clone();
     task::spawn(async move {
         connect(
@@ -339,7 +339,7 @@ async fn process_creator_state_events(
                         UnboundedSender<StateEvent>,
                         UnboundedReceiver<StateEvent>,
                     ) = unbounded();
-                    let hypermerge_latecomer = Hypermerge::attach_new_peer_memory(
+                    let hypermerge_latecomer = Hypermerge::attach_write_peer_memory(
                         "latecomer",
                         &hypermerge.doc_url(),
                         &None,

@@ -36,7 +36,7 @@ pub async fn setup_hypermerge_mesh(
 
         let peer_name = format!("p{}", i + 1);
         let mut hypermerge_peer =
-            Hypermerge::attach_new_peer_memory(&peer_name, &doc_url, &encryption_key).await;
+            Hypermerge::attach_write_peer_memory(&peer_name, &doc_url, &encryption_key).await;
         hypermerge_peer.watch(vec![ROOT]).await;
 
         let hypermerge_peer_for_task = hypermerge_peer.clone();

@@ -11,11 +11,11 @@ use futures::io::{AsyncRead, AsyncWrite};
 use futures::stream::StreamExt;
 use hypercore_protocol::{discovery_key, Channel, Event, Message, Protocol, ProtocolBuilder};
 use hypercore_protocol::{schema::*, DiscoveryKey};
+use hypermerge::doc_url_encrypted;
 use hypermerge::Hypermerge;
 use hypermerge::Patch;
 use hypermerge::StateEvent;
 use hypermerge::Value;
-use hypermerge::doc_url_encrypted;
 use random_access_disk::RandomAccessDisk;
 use random_access_memory::RandomAccessMemory;
 use std::collections::HashMap;
@@ -92,8 +92,7 @@ async fn disk_two_peers(encrypted: bool) -> anyhow::Result<()> {
         .unwrap()
         .into_path();
     let hypermerge_joiner =
-        Hypermerge::attach_new_peer_disk("joiner", &doc_url, &encryption_key, joiner_dir)
-            .await;
+        Hypermerge::attach_write_peer_disk("joiner", &doc_url, &encryption_key, joiner_dir).await;
     let mut hypermerge_joiner_for_task = hypermerge_joiner.clone();
     task::spawn(async move {
         hypermerge_joiner_for_task
