@@ -2,6 +2,10 @@
 
 Hypercore + Automerge in Rust
 
-# Licence
+## Status
+
+Pre-alpha
+
+## Licence
 
 AGPLv3
