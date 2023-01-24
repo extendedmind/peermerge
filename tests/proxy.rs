@@ -1,45 +1,24 @@
-#![allow(dead_code, unused_imports)]
-
-use async_std::net::TcpStream;
-use async_std::prelude::*;
-use async_std::sync::{Arc, Condvar, Mutex};
-use async_std::task;
-use automerge::ObjId;
 use automerge::ROOT;
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
-use futures::io::{AsyncRead, AsyncWrite};
 use futures::stream::StreamExt;
-use hypercore_protocol::{discovery_key, Channel, Event, Message, Protocol, ProtocolBuilder};
-use hypercore_protocol::{schema::*, DiscoveryKey};
 use hypermerge::doc_url_encrypted;
 use hypermerge::Hypermerge;
 use hypermerge::Patch;
 use hypermerge::StateEvent;
-use hypermerge::Value;
-use random_access_disk::RandomAccessDisk;
 use random_access_memory::RandomAccessMemory;
-use std::collections::HashMap;
-use std::io;
-use std::time::Duration;
 use tempfile::Builder;
 use test_log::test;
 use tracing::{info, instrument};
 
+#[cfg(feature = "async-std")]
+use async_std::{task, test as async_test};
+#[cfg(feature = "tokio")]
+use tokio::{task, test as async_test};
+
 mod common;
 use common::*;
 
-#[derive(Clone, Debug, Default)]
-struct ProtocolThreeWritersResult {
-    proxy_merge: Option<String>,
-    creator_merge: Option<String>,
-}
-impl ProtocolThreeWritersResult {
-    pub fn merge_equals(&self) -> bool {
-        self.proxy_merge.as_ref().unwrap() == self.creator_merge.as_ref().unwrap()
-    }
-}
-
-#[test(async_std::test)]
+#[test(async_test)]
 async fn proxy_disk_encrypted() -> anyhow::Result<()> {
     let (mut proto_responder, mut proto_initiator) = create_pair_memory().await;
     let (mut creator_state_event_sender, creator_state_event_receiver): (

@@ -1,6 +1,3 @@
-use async_std::sync::{Arc, Mutex};
-#[cfg(not(target_arch = "wasm32"))]
-use async_std::task;
 use automerge::{transaction::Transactable, ObjId, ObjType, Patch, Prop, ScalarValue, Value};
 use dashmap::DashMap;
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
@@ -12,8 +9,18 @@ use hypercore_protocol::Protocol;
 use random_access_disk::RandomAccessDisk;
 use random_access_memory::RandomAccessMemory;
 use random_access_storage::RandomAccess;
+use std::sync::Arc;
 use std::{fmt::Debug, path::PathBuf};
 use tracing::{debug, instrument, warn};
+
+#[cfg(feature = "async-std")]
+use async_std::sync::Mutex;
+#[cfg(all(not(target_arch = "wasm32"), feature = "async-std"))]
+use async_std::task;
+#[cfg(feature = "tokio")]
+use tokio::sync::Mutex;
+#[cfg(all(not(target_arch = "wasm32"), feature = "tokio"))]
+use tokio::task;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_futures::spawn_local;
 

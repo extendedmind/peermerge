@@ -1,11 +1,16 @@
 use anyhow::Result;
-use async_std::sync::{Arc, Mutex};
 use futures::channel::mpsc::UnboundedSender;
 use futures::stream::StreamExt;
 use hypercore_protocol::{hypercore::Hypercore, Channel, ChannelReceiver, Message};
 use random_access_storage::RandomAccess;
 use std::fmt::Debug;
+use std::sync::Arc;
 use tracing::{debug, instrument};
+
+#[cfg(feature = "async-std")]
+use async_std::sync::Mutex;
+#[cfg(feature = "tokio")]
+use tokio::sync::Mutex;
 
 use super::{
     messaging::{create_broadcast_message, create_initial_synchronize},

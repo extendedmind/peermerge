@@ -1,12 +1,14 @@
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
-use criterion::async_executor::AsyncStdExecutor;
 use criterion::Criterion;
 use criterion::{black_box, criterion_group, criterion_main};
 use futures::channel::mpsc::{Sender, UnboundedReceiver};
 use futures::stream::StreamExt;
 use hypermerge::StateEvent;
 use pprof::criterion::{Output, PProfProfiler};
+
+#[cfg(feature = "async-std")]
+use criterion::async_executor::AsyncStdExecutor;
 
 mod common;
 use common::setup_hypermerge_mesh;
@@ -85,22 +87,34 @@ fn bench_setup_mesh_of_three(c: &mut Criterion, encrypted: bool) {
         if encrypted { "encrypted" } else { "plain" }
     );
     let mut group = c.benchmark_group("slow_call");
+    #[cfg(feature = "async-std")]
     group.bench_function(name, move |b| {
         b.to_async(AsyncStdExecutor)
-            .iter_custom(|iters| async move {
-                // println!("MESH ITERING {}", iters);
-                // tracing_subscriber::fmt()
-                //     .with_max_level(tracing::Level::DEBUG)
-                //     .init();
-
-                let start = Instant::now();
-                for _ in 0..iters {
-                    black_box(setup_hypermerge_mesh(3, encrypted).await);
-                }
-                start.elapsed()
-            });
+            .iter_custom(
+                |iters| async move { bench_setup_mesh_of_three_iters(iters, encrypted).await },
+            );
+    });
+    #[cfg(feature = "tokio")]
+    group.bench_function(name, move |b| {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        b.to_async(&rt).iter_custom(|iters| async move {
+            bench_setup_mesh_of_three_iters(iters, encrypted).await
+        });
     });
     group.finish();
+}
+
+async fn bench_setup_mesh_of_three_iters(iters: u64, encrypted: bool) -> Duration {
+    // println!("MESH ITERING {}", iters);
+    // tracing_subscriber::fmt()
+    //     .with_max_level(tracing::Level::DEBUG)
+    //     .init();
+
+    let start = Instant::now();
+    for _ in 0..iters {
+        black_box(setup_hypermerge_mesh(3, encrypted).await);
+    }
+    start.elapsed()
 }
 
 fn bench_append_three_plain(c: &mut Criterion) {
@@ -117,25 +131,36 @@ fn bench_append_three(c: &mut Criterion, encrypted: bool) {
         "append_three_{}",
         if encrypted { "encrypted" } else { "plain" }
     );
+
+    #[cfg(feature = "async-std")]
     group.bench_function(name, move |b| {
         b.to_async(AsyncStdExecutor)
-            .iter_custom(|iters| async move {
-                // println!("APPEND ITERING {}", iters);
-                // tracing_subscriber::fmt()
-                //     .with_max_level(tracing::Level::DEBUG)
-                //     .try_init()
-                //     .ok();
-                let (senders, mut receiver) = setup_hypermerge_mesh(3, encrypted).await;
-                // async_std::task::sleep(std::time::Duration::from_millis(100)).await;
-                let start = Instant::now();
-                for i in 0..iters {
-                    black_box(append_three(i, senders.clone(), &mut receiver).await);
-                    // println!("APPEND ITERING {} READY {}", iters, i);
-                }
-                start.elapsed()
-            });
+            .iter_custom(|iters| async move { bench_append_three_iters(iters, encrypted).await });
     });
+    #[cfg(feature = "tokio")]
+    group.bench_function(name, move |b| {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        b.to_async(&rt)
+            .iter_custom(|iters| async move { bench_append_three_iters(iters, encrypted).await });
+    });
+
     group.finish();
+}
+
+async fn bench_append_three_iters(iters: u64, encrypted: bool) -> Duration {
+    // println!("APPEND ITERING {}", iters);
+    // tracing_subscriber::fmt()
+    //     .with_max_level(tracing::Level::DEBUG)
+    //     .try_init()
+    //     .ok();
+    let (senders, mut receiver) = setup_hypermerge_mesh(3, encrypted).await;
+    // async_std::task::sleep(std::time::Duration::from_millis(100)).await;
+    let start = Instant::now();
+    for i in 0..iters {
+        black_box(append_three(i, senders.clone(), &mut receiver).await);
+        // println!("APPEND ITERING {} READY {}", iters, i);
+    }
+    start.elapsed()
 }
 
 criterion_main!(benches);
@@ -145,5 +170,5 @@ criterion_group! {
         .with_profiler(
             PProfProfiler::new(100, Output::Flamegraph(None))
         );
-    targets = bench_setup_mesh_of_three_plain, bench_append_three_plain, bench_setup_mesh_of_three_encrypted, bench_append_three_encrypted,
+    targets = bench_setup_mesh_of_three_plain, bench_setup_mesh_of_three_encrypted, bench_append_three_plain, bench_append_three_encrypted,
 }

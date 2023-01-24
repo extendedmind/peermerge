@@ -1,29 +1,35 @@
-#![allow(dead_code, unused_imports)]
-
-use async_std::net::TcpStream;
-use async_std::prelude::*;
-use async_std::sync::{Arc, Condvar, Mutex};
-use async_std::task;
 use automerge::ObjId;
 use automerge::ROOT;
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
-use futures::io::{AsyncRead, AsyncWrite};
 use futures::stream::StreamExt;
-use hypercore_protocol::{discovery_key, Channel, Event, Message, Protocol, ProtocolBuilder};
-use hypercore_protocol::{schema::*, DiscoveryKey};
 use hypermerge::Hypermerge;
 use hypermerge::Patch;
 use hypermerge::StateEvent;
-use hypermerge::Value;
 use random_access_memory::RandomAccessMemory;
 use std::collections::HashMap;
-use std::io;
-use std::time::Duration;
+use std::sync::Arc;
 use test_log::test;
 use tracing::{info, instrument};
 
+#[cfg(feature = "async-std")]
+use async_std::{
+    sync::{Condvar, Mutex},
+    task, test as async_test,
+};
+#[cfg(feature = "tokio")]
+use tokio::{
+    sync::{Mutex, Notify},
+    task, test as async_test,
+};
+
 mod common;
 use common::*;
+
+#[cfg(feature = "async-std")]
+type BoolCondvar = Arc<(Mutex<bool>, Condvar)>;
+
+#[cfg(feature = "tokio")]
+type BoolCondvar = Arc<(Mutex<bool>, Notify)>;
 
 #[derive(Clone, Debug, Default)]
 struct MemoryThreeWritersResult {
@@ -36,7 +42,7 @@ impl MemoryThreeWritersResult {
     }
 }
 
-#[test(async_std::test)]
+#[test(async_test)]
 async fn memory_three_writers() -> anyhow::Result<()> {
     let (proto_responder, proto_initiator) = create_pair_memory().await;
 
@@ -91,11 +97,11 @@ async fn memory_three_writers() -> anyhow::Result<()> {
         .unwrap();
     });
 
-    let cork_sync_creator = Arc::new((Mutex::new(false), Condvar::new()));
+    let cork_sync_creator = init_condvar();
     let cork_sync_joiner = Arc::clone(&cork_sync_creator);
     let merge_result_for_creator = Arc::new(Mutex::new(MemoryThreeWritersResult::default()));
     let merge_result_for_joiner = merge_result_for_creator.clone();
-    let append_sync_creator = Arc::new((Mutex::new(false), Condvar::new()));
+    let append_sync_creator = init_condvar();
     let append_sync_joiner = Arc::clone(&append_sync_creator);
 
     task::spawn(async move {
@@ -128,9 +134,9 @@ async fn memory_three_writers() -> anyhow::Result<()> {
 async fn process_joiner_state_event(
     mut hypermerge: Hypermerge<RandomAccessMemory>,
     mut joiner_state_event_receiver: UnboundedReceiver<StateEvent>,
-    cork_sync: Arc<(Mutex<bool>, Condvar)>,
+    cork_sync: BoolCondvar,
     merge_result: Arc<Mutex<MemoryThreeWritersResult>>,
-    append_sync: Arc<(Mutex<bool>, Condvar)>,
+    append_sync: BoolCondvar,
 ) -> anyhow::Result<()> {
     let mut text_id: Option<ObjId> = None;
     let mut document_changes: Vec<Vec<Patch>> = vec![];
@@ -176,11 +182,7 @@ async fn process_joiner_state_event(
                     assert_text_equals(&hypermerge, &text_id, "Hello, world!").await;
 
                     // Let's make sure via variable that the other end is also ready to cork
-                    let (lock, cvar) = &*cork_sync;
-                    let mut started = lock.lock().await;
-                    while !*started {
-                        started = cvar.wait(started).await;
-                    }
+                    wait_for_condvar(cork_sync.clone()).await;
 
                     // Ok, ready to cork in unison
                     hypermerge.cork().await;
@@ -223,10 +225,7 @@ async fn process_joiner_state_event(
                     .await;
 
                     // Notify about append to both
-                    let (lock, cvar) = &*append_sync;
-                    let mut appended = lock.lock().await;
-                    *appended = true;
-                    cvar.notify_all();
+                    notify_all_condvar(append_sync).await;
                     break;
                 } else {
                     panic!("Did not expect more joiner document changes");
@@ -246,9 +245,9 @@ async fn process_creator_state_events(
     creator_state_event_sender: UnboundedSender<StateEvent>,
     mut creator_state_event_receiver: UnboundedReceiver<StateEvent>,
     text_id: ObjId,
-    cork_sync: Arc<(Mutex<bool>, Condvar)>,
+    cork_sync: BoolCondvar,
     merge_result: Arc<Mutex<MemoryThreeWritersResult>>,
-    append_sync: Arc<(Mutex<bool>, Condvar)>,
+    append_sync: BoolCondvar,
 ) -> anyhow::Result<()> {
     let mut document_changes: Vec<Vec<Patch>> = vec![];
     let mut latecomer_attached = false;
@@ -294,10 +293,7 @@ async fn process_creator_state_events(
                     assert_text_equals(&hypermerge, &text_id, "Hello, world!").await;
 
                     // Ready to notify about cork
-                    let (lock, cvar) = &*cork_sync;
-                    let mut started = lock.lock().await;
-                    *started = true;
-                    cvar.notify_one();
+                    notify_one_condvar(cork_sync.clone()).await;
 
                     // Ok, ready to cork
                     hypermerge.cork().await;
@@ -387,11 +383,7 @@ async fn process_creator_state_events(
                     .await;
 
                     // Let's wait for the sync to end up to the joiner
-                    let (lock, cvar) = &*append_sync;
-                    let mut appended = lock.lock().await;
-                    while !*appended {
-                        appended = cvar.wait(appended).await;
-                    }
+                    wait_for_condvar(append_sync).await;
                     break;
                 } else {
                     panic!("Did not expect more creator document changes");
@@ -409,7 +401,7 @@ async fn process_creator_state_events(
 async fn process_latecomer_state_event(
     mut hypermerge: Hypermerge<RandomAccessMemory>,
     mut latecomer_state_event_receiver: UnboundedReceiver<StateEvent>,
-    append_sync: Arc<(Mutex<bool>, Condvar)>,
+    append_sync: BoolCondvar,
 ) -> anyhow::Result<()> {
     let mut text_id: Option<ObjId> = None;
     let mut document_changes: Vec<Vec<Patch>> = vec![];
@@ -463,11 +455,7 @@ async fn process_latecomer_state_event(
                     document_changes.push(patches);
 
                     // Let's wait for this to end up, via the creator, to the joiner
-                    let (lock, cvar) = &*append_sync;
-                    let mut appended = lock.lock().await;
-                    while !*appended {
-                        appended = cvar.wait(appended).await;
-                    }
+                    wait_for_condvar(append_sync).await;
                     break;
                 }
             }
@@ -516,4 +504,70 @@ async fn assert_text_equals_either(
             result, expected_1, expected_2
         );
     }
+}
+
+#[cfg(feature = "async-std")]
+fn init_condvar() -> BoolCondvar {
+    Arc::new((Mutex::new(false), Condvar::new()))
+}
+
+#[cfg(feature = "tokio")]
+fn init_condvar() -> BoolCondvar {
+    Arc::new((Mutex::new(false), Notify::new()))
+}
+
+#[cfg(feature = "async-std")]
+async fn wait_for_condvar(sync: BoolCondvar) {
+    let (lock, cvar) = &*sync;
+    let mut guard = lock.lock().await;
+    while !*guard {
+        guard = cvar.wait(guard).await;
+    }
+}
+
+#[cfg(feature = "tokio")]
+async fn wait_for_condvar(sync: BoolCondvar) {
+    let (lock, notify) = &*sync;
+    loop {
+        let future = notify.notified();
+        {
+            let guard = lock.lock().await;
+            if *guard {
+                return;
+            }
+        }
+        future.await;
+    }
+}
+
+#[cfg(feature = "async-std")]
+async fn notify_all_condvar(sync: BoolCondvar) {
+    let (lock, cvar) = &*sync;
+    let mut guard = lock.lock().await;
+    *guard = true;
+    cvar.notify_all();
+}
+
+#[cfg(feature = "tokio")]
+async fn notify_all_condvar(sync: BoolCondvar) {
+    let (lock, notify) = &*sync;
+    let mut guard = lock.lock().await;
+    *guard = true;
+    notify.notify_waiters();
+}
+
+#[cfg(feature = "async-std")]
+async fn notify_one_condvar(sync: BoolCondvar) {
+    let (lock, notify) = &*sync;
+    let mut guard = lock.lock().await;
+    *guard = true;
+    notify.notify_waiters();
+}
+
+#[cfg(feature = "tokio")]
+async fn notify_one_condvar(sync: BoolCondvar) {
+    let (lock, cvar) = &*sync;
+    let mut guard = lock.lock().await;
+    *guard = true;
+    cvar.notify_one();
 }

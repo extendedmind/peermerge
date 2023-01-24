@@ -10,12 +10,14 @@ authors = ["Timo Tiuraniemi <timo.tiuraniemi@iki.fi>"]
 
 [dependencies]
 automerge = { git = "https://github.com/automerge/automerge-rs.git", rev = "3229548fc7393bf55a401e328ab677e14694522e", features=["wasm"] }
-hypercore-protocol = { git = "https://github.com/ttiurani/hypercore-protocol-rs", branch = "v10" }
-random-access-storage = { git = "https://github.com/ttiurani/random-access-storage", branch = "v10" }
-random-access-memory = { git = "https://github.com/ttiurani/random-access-memory", branch = "v10" }
+# hypercore-protocol = { git = "https://github.com/ttiurani/hypercore-protocol-rs", branch = "tokio" }
+hypercore-protocol = { path = "../hypercore-protocol-rs", default-features = false, features = ["v10"] }
+random-access-storage = { git = "https://github.com/ttiurani/random-access-storage", branch = "tokio" }
+random-access-memory = { git = "https://github.com/ttiurani/random-access-memory", branch = "tokio" }
 anyhow = "1.0.28"
 data-encoding = "2.3.3"
 async-std = { version = "1.9.0", features = ["attributes", "unstable"], optional = true }
+tokio = { version = "1.24.2", features = ["macros", "net", "rt", "rt-multi-thread", "sync"], optional = true }
 futures = "0.3.25"
 wasm-bindgen-futures = { version = "0.4.33", optional = true }
 derivative = "2.2.0"
@@ -24,22 +26,25 @@ tracing = "0.1.37"
 chacha20poly1305 = "0.10.1"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-random-access-disk = { git = "https://github.com/ttiurani/random-access-disk", branch = "v10" }
+random-access-disk = { git = "https://github.com/ttiurani/random-access-disk", branch = "tokio", default-features = false, features = ["sparse"] }
 
 [dev-dependencies]
 sluice = "0.5.5"
 test-log = { version = "0.2.11", default-features = false, features = ["trace"] }
 tracing-subscriber = { version = "0.3.16", features = ["env-filter", "fmt"] }
-criterion = { version = "0.4", features = ["async_std"] }
+criterion = { version = "0.4", features = ["async_std", "async_tokio"] }
 pprof = { version = "0.11.0", features = ["flamegraph", "criterion"] }
 tempfile = "3.1.0"
+async-condvar-fair = { version = "1.0.0", features = ["tokio"] }
 
 [features]
-default =  ["async-std", "wasm-bindgen"]
+default =  ["tokio-runtime", "wasm-bindgen"]
 wasm-bindgen = [
   "wasm-bindgen-futures", 
   "hypercore-protocol/wasm-bindgen"
 ]
+async-std-runtime = ["async-std", "hypercore-protocol/async-std", "random-access-disk/async-std"]
+tokio-runtime = ["tokio", "hypercore-protocol/tokio", "random-access-disk/tokio"]
 
 [[bench]]
 name = "three_peers_separate"

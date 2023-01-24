@@ -1,5 +1,4 @@
 use anyhow::Result;
-use async_std::sync::{Arc, Mutex};
 use hypercore_protocol::{
     hypercore::{
         compact_encoding::{CompactEncoding, State},
@@ -10,7 +9,13 @@ use hypercore_protocol::{
 };
 use random_access_storage::RandomAccess;
 use std::fmt::Debug;
+use std::sync::Arc;
 use tracing::{debug, instrument};
+
+#[cfg(feature = "async-std")]
+use async_std::sync::Mutex;
+#[cfg(feature = "tokio")]
+use tokio::sync::Mutex;
 
 use super::PeerState;
 use crate::common::{

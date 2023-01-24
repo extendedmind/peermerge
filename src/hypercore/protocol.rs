@@ -1,4 +1,3 @@
-use async_std::sync::{Arc, Mutex};
 use dashmap::DashMap;
 use futures::channel::mpsc::UnboundedSender;
 use futures::{AsyncRead, AsyncWrite, StreamExt};
@@ -7,7 +6,13 @@ use hypercore_protocol::{Event, Protocol};
 use random_access_storage::RandomAccess;
 use std::fmt::Debug;
 use std::io::ErrorKind;
+use std::sync::Arc;
 use tracing::{debug, instrument};
+
+#[cfg(feature = "async-std")]
+use async_std::sync::Mutex;
+#[cfg(feature = "tokio")]
+use tokio::sync::Mutex;
 
 use super::{
     discovery_key_from_public_key, messaging::NEW_PEERS_CREATED_LOCAL_SIGNAL_NAME, HypercoreWrapper,

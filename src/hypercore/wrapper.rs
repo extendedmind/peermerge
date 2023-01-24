@@ -1,6 +1,3 @@
-use async_std::sync::{Arc, Mutex};
-#[cfg(not(target_arch = "wasm32"))]
-use async_std::task;
 use futures::channel::mpsc::UnboundedSender;
 use hypercore_protocol::{
     hypercore::{
@@ -14,11 +11,19 @@ use random_access_disk::RandomAccessDisk;
 use random_access_memory::RandomAccessMemory;
 use random_access_storage::RandomAccess;
 use std::fmt::Debug;
+use std::sync::Arc;
 use tracing::{debug, instrument};
+
+#[cfg(feature = "async-std")]
+use async_std::sync::Mutex;
+#[cfg(all(not(target_arch = "wasm32"), feature = "async-std"))]
+use async_std::task;
+#[cfg(feature = "tokio")]
+use tokio::sync::Mutex;
+#[cfg(all(not(target_arch = "wasm32"), feature = "tokio"))]
+use tokio::task;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_futures::spawn_local;
-
-use crate::common::{cipher::EntryCipher, entry::Entry, PeerEvent};
 
 use super::{
     messaging::{
@@ -27,6 +32,7 @@ use super::{
     },
     on_doc_peer, on_peer, PeerState,
 };
+use crate::common::{cipher::EntryCipher, entry::Entry, PeerEvent};
 
 #[derive(Debug)]
 pub struct HypercoreWrapper<T>
