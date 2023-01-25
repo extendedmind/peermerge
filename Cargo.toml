@@ -37,7 +37,7 @@ tempfile = "3.1.0"
 async-condvar-fair = { version = "1.0.0", features = ["tokio"] }
 
 [features]
-default =  ["async-std-runtime", "wasm-bindgen"]
+default =  ["tokio-runtime", "wasm-bindgen"]
 wasm-bindgen = [
   "wasm-bindgen-futures", 
   "hypercore-protocol/wasm-bindgen"

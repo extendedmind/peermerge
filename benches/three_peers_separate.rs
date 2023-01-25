@@ -18,38 +18,41 @@ async fn append_three(
     senders: Vec<Sender<u64>>,
     receiver: &mut UnboundedReceiver<StateEvent>,
 ) -> u64 {
+    // println!("");
+    // println!("=====");
     for mut sender in senders {
         sender.try_send(i).unwrap();
     }
     let mut sync_remaining = 6;
     let mut remote_sync_remaining = 6;
-    let mut document_changed_remaining = 9;
+    let mut patches_remaining: i64 = 9;
 
     while let Some(event) = receiver.next().await {
         match event {
             StateEvent::PeerSynced(_) => {
                 sync_remaining -= 1;
                 // println!(
-                //     "PS i={} sr={}, rsr={}, dcr={}",
-                //     i, sync_remaining, remote_sync_remaining, document_changed_remaining
+                //     "PS i={} sr={}, rsr={}, pr={}",
+                //     i, sync_remaining, remote_sync_remaining, patches_remaining
                 // );
                 if sync_remaining == 0
-                    && remote_sync_remaining == 0
-                    && document_changed_remaining == 0
+                    // && remote_sync_remaining == 0
+                    && remote_sync_remaining <= 0
+                    && patches_remaining == 0
                 {
                     break;
                 }
             }
-            StateEvent::DocumentChanged(_) => {
-                document_changed_remaining -= 1;
-                // TODO: Sometimes one DC is missing
+            StateEvent::DocumentChanged(patches) => {
+                patches_remaining -= patches.len() as i64;
                 // println!(
-                //     "DC: i={} sr={}, rsr={}, dcr={}",
-                //     i, sync_remaining, remote_sync_remaining, document_changed_remaining
+                //     "DC: i={} sr={}, rsr={}, pr={}",
+                //     i, sync_remaining, remote_sync_remaining, patches_remaining
                 // );
                 if sync_remaining == 0
-                    && remote_sync_remaining == 0
-                    && document_changed_remaining == 0
+                    // && remote_sync_remaining == 0
+                    && remote_sync_remaining <= 0
+                    && patches_remaining == 0
                 {
                     break;
                 }
@@ -58,12 +61,13 @@ async fn append_three(
                 remote_sync_remaining -= 1;
                 // TODO: Sometimes there is one extra RPS
                 // println!(
-                //     "RPS: i={} sr={}, rsr={}, dcr={}",
-                //     i, sync_remaining, remote_sync_remaining, document_changed_remaining
+                //     "RPS: i={} sr={}, rsr={}, pr={}",
+                //     i, sync_remaining, remote_sync_remaining, patches_remaining
                 // );
                 if sync_remaining == 0
-                    && remote_sync_remaining == 0
-                    && document_changed_remaining == 0
+                    // && remote_sync_remaining == 0
+                    && remote_sync_remaining <= 0
+                    && patches_remaining == 0
                 {
                     break;
                 }
