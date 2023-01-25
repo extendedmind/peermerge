@@ -1,6 +1,6 @@
-# Hypermerge
+# Peermerge
 
-Hypercore + Automerge in Rust
+Peer protocol (hypercore or p2panda) + Automerge in Rust
 
 ## Status
 

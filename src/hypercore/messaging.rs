@@ -24,7 +24,7 @@ use crate::common::{
 };
 
 // Messages sent over-the-wire
-const HYPERMERGE_BROADCAST_MSG: &str = "hypermerge/v1/broadcast";
+const PEERMERGE_BROADCAST_MSG: &str = "peermerge/v1/broadcast";
 
 // Local signals
 const APPEND_LOCAL_SIGNAL_NAME: &str = "append";
@@ -41,7 +41,7 @@ pub(super) fn create_broadcast_message(peer_state: &PeerState) -> Message {
     let mut buffer = enc_state.create_buffer();
     enc_state.encode(&broadcast_message, &mut buffer);
     Message::Extension(Extension {
-        name: HYPERMERGE_BROADCAST_MSG.to_string(),
+        name: PEERMERGE_BROADCAST_MSG.to_string(),
         message: buffer.to_vec(),
     })
 }
@@ -322,7 +322,7 @@ where
             return Ok(event);
         }
         Message::Extension(message) => match message.name.as_str() {
-            HYPERMERGE_BROADCAST_MSG => {
+            PEERMERGE_BROADCAST_MSG => {
                 assert!(
                     peer_state.is_doc,
                     "Only doc peer should ever get broadcast messages"

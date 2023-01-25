@@ -4,14 +4,14 @@ use criterion::Criterion;
 use criterion::{black_box, criterion_group, criterion_main};
 use futures::channel::mpsc::{Sender, UnboundedReceiver};
 use futures::stream::StreamExt;
-use hypermerge::StateEvent;
+use peermerge::StateEvent;
 use pprof::criterion::{Output, PProfProfiler};
 
 #[cfg(feature = "async-std")]
 use criterion::async_executor::AsyncStdExecutor;
 
 mod common;
-use common::setup_hypermerge_mesh;
+use common::setup_peermerge_mesh;
 
 async fn append_three(
     i: u64,
@@ -112,7 +112,7 @@ async fn bench_setup_mesh_of_three_iters(iters: u64, encrypted: bool) -> Duratio
 
     let start = Instant::now();
     for _ in 0..iters {
-        black_box(setup_hypermerge_mesh(3, encrypted).await);
+        black_box(setup_peermerge_mesh(3, encrypted).await);
     }
     start.elapsed()
 }
@@ -153,7 +153,7 @@ async fn bench_append_three_iters(iters: u64, encrypted: bool) -> Duration {
     //     .with_max_level(tracing::Level::DEBUG)
     //     .try_init()
     //     .ok();
-    let (senders, mut receiver) = setup_hypermerge_mesh(3, encrypted).await;
+    let (senders, mut receiver) = setup_peermerge_mesh(3, encrypted).await;
     // async_std::task::sleep(std::time::Duration::from_millis(100)).await;
     let start = Instant::now();
     for i in 0..iters {

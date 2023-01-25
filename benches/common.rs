@@ -3,7 +3,7 @@ use futures::channel::mpsc::{
 };
 use futures::stream::StreamExt;
 use hypercore_protocol::{Duplex, Protocol, ProtocolBuilder};
-use hypermerge::{Hypermerge, StateEvent, ROOT};
+use peermerge::{Peermerge, StateEvent, ROOT};
 use random_access_memory::RandomAccessMemory;
 
 #[cfg(feature = "async-std")]
@@ -11,28 +11,28 @@ use async_std::task;
 #[cfg(feature = "tokio")]
 use tokio::task;
 
-pub async fn setup_hypermerge_mesh(
+pub async fn setup_peermerge_mesh(
     peers: usize,
     encrypted: bool,
 ) -> (Vec<Sender<u64>>, UnboundedReceiver<StateEvent>) {
-    let mut hypermerge_creator: Hypermerge<RandomAccessMemory> =
-        Hypermerge::create_new_memory("p1", vec![("version", 1)], encrypted).await;
-    let encryption_key = hypermerge_creator.encryption_key();
-    hypermerge_creator.watch(vec![ROOT]).await;
+    let mut peermerge_creator: Peermerge<RandomAccessMemory> =
+        Peermerge::create_new_memory("p1", vec![("version", 1)], encrypted).await;
+    let encryption_key = peermerge_creator.encryption_key();
+    peermerge_creator.watch(vec![ROOT]).await;
     let (state_event_sender, mut state_event_receiver): (
         UnboundedSender<StateEvent>,
         UnboundedReceiver<StateEvent>,
     ) = unbounded();
     let mut senders = Vec::with_capacity(peers);
-    let doc_url = hypermerge_creator.doc_url();
+    let doc_url = peermerge_creator.doc_url();
 
     for i in 1..peers {
         let (proto_responder, proto_initiator) = create_pair_memory().await;
-        let hypermerge_creator_for_task = hypermerge_creator.clone();
+        let peermerge_creator_for_task = peermerge_creator.clone();
         let state_event_sender_for_task = state_event_sender.clone();
         task::spawn(async move {
             connect(
-                hypermerge_creator_for_task,
+                peermerge_creator_for_task,
                 proto_responder,
                 state_event_sender_for_task,
             )
@@ -40,17 +40,17 @@ pub async fn setup_hypermerge_mesh(
         });
 
         let peer_name = format!("p{}", i + 1);
-        let mut hypermerge_peer =
-            Hypermerge::attach_write_peer_memory(&peer_name, &doc_url, &encryption_key).await;
-        hypermerge_peer.watch(vec![ROOT]).await;
+        let mut peermerge_peer =
+            Peermerge::attach_write_peer_memory(&peer_name, &doc_url, &encryption_key).await;
+        peermerge_peer.watch(vec![ROOT]).await;
 
-        let hypermerge_peer_for_task = hypermerge_peer.clone();
+        let peermerge_peer_for_task = peermerge_peer.clone();
         let state_event_sender_for_task = state_event_sender.clone();
         let task_span = tracing::debug_span!("call_connect").or_current();
         task::spawn(async move {
             let _entered = task_span.enter();
             connect(
-                hypermerge_peer_for_task,
+                peermerge_peer_for_task,
                 proto_initiator,
                 state_event_sender_for_task,
             )
@@ -61,7 +61,7 @@ pub async fn setup_hypermerge_mesh(
         let task_span = tracing::debug_span!("call_append_value").or_current();
         task::spawn(async move {
             let _entered = task_span.enter();
-            append_value(&peer_name, hypermerge_peer, append_index_receiver).await;
+            append_value(&peer_name, peermerge_peer, append_index_receiver).await;
         });
 
         // TODO: Check what these should be for peers > 3
@@ -91,7 +91,7 @@ pub async fn setup_hypermerge_mesh(
     let task_span = tracing::debug_span!("call_append_value").or_current();
     task::spawn(async move {
         let _entered = task_span.enter();
-        append_value("p1", hypermerge_creator, append_index_receiver).await;
+        append_value("p1", peermerge_creator, append_index_receiver).await;
     });
     senders.push(append_index_sender);
 
@@ -111,11 +111,11 @@ async fn create_pair_memory() -> (MemoryProtocol, MemoryProtocol) {
 }
 
 async fn connect(
-    mut hypermerge: Hypermerge<RandomAccessMemory>,
+    mut peermerge: Peermerge<RandomAccessMemory>,
     mut protocol: MemoryProtocol,
     mut state_event_sender: UnboundedSender<StateEvent>,
 ) {
-    hypermerge
+    peermerge
         .connect_protocol_memory(&mut protocol, &mut state_event_sender)
         .await
         .expect("connect_protocol_memory should not throw error");
@@ -123,11 +123,11 @@ async fn connect(
 
 async fn append_value(
     peer_name: &str,
-    mut hypermerge: Hypermerge<RandomAccessMemory>,
+    mut peermerge: Peermerge<RandomAccessMemory>,
     mut append_index_receiver: Receiver<u64>,
 ) {
     while let Some(i) = append_index_receiver.next().await {
-        hypermerge
+        peermerge
             .put_scalar(ROOT, format!("{}_{}", peer_name, i), i)
             .await
             .unwrap();

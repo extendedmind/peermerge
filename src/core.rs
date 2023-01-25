@@ -48,10 +48,10 @@ use crate::{
     StateEvent,
 };
 
-/// Hypermerge is the main abstraction.
+/// Peermerge is the main abstraction.
 #[derive(derivative::Derivative)]
 #[derivative(Clone(bound = ""))]
-pub struct Hypermerge<T>
+pub struct Peermerge<T>
 where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send,
 {
@@ -67,7 +67,7 @@ where
     encryption_key: Option<Vec<u8>>,
 }
 
-impl<T> Hypermerge<T>
+impl<T> Peermerge<T>
 where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send + 'static,
 {
@@ -321,7 +321,7 @@ where
 //
 // RandomAccessMemory
 
-impl Hypermerge<RandomAccessMemory> {
+impl Peermerge<RandomAccessMemory> {
     pub async fn create_new_memory<P: Into<Prop>, V: Into<ScalarValue>>(
         peer_name: &str,
         root_scalars: Vec<(P, V)>,
@@ -372,7 +372,7 @@ impl Hypermerge<RandomAccessMemory> {
         // Process keys from doc URL
         let (doc_public_key, encrypted) = doc_url_to_public_key(doc_url, &encryption_key);
         if encrypted && encryption_key.is_none() {
-            panic!("Can not attach a peer to an encrypted hypermerge without an encryption key");
+            panic!("Can not attach a peer to an encrypted peermerge without an encryption key");
         }
         let doc_discovery_key = discovery_key_from_public_key(&doc_public_key);
 
@@ -653,7 +653,7 @@ async fn create_and_insert_read_memory_hypercores(
 // RandomAccessDisk
 
 #[cfg(not(target_arch = "wasm32"))]
-impl Hypermerge<RandomAccessDisk> {
+impl Peermerge<RandomAccessDisk> {
     pub async fn create_new_disk<P: Into<Prop>, V: Into<ScalarValue>>(
         peer_name: &str,
         root_scalars: Vec<(P, V)>,
@@ -710,7 +710,7 @@ impl Hypermerge<RandomAccessDisk> {
         // Process keys from doc URL
         let (doc_public_key, encrypted) = doc_url_to_public_key(doc_url, &encryption_key);
         if encrypted && encryption_key.is_none() {
-            panic!("Can not attach a peer to an encrypted hypermerge without an encryption key");
+            panic!("Can not attach a peer to an encrypted peermerge without an encryption key");
         }
         let doc_discovery_key = discovery_key_from_public_key(&doc_public_key);
 

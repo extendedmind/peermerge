@@ -1,4 +1,4 @@
-//! Binary encoding of needed hypermerge persistent data
+//! Binary encoding of needed peermerge persistent data
 use hypercore_protocol::hypercore::compact_encoding::{CompactEncoding, State};
 use std::convert::TryInto;
 

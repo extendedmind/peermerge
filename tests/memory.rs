@@ -2,9 +2,9 @@ use automerge::ObjId;
 use automerge::ROOT;
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use futures::stream::StreamExt;
-use hypermerge::Hypermerge;
-use hypermerge::Patch;
-use hypermerge::StateEvent;
+use peermerge::Patch;
+use peermerge::Peermerge;
+use peermerge::StateEvent;
 use random_access_memory::RandomAccessMemory;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -54,29 +54,29 @@ async fn memory_three_writers() -> anyhow::Result<()> {
         UnboundedSender<StateEvent>,
         UnboundedReceiver<StateEvent>,
     ) = unbounded();
-    let mut hypermerge_creator =
-        Hypermerge::create_new_memory("creator", vec![("version", 1)], false).await;
+    let mut peermerge_creator =
+        Peermerge::create_new_memory("creator", vec![("version", 1)], false).await;
 
     // Insert a map with a text field to the document
-    let texts_id = hypermerge_creator
+    let texts_id = peermerge_creator
         .put_object(ROOT, "texts", automerge::ObjType::Map)
         .await
         .unwrap();
-    let text_id = hypermerge_creator
+    let text_id = peermerge_creator
         .put_object(&texts_id, "text", automerge::ObjType::Text)
         .await
         .unwrap();
 
     // Set watching for the prop
-    hypermerge_creator
+    peermerge_creator
         .watch(vec![texts_id.clone(), text_id.clone()])
         .await;
 
-    let hypermerge_creator_for_task = hypermerge_creator.clone();
+    let peermerge_creator_for_task = peermerge_creator.clone();
     let creator_state_event_sender_for_task = creator_state_event_sender.clone();
     task::spawn(async move {
         connect(
-            hypermerge_creator_for_task,
+            peermerge_creator_for_task,
             proto_responder,
             creator_state_event_sender_for_task,
         )
@@ -84,12 +84,12 @@ async fn memory_three_writers() -> anyhow::Result<()> {
         .unwrap();
     });
 
-    let hypermerge_joiner =
-        Hypermerge::attach_write_peer_memory("joiner", &hypermerge_creator.doc_url(), &None).await;
-    let hypermerge_joiner_for_task = hypermerge_joiner.clone();
+    let peermerge_joiner =
+        Peermerge::attach_write_peer_memory("joiner", &peermerge_creator.doc_url(), &None).await;
+    let peermerge_joiner_for_task = peermerge_joiner.clone();
     task::spawn(async move {
         connect(
-            hypermerge_joiner_for_task,
+            peermerge_joiner_for_task,
             proto_initiator,
             joiner_state_event_sender,
         )
@@ -106,7 +106,7 @@ async fn memory_three_writers() -> anyhow::Result<()> {
 
     task::spawn(async move {
         process_joiner_state_event(
-            hypermerge_joiner,
+            peermerge_joiner,
             joiner_state_event_receiver,
             cork_sync_joiner,
             merge_result_for_joiner,
@@ -117,7 +117,7 @@ async fn memory_three_writers() -> anyhow::Result<()> {
     });
 
     process_creator_state_events(
-        hypermerge_creator,
+        peermerge_creator,
         creator_state_event_sender,
         creator_state_event_receiver,
         text_id,
@@ -132,7 +132,7 @@ async fn memory_three_writers() -> anyhow::Result<()> {
 
 #[instrument(skip_all)]
 async fn process_joiner_state_event(
-    mut hypermerge: Hypermerge<RandomAccessMemory>,
+    mut peermerge: Peermerge<RandomAccessMemory>,
     mut joiner_state_event_receiver: UnboundedReceiver<StateEvent>,
     cork_sync: BoolCondvar,
     merge_result: Arc<Mutex<MemoryThreeWritersResult>>,
@@ -152,12 +152,12 @@ async fn process_joiner_state_event(
             StateEvent::PeerSynced((Some(name), _, len)) => {
                 if !peer_synced.contains_key("creator") {
                     assert_eq!(name, "creator");
-                    let (_value, local_texts_id) = hypermerge.get(ROOT, "texts").await?.unwrap();
+                    let (_value, local_texts_id) = peermerge.get(ROOT, "texts").await?.unwrap();
                     let (_value, local_text_id) =
-                        hypermerge.get(&local_texts_id, "text").await?.unwrap();
-                    assert_text_equals(&hypermerge, &local_text_id, "").await;
+                        peermerge.get(&local_texts_id, "text").await?.unwrap();
+                    assert_text_equals(&peermerge, &local_text_id, "").await;
                     text_id = Some(local_text_id.clone());
-                    hypermerge
+                    peermerge
                         .watch(vec![local_texts_id, text_id.clone().unwrap()])
                         .await;
                 } else {
@@ -173,22 +173,22 @@ async fn process_joiner_state_event(
                     assert_eq!(patches.len(), 5); // "Hello" has 5 chars
                     document_changes.push(patches);
                     let text_id = text_id.clone().unwrap();
-                    assert_text_equals(&hypermerge, &text_id, "Hello").await;
-                    hypermerge.splice_text(&text_id, 5, 0, ", world!").await?;
+                    assert_text_equals(&peermerge, &text_id, "Hello").await;
+                    peermerge.splice_text(&text_id, 5, 0, ", world!").await?;
                 } else if document_changes.len() == 1 {
                     assert_eq!(patches.len(), 1); // ", world!" in one Splice patch
                     document_changes.push(patches);
                     let text_id = text_id.clone().unwrap();
-                    assert_text_equals(&hypermerge, &text_id, "Hello, world!").await;
+                    assert_text_equals(&peermerge, &text_id, "Hello, world!").await;
 
                     // Let's make sure via variable that the other end is also ready to cork
                     wait_for_condvar(cork_sync.clone()).await;
 
                     // Ok, ready to cork in unison
-                    hypermerge.cork().await;
-                    hypermerge.splice_text(&text_id, 5, 2, "").await?;
-                    hypermerge.splice_text(&text_id, 4, 0, "XX").await?;
-                    assert_text_equals(&hypermerge, &text_id, "HellXXoworld!").await;
+                    peermerge.cork().await;
+                    peermerge.splice_text(&text_id, 5, 2, "").await?;
+                    peermerge.splice_text(&text_id, 4, 0, "XX").await?;
+                    assert_text_equals(&peermerge, &text_id, "HellXXoworld!").await;
                 } else if document_changes.len() == 2 {
                     // This is the two local deletions as one Splice message
                     assert_eq!(patches.len(), 1);
@@ -203,7 +203,7 @@ async fn process_joiner_state_event(
                     let text_id = text_id.clone().unwrap();
                     merge_result.lock().await.joiner_merge = Some(
                         assert_text_equals_either(
-                            &hypermerge,
+                            &peermerge,
                             &text_id,
                             "HellXXYYworld!",
                             "HellYYXXworld!",
@@ -211,13 +211,13 @@ async fn process_joiner_state_event(
                         .await,
                     );
                     // These are the changes sent by the peer, uncork to send the changes to the peer now
-                    hypermerge.uncork().await.unwrap();
+                    peermerge.uncork().await.unwrap();
                 } else if document_changes.len() == 5 {
                     assert_eq!(patches.len(), 2); // Two latecomer additions
                     document_changes.push(patches);
                     let text_id = text_id.clone().unwrap();
                     assert_text_equals_either(
-                        &hypermerge,
+                        &peermerge,
                         &text_id,
                         "HellXXYYworldZZ!",
                         "HellYYXXworldZZ!",
@@ -241,7 +241,7 @@ async fn process_joiner_state_event(
 
 #[instrument(skip_all)]
 async fn process_creator_state_events(
-    mut hypermerge: Hypermerge<RandomAccessMemory>,
+    mut peermerge: Peermerge<RandomAccessMemory>,
     creator_state_event_sender: UnboundedSender<StateEvent>,
     mut creator_state_event_receiver: UnboundedReceiver<StateEvent>,
     text_id: ObjId,
@@ -272,11 +272,11 @@ async fn process_creator_state_events(
             }
             StateEvent::RemotePeerSynced((discovery_key, len)) => {
                 if remote_peer_synced.is_empty() {
-                    hypermerge
+                    peermerge
                         .splice_text(&text_id, 0, 0, "Hello")
                         .await
                         .unwrap();
-                    assert_text_equals(&hypermerge, &text_id, "Hello").await;
+                    assert_text_equals(&peermerge, &text_id, "Hello").await;
                 }
                 remote_peer_synced.insert(discovery_key, len);
             }
@@ -290,19 +290,19 @@ async fn process_creator_state_events(
                 } else if document_changes.len() == 2 {
                     assert_eq!(patches.len(), 8); // ", world!" has 8 chars
                     document_changes.push(patches);
-                    assert_text_equals(&hypermerge, &text_id, "Hello, world!").await;
+                    assert_text_equals(&peermerge, &text_id, "Hello, world!").await;
 
                     // Ready to notify about cork
                     notify_one_condvar(cork_sync.clone()).await;
 
                     // Ok, ready to cork
-                    hypermerge.cork().await;
+                    peermerge.cork().await;
 
                     // Let's create a conflict here, cork to prevent sending these changes to the
                     // peer
-                    hypermerge.splice_text(&text_id, 4, 2, "").await.unwrap();
-                    hypermerge.splice_text(&text_id, 4, 0, "YY").await.unwrap();
-                    assert_text_equals(&hypermerge, &text_id, "HellYY world!").await;
+                    peermerge.splice_text(&text_id, 4, 2, "").await.unwrap();
+                    peermerge.splice_text(&text_id, 4, 0, "YY").await.unwrap();
+                    assert_text_equals(&peermerge, &text_id, "HellYY world!").await;
                 } else if document_changes.len() == 3 {
                     // This is the local deletions, one Delete patch with num 2
                     assert_eq!(patches.len(), 1);
@@ -312,14 +312,14 @@ async fn process_creator_state_events(
                     assert_eq!(patches.len(), 1);
                     document_changes.push(patches);
                     // Uncork to send the changes to the peer now
-                    hypermerge.uncork().await?;
+                    peermerge.uncork().await?;
                 } else if document_changes.len() == 5 {
                     assert_eq!(patches.len(), 3); // One deletion that wasn't joined and two X chars
                     document_changes.push(patches);
                     let mut merge_result = merge_result.lock().await;
                     merge_result.creator_merge = Some(
                         assert_text_equals_either(
-                            &hypermerge,
+                            &peermerge,
                             &text_id,
                             "HellXXYYworld!",
                             "HellYYXXworld!",
@@ -335,18 +335,18 @@ async fn process_creator_state_events(
                         UnboundedSender<StateEvent>,
                         UnboundedReceiver<StateEvent>,
                     ) = unbounded();
-                    let hypermerge_latecomer = Hypermerge::attach_write_peer_memory(
+                    let peermerge_latecomer = Peermerge::attach_write_peer_memory(
                         "latecomer",
-                        &hypermerge.doc_url(),
+                        &peermerge.doc_url(),
                         &None,
                     )
                     .await;
-                    let hypermerge_latecomer_for_task = hypermerge_latecomer.clone();
-                    let hypermerge_creator_for_task = hypermerge.clone();
+                    let peermerge_latecomer_for_task = peermerge_latecomer.clone();
+                    let peermerge_creator_for_task = peermerge.clone();
                     let creator_state_event_sender_for_task = creator_state_event_sender.clone();
                     task::spawn(async move {
                         connect(
-                            hypermerge_creator_for_task,
+                            peermerge_creator_for_task,
                             proto_responder,
                             creator_state_event_sender_for_task,
                         )
@@ -355,7 +355,7 @@ async fn process_creator_state_events(
                     });
                     task::spawn(async move {
                         connect(
-                            hypermerge_latecomer_for_task,
+                            peermerge_latecomer_for_task,
                             proto_initiator,
                             latecomer_state_event_sender,
                         )
@@ -365,7 +365,7 @@ async fn process_creator_state_events(
                     let append_sync_latecomer = Arc::clone(&append_sync);
                     task::spawn(async move {
                         process_latecomer_state_event(
-                            hypermerge_latecomer,
+                            peermerge_latecomer,
                             latecomer_state_event_receiver,
                             append_sync_latecomer,
                         )
@@ -375,7 +375,7 @@ async fn process_creator_state_events(
                 } else if document_changes.len() == 6 {
                     assert_eq!(patches.len(), 2); // Two latecomer additions
                     assert_text_equals_either(
-                        &hypermerge,
+                        &peermerge,
                         &text_id,
                         "HellXXYYworldZZ!",
                         "HellYYXXworldZZ!",
@@ -399,7 +399,7 @@ async fn process_creator_state_events(
 
 #[instrument(skip_all)]
 async fn process_latecomer_state_event(
-    mut hypermerge: Hypermerge<RandomAccessMemory>,
+    mut peermerge: Peermerge<RandomAccessMemory>,
     mut latecomer_state_event_receiver: UnboundedReceiver<StateEvent>,
     append_sync: BoolCondvar,
 ) -> anyhow::Result<()> {
@@ -421,22 +421,22 @@ async fn process_latecomer_state_event(
                     && peer_synced.contains_key("joiner")
                     && text_id.is_none()
                 {
-                    let (_value, local_texts_id) = hypermerge.get(ROOT, "texts").await?.unwrap();
+                    let (_value, local_texts_id) = peermerge.get(ROOT, "texts").await?.unwrap();
                     let (_value, local_text_id) =
-                        hypermerge.get(&local_texts_id, "text").await?.unwrap();
+                        peermerge.get(&local_texts_id, "text").await?.unwrap();
                     assert_text_equals_either(
-                        &hypermerge,
+                        &peermerge,
                         &local_text_id,
                         "HellXXYYworld!",
                         "HellYYXXworld!",
                     )
                     .await;
                     text_id = Some(local_text_id.clone());
-                    hypermerge
+                    peermerge
                         .watch(vec![local_texts_id, text_id.clone().unwrap()])
                         .await;
                     // Make one final change and see that it propagates through to the creator
-                    hypermerge.splice_text(&local_text_id, 13, 0, "ZZ").await?;
+                    peermerge.splice_text(&local_text_id, 13, 0, "ZZ").await?;
                 }
             }
             StateEvent::RemotePeerSynced((discovery_key, len)) => {
@@ -446,7 +446,7 @@ async fn process_latecomer_state_event(
                 if document_changes.len() == 0 {
                     assert_eq!(patches.len(), 1); // Two local additions as one Splice
                     assert_text_equals_either(
-                        &hypermerge,
+                        &peermerge,
                         &text_id.clone().unwrap(),
                         "HellXXYYworldZZ!",
                         "HellYYXXworldZZ!",
@@ -468,32 +468,32 @@ async fn process_latecomer_state_event(
 }
 
 async fn connect(
-    mut hypermerge: Hypermerge<RandomAccessMemory>,
+    mut peermerge: Peermerge<RandomAccessMemory>,
     mut protocol: MemoryProtocol,
     mut state_event_sender: UnboundedSender<StateEvent>,
 ) -> anyhow::Result<()> {
-    hypermerge
+    peermerge
         .connect_protocol_memory(&mut protocol, &mut state_event_sender)
         .await?;
     Ok(())
 }
 
 async fn assert_text_equals(
-    hypermerge: &Hypermerge<RandomAccessMemory>,
+    peermerge: &Peermerge<RandomAccessMemory>,
     obj: &ObjId,
     expected: &str,
 ) {
-    let result = hypermerge.realize_text(obj).await;
+    let result = peermerge.realize_text(obj).await;
     assert_eq!(result.unwrap().unwrap(), expected);
 }
 
 async fn assert_text_equals_either(
-    hypermerge: &Hypermerge<RandomAccessMemory>,
+    peermerge: &Peermerge<RandomAccessMemory>,
     obj: &ObjId,
     expected_1: &str,
     expected_2: &str,
 ) -> String {
-    let result = hypermerge.realize_text(obj).await.unwrap().unwrap();
+    let result = peermerge.realize_text(obj).await.unwrap().unwrap();
     if result == expected_1 {
         return expected_1.to_string();
     } else if result == expected_2 {
@@ -561,7 +561,7 @@ async fn notify_one_condvar(sync: BoolCondvar) {
     let (lock, notify) = &*sync;
     let mut guard = lock.lock().await;
     *guard = true;
-    notify.notify_waiters();
+    notify.notify_one();
 }
 
 #[cfg(feature = "tokio")]

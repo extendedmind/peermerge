@@ -1,10 +1,10 @@
 use automerge::ROOT;
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use futures::stream::StreamExt;
-use hypermerge::doc_url_encrypted;
-use hypermerge::Hypermerge;
-use hypermerge::Patch;
-use hypermerge::StateEvent;
+use peermerge::doc_url_encrypted;
+use peermerge::Patch;
+use peermerge::Peermerge;
+use peermerge::StateEvent;
 use random_access_disk::RandomAccessDisk;
 use tempfile::Builder;
 use test_log::test;
@@ -47,16 +47,16 @@ async fn disk_two_peers(encrypted: bool) -> anyhow::Result<()> {
         UnboundedSender<StateEvent>,
         UnboundedReceiver<StateEvent>,
     ) = unbounded();
-    let hypermerge_creator =
-        Hypermerge::create_new_disk("creator", vec![("version", 1)], encrypted, creator_dir).await;
-    let doc_url = hypermerge_creator.doc_url();
-    let encryption_key = hypermerge_creator.encryption_key();
+    let peermerge_creator =
+        Peermerge::create_new_disk("creator", vec![("version", 1)], encrypted, creator_dir).await;
+    let doc_url = peermerge_creator.doc_url();
+    let encryption_key = peermerge_creator.encryption_key();
     assert_eq!(doc_url_encrypted(&doc_url), encrypted);
     assert_eq!(encryption_key.is_some(), encrypted);
 
-    let mut hypermerge_creator_for_task = hypermerge_creator.clone();
+    let mut peermerge_creator_for_task = peermerge_creator.clone();
     task::spawn(async move {
-        hypermerge_creator_for_task
+        peermerge_creator_for_task
             .connect_protocol_disk(&mut proto_responder, &mut creator_state_event_sender)
             .await
             .unwrap();
@@ -70,30 +70,30 @@ async fn disk_two_peers(encrypted: bool) -> anyhow::Result<()> {
         .tempdir()
         .unwrap()
         .into_path();
-    let hypermerge_joiner =
-        Hypermerge::attach_write_peer_disk("joiner", &doc_url, &encryption_key, joiner_dir).await;
-    let mut hypermerge_joiner_for_task = hypermerge_joiner.clone();
+    let peermerge_joiner =
+        Peermerge::attach_write_peer_disk("joiner", &doc_url, &encryption_key, joiner_dir).await;
+    let mut peermerge_joiner_for_task = peermerge_joiner.clone();
     task::spawn(async move {
-        hypermerge_joiner_for_task
+        peermerge_joiner_for_task
             .connect_protocol_disk(&mut proto_initiator, &mut joiner_state_event_sender)
             .await
             .unwrap();
     });
 
     task::spawn(async move {
-        process_joiner_state_event(hypermerge_joiner, joiner_state_event_receiver)
+        process_joiner_state_event(peermerge_joiner, joiner_state_event_receiver)
             .await
             .unwrap();
     });
 
-    process_creator_state_events(hypermerge_creator, creator_state_event_receiver).await?;
+    process_creator_state_events(peermerge_creator, creator_state_event_receiver).await?;
 
     Ok(())
 }
 
 #[instrument(skip_all)]
 async fn process_joiner_state_event(
-    hypermerge: Hypermerge<RandomAccessDisk>,
+    peermerge: Peermerge<RandomAccessDisk>,
     mut joiner_state_event_receiver: UnboundedReceiver<StateEvent>,
 ) -> anyhow::Result<()> {
     let mut document_changes: Vec<Vec<Patch>> = vec![];
@@ -106,7 +106,7 @@ async fn process_joiner_state_event(
             StateEvent::PeerSynced((Some(name), _, len)) => {
                 assert_eq!(name, "creator");
                 assert_eq!(len, 1);
-                let (value, _) = hypermerge.get(ROOT, "version").await?.unwrap();
+                let (value, _) = peermerge.get(ROOT, "version").await?.unwrap();
                 assert_eq!(value.to_u64().unwrap(), 1);
             }
             StateEvent::RemotePeerSynced(_) => {}
@@ -124,7 +124,7 @@ async fn process_joiner_state_event(
 
 #[instrument(skip_all)]
 async fn process_creator_state_events(
-    hypermerge: Hypermerge<RandomAccessDisk>,
+    peermerge: Peermerge<RandomAccessDisk>,
     mut creator_state_event_receiver: UnboundedReceiver<StateEvent>,
 ) -> anyhow::Result<()> {
     let mut document_changes: Vec<Vec<Patch>> = vec![];
@@ -137,7 +137,7 @@ async fn process_creator_state_events(
             StateEvent::PeerSynced((Some(name), _, len)) => {
                 assert_eq!(name, "joiner");
                 assert_eq!(len, 1);
-                let (value, _) = hypermerge.get(ROOT, "version").await?.unwrap();
+                let (value, _) = peermerge.get(ROOT, "version").await?.unwrap();
                 assert_eq!(value.to_u64().unwrap(), 1);
                 break;
             }

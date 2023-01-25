@@ -7,7 +7,7 @@ use async_std::sync::Mutex;
 #[cfg(feature = "tokio")]
 use tokio::sync::Mutex;
 
-/// Repository is a store for multiple Hypermerges
+/// Repository is a store for multiple Peermerges
 #[derive(Debug, Clone)]
 pub struct Repository<T>
 where

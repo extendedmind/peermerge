@@ -1,10 +1,10 @@
 use automerge::ROOT;
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use futures::stream::StreamExt;
-use hypermerge::doc_url_encrypted;
-use hypermerge::Hypermerge;
-use hypermerge::Patch;
-use hypermerge::StateEvent;
+use peermerge::doc_url_encrypted;
+use peermerge::Patch;
+use peermerge::Peermerge;
+use peermerge::StateEvent;
 use random_access_memory::RandomAccessMemory;
 use tempfile::Builder;
 use test_log::test;
@@ -29,17 +29,17 @@ async fn proxy_disk_encrypted() -> anyhow::Result<()> {
         UnboundedSender<StateEvent>,
         UnboundedReceiver<StateEvent>,
     ) = unbounded();
-    let mut hypermerge_creator =
-        Hypermerge::create_new_memory("creator", vec![("version", 1)], true).await;
-    hypermerge_creator.watch(vec![ROOT]).await;
-    let doc_url = hypermerge_creator.doc_url();
-    let encryption_key = hypermerge_creator.encryption_key();
+    let mut peermerge_creator =
+        Peermerge::create_new_memory("creator", vec![("version", 1)], true).await;
+    peermerge_creator.watch(vec![ROOT]).await;
+    let doc_url = peermerge_creator.doc_url();
+    let encryption_key = peermerge_creator.encryption_key();
     assert_eq!(doc_url_encrypted(&doc_url), true);
     assert_eq!(encryption_key.is_some(), true);
 
-    let mut hypermerge_creator_for_task = hypermerge_creator.clone();
+    let mut peermerge_creator_for_task = peermerge_creator.clone();
     task::spawn(async move {
-        hypermerge_creator_for_task
+        peermerge_creator_for_task
             .connect_protocol_memory(&mut proto_responder, &mut creator_state_event_sender)
             .await
             .unwrap();
@@ -51,10 +51,10 @@ async fn proxy_disk_encrypted() -> anyhow::Result<()> {
         .unwrap()
         .into_path();
 
-    let hypermerge_proxy = Hypermerge::attach_proxy_peer_disk("proxy", &doc_url, proxy_dir).await;
-    let mut hypermerge_proxy_for_task = hypermerge_proxy.clone();
+    let peermerge_proxy = Peermerge::attach_proxy_peer_disk("proxy", &doc_url, proxy_dir).await;
+    let mut peermerge_proxy_for_task = peermerge_proxy.clone();
     task::spawn(async move {
-        hypermerge_proxy_for_task
+        peermerge_proxy_for_task
             .connect_protocol_disk(&mut proto_initiator, &mut proxy_state_event_sender)
             .await
             .unwrap();
@@ -66,7 +66,7 @@ async fn proxy_disk_encrypted() -> anyhow::Result<()> {
             .unwrap();
     });
 
-    process_creator_state_events(hypermerge_creator, creator_state_event_receiver).await?;
+    process_creator_state_events(peermerge_creator, creator_state_event_receiver).await?;
 
     Ok(())
 }
@@ -105,7 +105,7 @@ async fn process_proxy_state_event(
 
 #[instrument(skip_all)]
 async fn process_creator_state_events(
-    mut hypermerge: Hypermerge<RandomAccessMemory>,
+    mut peermerge: Peermerge<RandomAccessMemory>,
     mut creator_state_event_receiver: UnboundedReceiver<StateEvent>,
 ) -> anyhow::Result<()> {
     let mut document_changes: Vec<Vec<Patch>> = vec![];
@@ -123,7 +123,7 @@ async fn process_creator_state_events(
                 remote_peer_syncs += 1;
                 if remote_peer_syncs == 1 {
                     assert_eq!(len, 1);
-                    hypermerge.put_scalar(ROOT, "test", "value").await?;
+                    peermerge.put_scalar(ROOT, "test", "value").await?;
                 } else if remote_peer_syncs == 2 {
                     assert_eq!(len, 2);
                     assert_eq!(document_changes.len(), 1);

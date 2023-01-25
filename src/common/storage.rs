@@ -52,7 +52,7 @@ impl RepoStateWrapper<RandomAccessMemory> {
 impl RepoStateWrapper<RandomAccessDisk> {
     pub async fn new_disk(data_root_dir: &PathBuf) -> Self {
         let state = RepoState::default();
-        let state_path = data_root_dir.join(PathBuf::from("hypermerge_state.bin"));
+        let state_path = data_root_dir.join(PathBuf::from("peermerge_state.bin"));
         let mut storage = RandomAccessDisk::builder(state_path).build().await.unwrap();
         write_repo_state(&state, &mut storage).await;
         Self { state, storage }
@@ -226,7 +226,7 @@ impl DocStateWrapper<RandomAccessDisk> {
         data_root_dir: &PathBuf,
     ) -> Self {
         let state = DocState::new(doc_public_key, vec![], write_public_key, content);
-        let state_path = data_root_dir.join(PathBuf::from("hypermerge_state.bin"));
+        let state_path = data_root_dir.join(PathBuf::from("peermerge_state.bin"));
         let mut storage = RandomAccessDisk::builder(state_path).build().await.unwrap();
         write_doc_state(&state, &mut storage).await;
         Self {

@@ -5,6 +5,10 @@ use chacha20poly1305::{
 use std::convert::TryInto;
 use std::fmt::Debug;
 
+const DOC_URL_PREFIX: &str = "peermerge:/";
+const DOC_URL_VERSION: u8 = 1;
+const DOC_URL_HYPERCORE: u8 = 1;
+
 pub(crate) struct EntryCipher {
     cipher: XChaCha20Poly1305,
 }
@@ -42,7 +46,11 @@ impl EntryCipher {
 }
 
 pub(crate) fn keys_to_doc_url(public_key: &[u8; 32], encryption_key: &Option<Vec<u8>>) -> String {
-    let encoded_public_key = data_encoding::BASE32_NOPAD.encode(public_key);
+    let mut domain: Vec<u8> = Vec::with_capacity(32 + 2);
+    domain.push(DOC_URL_VERSION);
+    domain.push(DOC_URL_HYPERCORE);
+    domain.extend(public_key);
+    let encoded_domain = data_encoding::BASE32_NOPAD.encode(&domain);
     let postfix: String = if let Some(encryption_key) = encryption_key {
         let nonce = generate_nonce(&public_key, 0);
         let cipher = XChaCha20Poly1305::new_from_slice(&encryption_key).unwrap();
@@ -52,38 +60,19 @@ pub(crate) fn keys_to_doc_url(public_key: &[u8; 32], encryption_key: &Option<Vec
     } else {
         "".to_string()
     };
-    format!("hypermerge:/{}{}", encoded_public_key, postfix)
+    format!("peermerge:/{}{}", encoded_domain, postfix)
 }
 
 pub(crate) fn doc_url_to_public_key(
     doc_url: &str,
     encryption_key_to_validate: &Option<Vec<u8>>,
 ) -> ([u8; 32], bool) {
-    let public_key_base32 = doc_url[12..64].as_bytes();
-    let mut public_key = vec![
-        0;
-        data_encoding::BASE32_NOPAD
-            .decode_len(public_key_base32.len())
-            .unwrap()
-    ];
-    let decoded_len = data_encoding::BASE32_NOPAD
-        .decode_mut(public_key_base32, &mut public_key)
-        .unwrap();
-    let public_key = public_key[..decoded_len].try_into().unwrap();
-    let encrypted = if doc_url_encrypted(doc_url) {
+    let (_, _, public_key_vec, enc) = decode_domain(doc_url);
+    let public_key = public_key_vec.try_into().unwrap();
+    let encrypted = enc.is_some();
+    if let Some(enc) = enc {
         // The url indicates that its encrypted. If an encryption key is given, test that it works.
         if let Some(encryption_key) = encryption_key_to_validate {
-            let enc_base32 = doc_url[69..].as_bytes();
-            let mut enc = vec![
-                0;
-                data_encoding::BASE32_NOPAD
-                    .decode_len(enc_base32.len())
-                    .unwrap()
-            ];
-            let decoded_len = data_encoding::BASE32_NOPAD
-                .decode_mut(enc_base32, &mut enc)
-                .unwrap();
-            let enc = enc[0..decoded_len].to_vec();
             let nonce = generate_nonce(&public_key, 0);
             let cipher = XChaCha20Poly1305::new_from_slice(&encryption_key).unwrap();
             let reference_public_key: [u8; 32] =
@@ -92,15 +81,58 @@ pub(crate) fn doc_url_to_public_key(
                 panic!("Invalid encryption key");
             }
         }
-        true
-    } else {
-        false
-    };
+    }
     (public_key, encrypted)
 }
 
 pub fn doc_url_encrypted(doc_url: &str) -> bool {
-    doc_url.len() > 69 && doc_url[64..69] == "?enc=".to_string()
+    decode_domain(doc_url).3.is_some()
+}
+
+fn decode_domain(doc_url: &str) -> (u8, u8, Vec<u8>, Option<Vec<u8>>) {
+    assert_eq!(&doc_url[..DOC_URL_PREFIX.len()], DOC_URL_PREFIX);
+    let (domain_end, enc) = if let Some(query_param_index) = doc_url.find('?') {
+        let enc = if doc_url.len() > query_param_index + 5
+            && &doc_url[query_param_index..query_param_index + 5] == "?enc="
+        {
+            let enc_start = query_param_index + 5;
+            let enc_end = if let Some(next_param_index) = doc_url[enc_start..].find('&') {
+                enc_start + next_param_index
+            } else {
+                doc_url.len()
+            };
+            let enc_base32 = doc_url[enc_start..enc_end].as_bytes();
+            let mut enc = vec![
+                0;
+                data_encoding::BASE32_NOPAD
+                    .decode_len(enc_base32.len())
+                    .unwrap()
+            ];
+            data_encoding::BASE32_NOPAD
+                .decode_mut(enc_base32, &mut enc)
+                .unwrap();
+            Some(enc)
+        } else {
+            None
+        };
+        (query_param_index, enc)
+    } else {
+        (doc_url.len(), None)
+    };
+    let domain_base32 = doc_url[DOC_URL_PREFIX.len()..domain_end].as_bytes();
+    let mut domain = vec![
+        0;
+        data_encoding::BASE32_NOPAD
+            .decode_len(domain_base32.len())
+            .unwrap()
+    ];
+    let decoded_len = data_encoding::BASE32_NOPAD
+        .decode_mut(domain_base32, &mut domain)
+        .unwrap();
+    assert_eq!(domain[0], DOC_URL_VERSION);
+    assert_eq!(domain[1], DOC_URL_HYPERCORE);
+    assert_eq!(decoded_len, 32 + 2);
+    (domain[0], domain[1], domain[2..].to_vec(), enc)
 }
 
 fn generate_nonce(public_key: &[u8; 32], index: u64) -> XNonce {
