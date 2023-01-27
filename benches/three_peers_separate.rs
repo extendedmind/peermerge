@@ -19,7 +19,7 @@ async fn append_three(
     receiver: &mut UnboundedReceiver<StateEvent>,
 ) -> u64 {
     // println!("");
-    // println!("=====");
+    // println!("====");
     for mut sender in senders {
         sender.try_send(i).unwrap();
     }
@@ -35,11 +35,7 @@ async fn append_three(
                 //     "PS i={} sr={}, rsr={}, pr={}",
                 //     i, sync_remaining, remote_sync_remaining, patches_remaining
                 // );
-                if sync_remaining == 0
-                    // && remote_sync_remaining == 0
-                    && remote_sync_remaining <= 0
-                    && patches_remaining == 0
-                {
+                if sync_remaining == 0 && remote_sync_remaining == 0 && patches_remaining == 0 {
                     break;
                 }
             }
@@ -49,29 +45,27 @@ async fn append_three(
                 //     "DC: i={} sr={}, rsr={}, pr={}",
                 //     i, sync_remaining, remote_sync_remaining, patches_remaining
                 // );
-                if sync_remaining == 0
-                    // && remote_sync_remaining == 0
-                    && remote_sync_remaining <= 0
-                    && patches_remaining == 0
-                {
+                if sync_remaining == 0 && remote_sync_remaining == 0 && patches_remaining == 0 {
                     break;
                 }
             }
             StateEvent::RemotePeerSynced(..) => {
                 remote_sync_remaining -= 1;
-                // TODO: Sometimes there is one extra RPS
                 // println!(
                 //     "RPS: i={} sr={}, rsr={}, pr={}",
                 //     i, sync_remaining, remote_sync_remaining, patches_remaining
                 // );
-                if sync_remaining == 0
-                    // && remote_sync_remaining == 0
-                    && remote_sync_remaining <= 0
-                    && patches_remaining == 0
-                {
+
+                if sync_remaining == 0 && remote_sync_remaining == 0 && patches_remaining == 0 {
                     break;
                 }
             }
+        }
+        if sync_remaining < 0 && remote_sync_remaining < 0 && patches_remaining < 0 {
+            panic!(
+                "Too many events: i={} sr={}, rsr={}, pr={}",
+                i, sync_remaining, remote_sync_remaining, patches_remaining
+            );
         }
     }
     0
@@ -91,6 +85,7 @@ fn bench_setup_mesh_of_three(c: &mut Criterion, encrypted: bool) {
         if encrypted { "encrypted" } else { "plain" }
     );
     let mut group = c.benchmark_group("slow_call");
+    group.measurement_time(Duration::from_secs(10));
     #[cfg(feature = "async-std")]
     group.bench_function(name, move |b| {
         b.to_async(AsyncStdExecutor)
@@ -131,6 +126,7 @@ fn bench_append_three_encrypted(c: &mut Criterion) {
 
 fn bench_append_three(c: &mut Criterion, encrypted: bool) {
     let mut group = c.benchmark_group("slow_call");
+    group.measurement_time(Duration::from_secs(10));
     let name = format!(
         "append_three_{}",
         if encrypted { "encrypted" } else { "plain" }

@@ -24,3 +24,15 @@ impl NewPeersCreatedMessage {
         Self { public_keys }
     }
 }
+
+/// An PeerSyncedMessage is an internal message that contains new length
+/// of a hypercore for inter-protocol signaling.
+#[derive(Debug)]
+pub(crate) struct PeerSyncedMessage {
+    pub(crate) contiguous_length: u64,
+}
+impl PeerSyncedMessage {
+    pub fn new(contiguous_length: u64) -> Self {
+        Self { contiguous_length }
+    }
+}

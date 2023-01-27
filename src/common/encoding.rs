@@ -6,7 +6,7 @@ pub(crate) use crate::common::entry::Entry;
 pub(crate) use crate::common::message::BroadcastMessage;
 pub(crate) use crate::common::state::{DocState, RepoState};
 
-use super::message::NewPeersCreatedMessage;
+use super::message::{NewPeersCreatedMessage, PeerSyncedMessage};
 use super::state::{DocContent, DocCursor, DocPeerState};
 
 impl CompactEncoding<RepoState> for State {
@@ -245,6 +245,21 @@ impl CompactEncoding<NewPeersCreatedMessage> for State {
     fn decode(&mut self, buffer: &[u8]) -> NewPeersCreatedMessage {
         let public_keys: Vec<[u8; 32]> = decode_fixed_32_byte_vec(self, buffer);
         NewPeersCreatedMessage::new(public_keys)
+    }
+}
+
+impl CompactEncoding<PeerSyncedMessage> for State {
+    fn preencode(&mut self, value: &PeerSyncedMessage) {
+        self.preencode(&value.contiguous_length);
+    }
+
+    fn encode(&mut self, value: &PeerSyncedMessage, buffer: &mut [u8]) {
+        self.encode(&value.contiguous_length, buffer);
+    }
+
+    fn decode(&mut self, buffer: &[u8]) -> PeerSyncedMessage {
+        let contiguous_length: u64 = self.decode(buffer);
+        PeerSyncedMessage { contiguous_length }
     }
 }
 

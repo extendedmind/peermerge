@@ -19,7 +19,7 @@ use tokio::sync::Mutex;
 
 use super::PeerState;
 use crate::common::{
-    message::{BroadcastMessage, NewPeersCreatedMessage},
+    message::{BroadcastMessage, NewPeersCreatedMessage, PeerSyncedMessage},
     PeerEvent,
 };
 
@@ -55,10 +55,11 @@ pub(super) fn create_append_local_signal(length: u64) -> Message {
 }
 
 pub(super) fn create_peer_synced_local_signal(contiguous_length: u64) -> Message {
+    let message = PeerSyncedMessage { contiguous_length };
     let mut enc_state = State::new();
-    enc_state.preencode(&contiguous_length);
+    enc_state.preencode(&message);
     let mut buffer = enc_state.create_buffer();
-    enc_state.encode(&contiguous_length, &mut buffer);
+    enc_state.encode(&message, &mut buffer);
     Message::LocalSignal((PEER_SYNCED_LOCAL_SIGNAL_NAME.to_string(), buffer.to_vec()))
 }
 
@@ -106,7 +107,7 @@ where
     };
 
     peer_state.sync_sent = true;
-    if info.contiguous_length > 0 {
+    if info.contiguous_length > 0 && peer_state.contiguous_range_sent < info.contiguous_length {
         let range_msg = Range {
             drop: false,
             start: 0,
@@ -207,7 +208,7 @@ where
                 };
                 channel.send(Message::Data(msg)).await?;
             } else {
-                panic!("Could not create proof from {:?}", message.id);
+                panic!("Could not create proof from request id {:?}", message.id);
             }
         }
         Message::Data(message) => {
@@ -224,7 +225,7 @@ where
                         peer_state.synced_contiguous_length = new_info.contiguous_length;
                         Some(PeerEvent::PeerSynced((
                             *channel.discovery_key(),
-                            peer_state.synced_contiguous_length,
+                            new_info.contiguous_length,
                         )))
                     } else {
                         None
@@ -252,25 +253,18 @@ where
                     downloading: true,
                 }));
             }
-            if let Some(block) = &message.block {
-                // Send Range if the number of items changed, both for the single and
-                // for the contiguous length
-                if old_info.length < new_info.length {
-                    messages.push(Message::Range(Range {
-                        drop: false,
-                        start: block.index,
-                        length: 1,
-                    }));
-                }
+            if message.block.is_some() {
+                // Send Range if the number of items changed for the contiguous length
+                // only.
                 if old_info.contiguous_length < new_info.contiguous_length
                     && peer_state.contiguous_range_sent < new_info.contiguous_length
                 {
+                    peer_state.contiguous_range_sent = new_info.contiguous_length;
                     messages.push(Message::Range(Range {
                         drop: false,
                         start: 0,
                         length: new_info.contiguous_length,
                     }));
-                    peer_state.contiguous_range_sent = new_info.contiguous_length;
                 }
             }
             if let Some(request) = request {
@@ -284,31 +278,34 @@ where
                 let mut hypercore = hypercore.lock().await;
                 let info = hypercore.info();
                 let event: Option<PeerEvent> = if message.start == 0 {
-                    let old_remote_length = peer_state.remote_length;
-                    // We expect that all contiguous ranges will tell the current remote length
-                    peer_state.remote_length = message.length;
-                    if info.contiguous_length == message.length {
-                        if peer_state.notified_remote_synced_contiguous_length < message.length {
+                    peer_state.remote_contiguous_length = message.length;
+                    if message.length > peer_state.remote_length {
+                        peer_state.remote_length = message.length;
+                    }
+                    if info.contiguous_length == peer_state.remote_contiguous_length {
+                        if peer_state.notified_remote_synced_contiguous_length
+                            < peer_state.remote_contiguous_length
+                        {
                             // The peer has advertised that they now have what we have
                             let event = Some(PeerEvent::RemotePeerSynced((
                                 *channel.discovery_key(),
-                                message.length,
+                                peer_state.remote_contiguous_length,
                             )));
-                            peer_state.notified_remote_synced_contiguous_length = message.length;
+                            peer_state.notified_remote_synced_contiguous_length =
+                                peer_state.remote_contiguous_length;
                             event
                         } else {
                             None
                         }
-                    } else {
-                        // If the other side advertises more than we have, and more than the peer length,
-                        // we had recorded, then we need to request the rest of the blocks.
-                        if info.contiguous_length < message.length
-                            && old_remote_length < message.length
-                        {
-                            if let Some(request) = next_request(&mut hypercore, peer_state).await? {
-                                channel.send(Message::Request(request)).await?;
-                            }
+                    } else if info.contiguous_length < peer_state.remote_contiguous_length {
+                        // If the other side advertises more than we have, we need to request the rest
+                        // of the blocks.
+                        if let Some(request) = next_request(&mut hypercore, peer_state).await? {
+                            channel.send(Message::Request(request)).await?;
                         }
+                        None
+                    } else {
+                        // We have more than the peer, just ignore
                         None
                     }
                 } else {
@@ -364,22 +361,30 @@ where
                     hypercore.info()
                 };
 
-                if info.contiguous_length >= length && peer_state.contiguous_range_sent < length {
+                if info.contiguous_length >= length
+                    && peer_state.contiguous_range_sent < info.contiguous_length
+                {
                     let range_msg = Range {
                         drop: false,
                         start: 0,
-                        length,
+                        length: info.contiguous_length,
                     };
-                    peer_state.contiguous_range_sent = length;
+                    peer_state.contiguous_range_sent = info.contiguous_length;
                     channel.send(Message::Range(range_msg)).await?;
                 }
             }
             PEER_SYNCED_LOCAL_SIGNAL_NAME => {
                 let mut dec_state = State::from_buffer(&data);
-                let contiguous_length: u64 = dec_state.decode(&data);
-                if contiguous_length > peer_state.synced_contiguous_length
-                    && peer_state.contiguous_range_sent < contiguous_length
+                let message: PeerSyncedMessage = dec_state.decode(&data);
+                if message.contiguous_length > peer_state.synced_contiguous_length
+                    && peer_state.contiguous_range_sent < message.contiguous_length
                 {
+                    // Let's send the actual contiguous length we have now, which may have
+                    // changed since creating the signal.
+                    let contiguous_length = {
+                        let hypercore = hypercore.lock().await;
+                        hypercore.info().contiguous_length
+                    };
                     peer_state.synced_contiguous_length = contiguous_length;
                     let range_msg = Range {
                         drop: false,
@@ -461,26 +466,30 @@ where
         None
     };
 
-    // Add blocks to block index queue if there's a new length
-    let block: Option<RequestBlock> = if peer_state.remote_length > info.contiguous_length {
-        // Check if there's already an inflight block request
-        let request_index: u64 = if let Some(block) = peer_state.inflight.get_highest_block() {
-            block.index + 1
-        } else {
-            info.contiguous_length
-        };
-        if peer_state.remote_length > request_index {
-            let nodes = hypercore.missing_nodes(request_index * 2).await?;
-            Some(RequestBlock {
-                index: request_index,
-                nodes,
-            })
+    // Add blocks to block index queue if there's a new contiguous length
+    let block: Option<RequestBlock> =
+        if peer_state.remote_contiguous_length > info.contiguous_length {
+            // Check if there's already an inflight block request
+            let request_index: u64 = if let Some(block) = peer_state.inflight.get_highest_block() {
+                block.index + 1
+            } else {
+                info.contiguous_length
+            };
+            // Don't ask for more blocks than the peer has, but also we can't ask for a block that we haven't
+            // got an upgrade response for. With applied upgrade, the info.length increases, so we make
+            // sure the index is below the length.
+            if peer_state.remote_contiguous_length > request_index && info.length > request_index {
+                let nodes = hypercore.missing_nodes(request_index * 2).await?;
+                Some(RequestBlock {
+                    index: request_index,
+                    nodes,
+                })
+            } else {
+                None
+            }
         } else {
             None
-        }
-    } else {
-        None
-    };
+        };
 
     if block.is_some() || upgrade.is_some() {
         let mut request = Request {

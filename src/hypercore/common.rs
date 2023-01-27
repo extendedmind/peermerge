@@ -14,13 +14,16 @@ pub(super) struct PeerState {
     pub(super) can_upgrade: bool,
     pub(super) remote_fork: u64,
     pub(super) remote_length: u64,
+    pub(super) remote_contiguous_length: u64,
     pub(super) remote_can_upgrade: bool,
     pub(super) remote_uploading: bool,
     pub(super) remote_downloading: bool,
     pub(super) length_acked: u64,
+
+    /// Inflight requests
     pub(super) inflight: InflightTracker,
 
-    // Receiving message sent
+    // Receiving message state
     /// The length up to which the remote peer has given us contiguous
     /// data.
     pub(super) synced_contiguous_length: u64,
@@ -48,6 +51,7 @@ impl PeerState {
             can_upgrade: true,
             remote_fork: 0,
             remote_length: 0,
+            remote_contiguous_length: 0,
             remote_can_upgrade: false,
             remote_uploading: true,
             remote_downloading: true,
