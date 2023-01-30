@@ -30,10 +30,9 @@ use crate::automerge::{
 };
 use crate::common::cipher::{doc_url_to_public_key, keys_to_doc_url};
 use crate::common::PeerEvent;
-use crate::hypercore::{
-    create_new_write_disk_hypercore, discovery_key_from_public_key, on_protocol,
-    open_read_disk_hypercore,
-};
+#[cfg(not(target_arch = "wasm32"))]
+use crate::hypercore::{create_new_write_disk_hypercore, open_read_disk_hypercore};
+use crate::hypercore::{discovery_key_from_public_key, on_protocol};
 use crate::{
     automerge::{init_doc_with_root_scalars, put_object_autocommit},
     common::{

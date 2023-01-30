@@ -4,7 +4,7 @@ path = "src/lib.rs"
 [package]
 name = "peermerge"
 version = "0.0.1"
-edition = "2018"
+edition = "2021"
 licence = "AGPL-3.0-only"
 authors = ["Timo Tiuraniemi <timo.tiuraniemi@iki.fi>"]
 
@@ -16,7 +16,7 @@ random-access-memory = { git = "https://github.com/ttiurani/random-access-memory
 anyhow = "1.0.28"
 data-encoding = "2.3.3"
 async-std = { version = "1.9.0", features = ["attributes", "unstable"], optional = true }
-tokio = { version = "1.24.2", features = ["macros", "net", "rt", "rt-multi-thread", "sync"], optional = true }
+tokio = { version = "1.25.0", features = ["rt", "sync"], optional = true }
 futures = "0.3.25"
 wasm-bindgen-futures = { version = "0.4.33", optional = true }
 derivative = "2.2.0"
@@ -33,6 +33,8 @@ test-log = { version = "0.2.11", default-features = false, features = ["trace"] 
 tracing-subscriber = { version = "0.3.16", features = ["env-filter", "fmt"] }
 criterion = { version = "0.4", features = ["async_std", "async_tokio"] }
 pprof = { version = "0.11.0", features = ["flamegraph", "criterion"] }
+tokio = { version = "1.25.0", features = ["macros", "rt-multi-thread"] }
+futures = "0.3.25"
 tempfile = "3.1.0"
 async-condvar-fair = { version = "1.0.0", features = ["tokio"] }
 

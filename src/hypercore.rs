@@ -5,8 +5,6 @@ mod messaging;
 mod peer;
 mod persistence;
 mod protocol;
-#[cfg(not(target_arch = "wasm32"))]
-mod tcp;
 mod wrapper;
 
 use common::PeerState;
@@ -20,6 +18,4 @@ pub(crate) use persistence::{
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use persistence::{create_new_write_disk_hypercore, open_read_disk_hypercore};
 pub(crate) use protocol::on_protocol;
-#[cfg(not(target_arch = "wasm32"))]
-pub(crate) use tcp::{tcp_client, tcp_server};
 pub(crate) use wrapper::HypercoreWrapper;
