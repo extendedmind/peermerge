@@ -19,7 +19,7 @@ async-std = { version = "1.9.0", features = ["attributes", "unstable"], optional
 tokio = { version = "1.25.0", features = ["rt", "sync"], optional = true }
 futures = "0.3.25"
 # For now this needs to be locked to match downstream build system version
-wasm-bindgen-futures = { version = "=0.4.32", optional = true }
+wasm-bindgen-futures = { version = "=0.4.28", optional = true }
 derivative = "2.2.0"
 dashmap = "5.4.0"
 tracing = "0.1.37"
