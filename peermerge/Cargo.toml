@@ -9,7 +9,7 @@ license = "AGPL-3.0-only"
 authors = ["Timo Tiuraniemi <timo.tiuraniemi@iki.fi>"]
 
 [dependencies]
-automerge = { git = "https://github.com/automerge/automerge-rs.git", rev = "3229548fc7393bf55a401e328ab677e14694522e", features=["wasm"] }
+automerge = { version = "0.3.0", features = ["wasm"] }
 hypercore-protocol = { git = "https://github.com/ttiurani/hypercore-protocol-rs", branch = "tokio", default-features = false, features = ["v10"] }
 random-access-storage = { git = "https://github.com/ttiurani/random-access-storage", branch = "tokio" }
 random-access-memory = { git = "https://github.com/ttiurani/random-access-memory", branch = "tokio" }

@@ -1,4 +1,6 @@
-use automerge::{transaction::Transactable, Change, ChangeHash, ObjId, ObjType, Prop, ScalarValue};
+use automerge::{
+    transaction::Transactable, Change, ChangeHash, ObjId, ObjType, Prop, ReadDoc, ScalarValue,
+};
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use super::AutomergeDoc;

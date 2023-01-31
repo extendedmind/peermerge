@@ -1,10 +1,7 @@
-use automerge::ObjId;
-use automerge::ROOT;
+use automerge::{ObjId, ROOT};
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use futures::stream::StreamExt;
-use peermerge::Patch;
-use peermerge::Peermerge;
-use peermerge::StateEvent;
+use peermerge::{Patch, Peermerge, StateEvent};
 use random_access_memory::RandomAccessMemory;
 use std::collections::HashMap;
 use std::sync::Arc;

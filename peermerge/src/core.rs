@@ -1,4 +1,4 @@
-use automerge::{transaction::Transactable, ObjId, ObjType, Patch, Prop, ScalarValue, Value};
+use automerge::{ObjId, ObjType, Patch, Prop, ReadDoc, ScalarValue, Value};
 use dashmap::DashMap;
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use futures::{AsyncRead, AsyncWrite, StreamExt};
