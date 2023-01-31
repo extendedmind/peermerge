@@ -1,0 +1,24 @@
+[lib]
+path = "src/lib.rs"
+
+[package]
+name = "peermerge-tcp"
+version = "0.0.1"
+edition = "2021"
+license = "AGPL-3.0-only"
+authors = ["Timo Tiuraniemi <timo.tiuraniemi@iki.fi>"]
+
+[dependencies]
+peermerge = { path = "../peermerge" }
+async-std = { version = "1.9.0", features = ["attributes", "unstable"], optional = true }
+tokio = { version = "1.25.0", features = ["net"], optional = true }
+
+[dev-dependencies]
+test-log = { version = "0.2.11", default-features = false, features = ["trace"] }
+tracing-subscriber = { version = "0.3.16", features = ["env-filter", "fmt"] }
+tempfile = "3.1.0"
+
+[features]
+default =  ["tokio-runtime"]
+async-std-runtime = ["async-std", "peermerge/async-std-runtime"]
+tokio-runtime = ["tokio", "peermerge/tokio-runtime"]

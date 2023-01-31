@@ -2,4 +2,5 @@
 
 members = [
     "peermerge",
+    "peermerge-tcp",
 ]
