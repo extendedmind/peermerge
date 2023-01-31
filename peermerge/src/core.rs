@@ -70,6 +70,10 @@ impl<T> Peermerge<T>
 where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send + 'static,
 {
+    pub fn peer_name(&self) -> String {
+        self.peer_name.clone()
+    }
+
     #[instrument(skip(self))]
     pub async fn watch(&mut self, ids: Vec<ObjId>) {
         if self.proxy_peer {
