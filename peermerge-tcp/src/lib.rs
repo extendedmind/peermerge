@@ -10,6 +10,8 @@ use async_std::{
     net::{TcpListener, TcpStream},
     task,
 };
+#[cfg(feature = "async-std")]
+use futures::StreamExt;
 #[cfg(feature = "tokio")]
 use tokio::{
     net::{TcpListener, TcpStream},
