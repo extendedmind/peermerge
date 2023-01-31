@@ -1,5 +1,6 @@
 use futures::channel::mpsc::UnboundedSender;
 use peermerge::{Peermerge, ProtocolBuilder, StateEvent};
+use random_access_disk::RandomAccessDisk;
 use random_access_memory::RandomAccessMemory;
 use tracing::instrument;
 
@@ -18,14 +19,19 @@ use tokio::{
     task,
 };
 
+//////////////////////////////////////////////////////
+//
+// RandomAccessMemory
+
 #[cfg(feature = "async-std")]
-#[instrument(skip_all, fields(peer_name = peermerge.peer_name(), port = port))]
+#[instrument(skip_all, fields(peer_name = peermerge.peer_name(), host = host, port = port))]
 pub async fn connect_tcp_server_memory(
     peermerge: Peermerge<RandomAccessMemory>,
+    host: &str,
     port: u32,
     state_event_sender: &mut UnboundedSender<StateEvent>,
 ) -> anyhow::Result<()> {
-    let listener = TcpListener::bind(&format!("localhost:{}", port)).await?;
+    let listener = TcpListener::bind(&format!("{}:{}", host, port)).await?;
     let mut incoming = listener.incoming();
     while let Some(Ok(stream)) = incoming.next().await {
         let mut peermerge_for_task = peermerge.clone();
@@ -42,13 +48,14 @@ pub async fn connect_tcp_server_memory(
 }
 
 #[cfg(feature = "tokio")]
-#[instrument(skip_all, fields(peer_name = peermerge.peer_name(), port = port))]
+#[instrument(skip_all, fields(peer_name = peermerge.peer_name(), host = host, port = port))]
 pub async fn connect_tcp_server_memory(
     peermerge: Peermerge<RandomAccessMemory>,
+    host: &str,
     port: u32,
     state_event_sender: &mut UnboundedSender<StateEvent>,
 ) -> anyhow::Result<()> {
-    let listener = TcpListener::bind(&format!("localhost:{}", port)).await?;
+    let listener = TcpListener::bind(&format!("{}:{}", host, port)).await?;
 
     while let Ok((stream, _peer_address)) = listener.accept().await {
         let mut peermerge_for_task = peermerge.clone();
@@ -65,13 +72,14 @@ pub async fn connect_tcp_server_memory(
 }
 
 #[cfg(feature = "async-std")]
-#[instrument(skip_all, fields(peer_name = peermerge.peer_name(), url = url))]
+#[instrument(skip_all, fields(peer_name = peermerge.peer_name(), host = host, port = port))]
 pub async fn connect_tcp_client_memory(
     mut peermerge: Peermerge<RandomAccessMemory>,
-    url: &str,
+    host: &str,
+    port: u32,
     state_event_sender: &mut UnboundedSender<StateEvent>,
 ) -> anyhow::Result<()> {
-    let stream = TcpStream::connect(url).await?;
+    let stream = TcpStream::connect(&format!("{}:{}", host, port)).await?;
     let mut protocol = ProtocolBuilder::new(true).connect(stream);
     peermerge
         .connect_protocol_memory(&mut protocol, state_event_sender)
@@ -81,16 +89,103 @@ pub async fn connect_tcp_client_memory(
 }
 
 #[cfg(feature = "tokio")]
-#[instrument(skip_all, fields(peer_name = peermerge.peer_name(), url = url))]
+#[instrument(skip_all, fields(peer_name = peermerge.peer_name(), host = host, port = port))]
 pub async fn connect_tcp_client_memory(
     mut peermerge: Peermerge<RandomAccessMemory>,
-    url: &str,
+    host: &str,
+    port: u32,
     state_event_sender: &mut UnboundedSender<StateEvent>,
 ) -> anyhow::Result<()> {
-    let stream = TcpStream::connect(url).await?;
+    let stream = TcpStream::connect(&format!("{}:{}", host, port)).await?;
     let mut protocol = ProtocolBuilder::new(true).connect(stream.compat());
     peermerge
         .connect_protocol_memory(&mut protocol, state_event_sender)
+        .await
+        .expect("Should return ok");
+    Ok(())
+}
+
+//////////////////////////////////////////////////////
+//
+// RandomAccessDisk
+
+#[cfg(feature = "async-std")]
+#[instrument(skip_all, fields(peer_name = peermerge.peer_name(), host = host, port = port))]
+pub async fn connect_tcp_server_disk(
+    peermerge: Peermerge<RandomAccessDisk>,
+    host: &str,
+    port: u32,
+    state_event_sender: &mut UnboundedSender<StateEvent>,
+) -> anyhow::Result<()> {
+    let listener = TcpListener::bind(&format!("{}:{}", host, port)).await?;
+    let mut incoming = listener.incoming();
+    while let Some(Ok(stream)) = incoming.next().await {
+        let mut peermerge_for_task = peermerge.clone();
+        let mut state_event_sender_for_task = state_event_sender.clone();
+        task::spawn(async move {
+            let mut protocol = ProtocolBuilder::new(false).connect(stream);
+            peermerge_for_task
+                .connect_protocol_disk(&mut protocol, &mut state_event_sender_for_task)
+                .await
+                .expect("Should return ok");
+        });
+    }
+    Ok(())
+}
+
+#[cfg(feature = "tokio")]
+#[instrument(skip_all, fields(peer_name = peermerge.peer_name(), host = host, port = port))]
+pub async fn connect_tcp_server_disk(
+    peermerge: Peermerge<RandomAccessDisk>,
+    host: &str,
+    port: u32,
+    state_event_sender: &mut UnboundedSender<StateEvent>,
+) -> anyhow::Result<()> {
+    let listener = TcpListener::bind(&format!("{}:{}", host, port)).await?;
+
+    while let Ok((stream, _peer_address)) = listener.accept().await {
+        let mut peermerge_for_task = peermerge.clone();
+        let mut state_event_sender_for_task = state_event_sender.clone();
+        task::spawn(async move {
+            let mut protocol = ProtocolBuilder::new(false).connect(stream.compat());
+            peermerge_for_task
+                .connect_protocol_disk(&mut protocol, &mut state_event_sender_for_task)
+                .await
+                .expect("Should return ok");
+        });
+    }
+    Ok(())
+}
+
+#[cfg(feature = "async-std")]
+#[instrument(skip_all, fields(peer_name = peermerge.peer_name(), host = host, port = port))]
+pub async fn connect_tcp_client_disk(
+    mut peermerge: Peermerge<RandomAccessDisk>,
+    host: &str,
+    port: u32,
+    state_event_sender: &mut UnboundedSender<StateEvent>,
+) -> anyhow::Result<()> {
+    let stream = TcpStream::connect(&format!("{}:{}", host, port)).await?;
+    let mut protocol = ProtocolBuilder::new(true).connect(stream);
+    peermerge
+        .connect_protocol_disk(&mut protocol, state_event_sender)
+        .await
+        .expect("Should return ok");
+    Ok(())
+}
+
+#[cfg(feature = "tokio")]
+#[instrument(skip_all, fields(peer_name = peermerge.peer_name(), host = host, port = port))]
+pub async fn connect_tcp_client_disk(
+    mut peermerge: Peermerge<RandomAccessDisk>,
+    host: &str,
+    port: u32,
+    state_event_sender: &mut UnboundedSender<StateEvent>,
+) -> anyhow::Result<()> {
+    let stream = TcpStream::connect(&format!("{}:{}", host, port)).await?;
+    let mut protocol = ProtocolBuilder::new(true).connect(stream.compat());
+    peermerge
+        .connect_protocol_disk(&mut protocol, state_event_sender)
         .await
         .expect("Should return ok");
     Ok(())
