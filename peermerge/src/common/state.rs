@@ -2,15 +2,17 @@ use automerge::ObjId;
 use std::fmt::Debug;
 use tracing::debug;
 
-use crate::{automerge::AutomergeDoc, hypercore::discovery_key_from_public_key};
+use crate::{automerge::AutomergeDoc, doc_url_encrypted, hypercore::discovery_key_from_public_key};
 
-/// A RepoState stores serialized information about the Repo.
+use super::cipher::doc_url_to_public_key;
+
+/// A RepositoryState stores serialized information about the Repo.
 #[derive(Debug)]
-pub(crate) struct RepoState {
+pub(crate) struct RepositoryState {
     pub(crate) version: u8,
     pub(crate) doc_public_keys: Vec<[u8; 32]>,
 }
-impl Default for RepoState {
+impl Default for RepositoryState {
     fn default() -> Self {
         Self {
             version: 1,
@@ -23,8 +25,12 @@ impl Default for RepoState {
 #[derive(Debug)]
 pub(crate) struct DocState {
     pub(crate) version: u8,
+    pub(crate) doc_url: String,
     pub(crate) doc_public_key: [u8; 32],
     pub(crate) doc_discovery_key: [u8; 32],
+    pub(crate) name: String, // This peer's name
+    pub(crate) proxy: bool,
+    pub(crate) encrypted: bool,
     pub(crate) peers: Vec<DocPeerState>,
     /// Public key of personal writeable hypercore. None means the
     /// document is read-only.
@@ -36,25 +42,42 @@ pub(crate) struct DocState {
 }
 impl DocState {
     pub fn new(
-        doc_public_key: [u8; 32],
+        doc_url: &str,
+        name: &str,
+        proxy: bool,
         peers: Vec<DocPeerState>,
         write_public_key: Option<[u8; 32]>,
         content: Option<DocContent>,
     ) -> Self {
-        Self::new_with_version(1, doc_public_key, peers, write_public_key, content)
+        Self::new_with_version(
+            1,
+            doc_url.to_string(),
+            name.to_string(),
+            proxy,
+            peers,
+            write_public_key,
+            content,
+        )
     }
 
     pub fn new_with_version(
         version: u8,
-        doc_public_key: [u8; 32],
+        doc_url: String,
+        name: String,
+        proxy: bool,
         peers: Vec<DocPeerState>,
         write_public_key: Option<[u8; 32]>,
         content: Option<DocContent>,
     ) -> Self {
+        let (doc_public_key, encrypted) = doc_url_to_public_key(&doc_url, &None);
         Self {
             version,
+            doc_url,
             doc_public_key,
             doc_discovery_key: discovery_key_from_public_key(&doc_public_key),
+            name,
+            proxy,
+            encrypted,
             peers,
             write_public_key,
             content,

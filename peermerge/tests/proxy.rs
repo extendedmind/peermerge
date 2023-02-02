@@ -51,7 +51,7 @@ async fn proxy_disk_encrypted() -> anyhow::Result<()> {
         .unwrap()
         .into_path();
 
-    let peermerge_proxy = Peermerge::attach_proxy_peer_disk("proxy", &doc_url, proxy_dir).await;
+    let peermerge_proxy = Peermerge::attach_proxy_peer_disk("proxy", &doc_url, &proxy_dir).await;
     let mut peermerge_proxy_for_task = peermerge_proxy.clone();
     task::spawn(async move {
         peermerge_proxy_for_task

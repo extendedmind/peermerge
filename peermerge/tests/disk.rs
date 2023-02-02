@@ -48,7 +48,7 @@ async fn disk_two_peers(encrypted: bool) -> anyhow::Result<()> {
         UnboundedReceiver<StateEvent>,
     ) = unbounded();
     let peermerge_creator =
-        Peermerge::create_new_disk("creator", vec![("version", 1)], encrypted, creator_dir).await;
+        Peermerge::create_new_disk("creator", vec![("version", 1)], encrypted, &creator_dir).await;
     let doc_url = peermerge_creator.doc_url();
     let encryption_key = peermerge_creator.encryption_key();
     assert_eq!(doc_url_encrypted(&doc_url), encrypted);
@@ -71,7 +71,7 @@ async fn disk_two_peers(encrypted: bool) -> anyhow::Result<()> {
         .unwrap()
         .into_path();
     let peermerge_joiner =
-        Peermerge::attach_write_peer_disk("joiner", &doc_url, &encryption_key, joiner_dir).await;
+        Peermerge::attach_write_peer_disk("joiner", &doc_url, &encryption_key, &joiner_dir).await;
     let mut peermerge_joiner_for_task = peermerge_joiner.clone();
     task::spawn(async move {
         peermerge_joiner_for_task
@@ -81,12 +81,62 @@ async fn disk_two_peers(encrypted: bool) -> anyhow::Result<()> {
     });
 
     task::spawn(async move {
-        process_joiner_state_event(peermerge_joiner, joiner_state_event_receiver)
-            .await
-            .unwrap();
+        process_joiner_state_event(
+            peermerge_joiner,
+            joiner_state_event_receiver,
+            vec![("version".to_string(), 1)],
+        )
+        .await
+        .unwrap();
     });
 
-    process_creator_state_events(peermerge_creator, creator_state_event_receiver).await?;
+    process_creator_state_events(
+        peermerge_creator,
+        creator_state_event_receiver,
+        vec![("version".to_string(), 1)],
+    )
+    .await?;
+
+    // Reopen the disk peermerges from disk, assert that opening works
+
+    // let (mut proto_responder, mut proto_initiator) = create_pair_memory().await;
+    // let (mut creator_state_event_sender, creator_state_event_receiver): (
+    //     UnboundedSender<StateEvent>,
+    //     UnboundedReceiver<StateEvent>,
+    // ) = unbounded();
+    // let (mut joiner_state_event_sender, joiner_state_event_receiver): (
+    //     UnboundedSender<StateEvent>,
+    //     UnboundedReceiver<StateEvent>,
+    // ) = unbounded();
+
+    // let mut peermerge_creator = Peermerge::open_disk(&encryption_key, &creator_dir).await;
+    // peermerge_creator.put_scalar(ROOT, "open", 2).await?;
+
+    // let peermerge_joiner = Peermerge::open_disk(&encryption_key, &joiner_dir).await;
+    // let mut peermerge_joiner_for_task = peermerge_joiner.clone();
+    // task::spawn(async move {
+    //     peermerge_joiner_for_task
+    //         .connect_protocol_disk(&mut proto_initiator, &mut joiner_state_event_sender)
+    //         .await
+    //         .unwrap();
+    // });
+
+    // task::spawn(async move {
+    //     process_joiner_state_event(
+    //         peermerge_joiner,
+    //         joiner_state_event_receiver,
+    //         vec![("version".to_string(), 1), ("open".to_string(), 2)],
+    //     )
+    //     .await
+    //     .unwrap();
+    // });
+
+    // process_creator_state_events(
+    //     peermerge_creator,
+    //     creator_state_event_receiver,
+    //     vec![("version".to_string(), 1), ("open".to_string(), 2)],
+    // )
+    // .await?;
 
     Ok(())
 }
@@ -95,6 +145,7 @@ async fn disk_two_peers(encrypted: bool) -> anyhow::Result<()> {
 async fn process_joiner_state_event(
     peermerge: Peermerge<RandomAccessDisk>,
     mut joiner_state_event_receiver: UnboundedReceiver<StateEvent>,
+    expected_scalars: Vec<(String, u64)>,
 ) -> anyhow::Result<()> {
     let mut document_changes: Vec<Vec<Patch>> = vec![];
     while let Some(event) = joiner_state_event_receiver.next().await {
@@ -106,8 +157,10 @@ async fn process_joiner_state_event(
             StateEvent::PeerSynced((Some(name), _, len)) => {
                 assert_eq!(name, "creator");
                 assert_eq!(len, 1);
-                let (value, _) = peermerge.get(ROOT, "version").await?.unwrap();
-                assert_eq!(value.to_u64().unwrap(), 1);
+                for (field, expected) in &expected_scalars {
+                    let (value, _) = peermerge.get(ROOT, field).await?.unwrap();
+                    assert_eq!(value.to_u64().unwrap(), *expected);
+                }
             }
             StateEvent::RemotePeerSynced(_) => {}
             StateEvent::DocumentChanged(patches) => {
@@ -126,6 +179,7 @@ async fn process_joiner_state_event(
 async fn process_creator_state_events(
     peermerge: Peermerge<RandomAccessDisk>,
     mut creator_state_event_receiver: UnboundedReceiver<StateEvent>,
+    expected_scalars: Vec<(String, u64)>,
 ) -> anyhow::Result<()> {
     let mut document_changes: Vec<Vec<Patch>> = vec![];
     while let Some(event) = creator_state_event_receiver.next().await {
@@ -137,8 +191,10 @@ async fn process_creator_state_events(
             StateEvent::PeerSynced((Some(name), _, len)) => {
                 assert_eq!(name, "joiner");
                 assert_eq!(len, 1);
-                let (value, _) = peermerge.get(ROOT, "version").await?.unwrap();
-                assert_eq!(value.to_u64().unwrap(), 1);
+                for (field, expected) in &expected_scalars {
+                    let (value, _) = peermerge.get(ROOT, field).await?.unwrap();
+                    assert_eq!(value.to_u64().unwrap(), *expected);
+                }
                 break;
             }
             StateEvent::RemotePeerSynced(_) => {}

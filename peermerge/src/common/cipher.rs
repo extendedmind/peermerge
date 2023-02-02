@@ -86,38 +86,26 @@ pub(crate) fn doc_url_to_public_key(
 }
 
 pub fn doc_url_encrypted(doc_url: &str) -> bool {
-    decode_domain(doc_url).3.is_some()
+    get_domain_end_and_enc_start_end(doc_url).1.is_some()
 }
 
 fn decode_domain(doc_url: &str) -> (u8, u8, Vec<u8>, Option<Vec<u8>>) {
     assert_eq!(&doc_url[..DOC_URL_PREFIX.len()], DOC_URL_PREFIX);
-    let (domain_end, enc) = if let Some(query_param_index) = doc_url.find('?') {
-        let enc = if doc_url.len() > query_param_index + 5
-            && &doc_url[query_param_index..query_param_index + 5] == "?enc="
-        {
-            let enc_start = query_param_index + 5;
-            let enc_end = if let Some(next_param_index) = doc_url[enc_start..].find('&') {
-                enc_start + next_param_index
-            } else {
-                doc_url.len()
-            };
-            let enc_base32 = doc_url[enc_start..enc_end].as_bytes();
-            let mut enc = vec![
-                0;
-                data_encoding::BASE32_NOPAD
-                    .decode_len(enc_base32.len())
-                    .unwrap()
-            ];
+    let (domain_end, enc_start_end) = get_domain_end_and_enc_start_end(doc_url);
+    let enc = if let Some((enc_start, enc_end)) = enc_start_end {
+        let enc_base32 = doc_url[enc_start..enc_end].as_bytes();
+        let mut enc = vec![
+            0;
             data_encoding::BASE32_NOPAD
-                .decode_mut(enc_base32, &mut enc)
-                .unwrap();
-            Some(enc)
-        } else {
-            None
-        };
-        (query_param_index, enc)
+                .decode_len(enc_base32.len())
+                .unwrap()
+        ];
+        data_encoding::BASE32_NOPAD
+            .decode_mut(enc_base32, &mut enc)
+            .unwrap();
+        Some(enc)
     } else {
-        (doc_url.len(), None)
+        None
     };
     let domain_base32 = doc_url[DOC_URL_PREFIX.len()..domain_end].as_bytes();
     let mut domain = vec![
@@ -133,6 +121,27 @@ fn decode_domain(doc_url: &str) -> (u8, u8, Vec<u8>, Option<Vec<u8>>) {
     assert_eq!(domain[1], DOC_URL_HYPERCORE);
     assert_eq!(decoded_len, 32 + 2);
     (domain[0], domain[1], domain[2..].to_vec(), enc)
+}
+
+fn get_domain_end_and_enc_start_end(doc_url: &str) -> (usize, Option<(usize, usize)>) {
+    if let Some(query_param_index) = doc_url.find('?') {
+        let enc_start_end = if doc_url.len() > query_param_index + 5
+            && &doc_url[query_param_index..query_param_index + 5] == "?enc="
+        {
+            let enc_start = query_param_index + 5;
+            let enc_end = if let Some(next_param_index) = doc_url[enc_start..].find('&') {
+                enc_start + next_param_index
+            } else {
+                doc_url.len()
+            };
+            Some((enc_start, enc_end))
+        } else {
+            None
+        };
+        (query_param_index, enc_start_end)
+    } else {
+        (doc_url.len(), None)
+    }
 }
 
 fn generate_nonce(public_key: &[u8; 32], index: u64) -> XNonce {

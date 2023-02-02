@@ -4,26 +4,26 @@ use std::convert::TryInto;
 
 pub(crate) use crate::common::entry::Entry;
 pub(crate) use crate::common::message::BroadcastMessage;
-pub(crate) use crate::common::state::{DocState, RepoState};
+pub(crate) use crate::common::state::{DocState, RepositoryState};
 
 use super::message::{NewPeersCreatedMessage, PeerSyncedMessage};
 use super::state::{DocContent, DocCursor, DocPeerState};
 
-impl CompactEncoding<RepoState> for State {
-    fn preencode(&mut self, value: &RepoState) {
+impl CompactEncoding<RepositoryState> for State {
+    fn preencode(&mut self, value: &RepositoryState) {
         self.preencode(&value.version);
         preencode_fixed_32_byte_vec(self, &value.doc_public_keys);
     }
 
-    fn encode(&mut self, value: &RepoState, buffer: &mut [u8]) {
+    fn encode(&mut self, value: &RepositoryState, buffer: &mut [u8]) {
         self.encode(&value.version, buffer);
         encode_fixed_32_byte_vec(self, &value.doc_public_keys, buffer);
     }
 
-    fn decode(&mut self, buffer: &[u8]) -> RepoState {
+    fn decode(&mut self, buffer: &[u8]) -> RepositoryState {
         let version: u8 = self.decode(buffer);
         let doc_public_keys = decode_fixed_32_byte_vec(self, buffer);
-        RepoState {
+        RepositoryState {
             version,
             doc_public_keys,
         }
@@ -33,7 +33,8 @@ impl CompactEncoding<RepoState> for State {
 impl CompactEncoding<DocState> for State {
     fn preencode(&mut self, value: &DocState) {
         self.preencode(&value.version);
-        self.end += 32; // public key
+        self.preencode(&value.doc_url);
+        self.preencode(&value.name);
         self.end += 1; // flags
         let len = value.peers.len();
         if len > 0 {
@@ -52,24 +53,28 @@ impl CompactEncoding<DocState> for State {
 
     fn encode(&mut self, value: &DocState, buffer: &mut [u8]) {
         self.encode(&value.version, buffer);
-        self.encode_fixed_32(&value.doc_public_key, buffer);
+        self.encode(&value.doc_url, buffer);
+        self.encode(&value.name, buffer);
         let flags_index = self.start;
         let mut flags: u8 = 0;
         self.start += 1;
+        if value.proxy {
+            flags = flags | 1;
+        }
         let len = value.peers.len();
         if len > 0 {
-            flags = flags | 1;
+            flags = flags | 2;
             self.encode(&len, buffer);
             for peer in &value.peers {
                 self.encode(peer, buffer);
             }
         }
         if let Some(write_public_key) = &value.write_public_key {
-            flags = flags | 2;
+            flags = flags | 4;
             self.encode_fixed_32(write_public_key, buffer);
         }
         if let Some(content) = &value.content {
-            flags = flags | 4;
+            flags = flags | 8;
             self.encode(content, buffer);
         }
 
@@ -78,9 +83,11 @@ impl CompactEncoding<DocState> for State {
 
     fn decode(&mut self, buffer: &[u8]) -> DocState {
         let version: u8 = self.decode(buffer);
-        let doc_public_key: [u8; 32] = self.decode_fixed_32(buffer).to_vec().try_into().unwrap();
+        let doc_url: String = self.decode(buffer);
+        let name: String = self.decode(buffer);
         let flags: u8 = self.decode(buffer);
-        let peers: Vec<DocPeerState> = if flags & 1 != 0 {
+        let proxy = flags & 1 != 0;
+        let peers: Vec<DocPeerState> = if flags & 2 != 0 {
             let len: usize = self.decode(buffer);
             let mut peers: Vec<DocPeerState> = Vec::with_capacity(len);
             for _ in 0..len {
@@ -92,18 +99,26 @@ impl CompactEncoding<DocState> for State {
             vec![]
         };
 
-        let write_public_key: Option<[u8; 32]> = if flags & 2 != 0 {
+        let write_public_key: Option<[u8; 32]> = if flags & 4 != 0 {
             Some(self.decode_fixed_32(buffer).to_vec().try_into().unwrap())
         } else {
             None
         };
 
-        let content: Option<DocContent> = if flags & 4 != 0 {
+        let content: Option<DocContent> = if flags & 8 != 0 {
             Some(self.decode(buffer))
         } else {
             None
         };
-        DocState::new_with_version(version, doc_public_key, peers, write_public_key, content)
+        DocState::new_with_version(
+            version,
+            doc_url,
+            name,
+            proxy,
+            peers,
+            write_public_key,
+            content,
+        )
     }
 }
 
