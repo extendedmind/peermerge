@@ -25,8 +25,8 @@ use tokio::task;
 use wasm_bindgen_futures::spawn_local;
 
 use crate::automerge::{
-    apply_entries_autocommit, init_doc_from_entries, put_scalar_autocommit, splice_text,
-    AutomergeDoc, UnappliedEntries,
+    apply_entries_autocommit, init_doc_from_data, init_doc_from_entries, put_scalar_autocommit,
+    splice_text, AutomergeDoc, UnappliedEntries,
 };
 use crate::common::cipher::{doc_url_to_public_key, keys_to_doc_url};
 use crate::common::PeerEvent;
@@ -802,14 +802,18 @@ impl Peermerge<RandomAccessDisk> {
     }
 
     pub async fn open_disk(encryption_key: &Option<Vec<u8>>, data_root_dir: &PathBuf) -> Self {
-        let doc_state_wrapper = DocStateWrapper::open_disk(data_root_dir).await;
+        let mut doc_state_wrapper = DocStateWrapper::open_disk(data_root_dir).await;
         let state = doc_state_wrapper.state();
         let encrypted = state.encrypted;
         let proxy_peer = state.proxy;
+        let discovery_key = state.doc_discovery_key.clone();
+        let doc_url = state.doc_url.clone();
+        let peer_name = state.name.clone();
 
         let hypercores: DashMap<[u8; 32], Arc<Mutex<HypercoreWrapper<RandomAccessDisk>>>> =
             DashMap::new();
 
+        let mut discovery_keys: Vec<[u8; 32]> = vec![];
         // Open doc hypercore
         let (_, doc_hypercore) = open_read_disk_hypercore(
             &data_root_dir,
@@ -821,23 +825,7 @@ impl Peermerge<RandomAccessDisk> {
         )
         .await;
         hypercores.insert(state.doc_discovery_key, Arc::new(Mutex::new(doc_hypercore)));
-
-        // Open write hypercore, if any
-        if let Some(write_public_key) = state.write_public_key {
-            if write_public_key != state.doc_public_key {
-                let write_discovery_key = discovery_key_from_public_key(&write_public_key);
-                let (_, write_hypercore) = open_read_disk_hypercore(
-                    &data_root_dir,
-                    &write_public_key,
-                    &write_discovery_key,
-                    proxy_peer,
-                    encrypted,
-                    encryption_key,
-                )
-                .await;
-                hypercores.insert(write_discovery_key, Arc::new(Mutex::new(write_hypercore)));
-            }
-        };
+        discovery_keys.push(state.doc_discovery_key.clone());
 
         // Open all peer hypercores
         for peer in &state.peers {
@@ -851,18 +839,58 @@ impl Peermerge<RandomAccessDisk> {
             )
             .await;
             hypercores.insert(peer.discovery_key, Arc::new(Mutex::new(peer_hypercore)));
+            discovery_keys.push(peer.discovery_key.clone());
         }
 
-        // Initialize doc
-        //
-        // TODO
+        // Open write hypercore, if any
+        let hypercores = if let Some(write_public_key) = state.write_public_key {
+            let write_discovery_key = discovery_key_from_public_key(&write_public_key);
+            if write_public_key != state.doc_public_key {
+                let (_, write_hypercore) = open_read_disk_hypercore(
+                    &data_root_dir,
+                    &write_public_key,
+                    &write_discovery_key,
+                    proxy_peer,
+                    encrypted,
+                    encryption_key,
+                )
+                .await;
+                hypercores.insert(write_discovery_key, Arc::new(Mutex::new(write_hypercore)));
+                discovery_keys.push(write_discovery_key.clone());
+            }
+
+            let hypercores = Arc::new(hypercores);
+
+            // Initialize doc, fill unapplied changes and possibly save state if it had been left
+            // unsaved
+            if let Some((content, unapplied_entries)) =
+                doc_state_wrapper.content_and_unapplied_entries_mut()
+            {
+                let doc = init_doc_from_data(&peer_name, &write_discovery_key, &content.data);
+                content.doc = Some(doc);
+
+                let (changed, new_peer_names) = update_content(
+                    discovery_keys,
+                    content,
+                    hypercores.clone(),
+                    unapplied_entries,
+                )
+                .await
+                .unwrap();
+                if changed {
+                    doc_state_wrapper
+                        .persist_content_and_new_peer_names(new_peer_names)
+                        .await;
+                }
+            }
+            hypercores
+        } else {
+            Arc::new(hypercores)
+        };
 
         // Create Peermerge
-        let discovery_key = state.doc_discovery_key.clone();
-        let doc_url = state.doc_url.clone();
-        let peer_name = state.name.clone();
         Self {
-            hypercores: Arc::new(hypercores),
+            hypercores,
             doc_state: Arc::new(Mutex::new(doc_state_wrapper)),
             state_event_sender: Arc::new(Mutex::new(None)),
             prefix: data_root_dir.clone(),
@@ -1170,7 +1198,7 @@ async fn process_peer_event<T>(
                 let (mut patches, peer_syncs) = if let Some((content, unapplied_entries)) =
                     doc_state.content_and_unapplied_entries_mut()
                 {
-                    let (patches, new_peer_names, peer_syncs) = update_content(
+                    let (patches, new_peer_names, peer_syncs) = update_synced_content(
                         &discovery_key,
                         synced_contiguous_length,
                         content,
@@ -1355,6 +1383,38 @@ where
 }
 
 async fn update_content<T>(
+    discovery_keys: Vec<[u8; 32]>,
+    content: &mut DocContent,
+    hypercores: Arc<DashMap<[u8; 32], Arc<Mutex<HypercoreWrapper<T>>>>>,
+    unapplied_entries: &mut UnappliedEntries,
+) -> anyhow::Result<(bool, Vec<([u8; 32], String)>)>
+where
+    T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send + 'static,
+{
+    let mut new_peer_names: Vec<([u8; 32], String)> = vec![];
+    let mut changed = false;
+    for discovery_key in discovery_keys {
+        let (contiguous_length, entries) =
+            get_new_entries(&discovery_key, None, content, &hypercores).await?;
+
+        let result = update_content_with_entries(
+            entries,
+            &discovery_key,
+            contiguous_length,
+            content,
+            unapplied_entries,
+        )
+        .await?;
+        if !result.0.is_empty() {
+            changed = true;
+        }
+        new_peer_names.extend(result.1);
+    }
+
+    Ok((changed, new_peer_names))
+}
+
+async fn update_synced_content<T>(
     synced_discovery_key: &[u8; 32],
     synced_contiguous_length: u64,
     content: &mut DocContent,
@@ -1364,17 +1424,53 @@ async fn update_content<T>(
 where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send + 'static,
 {
-    let entries = {
-        let hypercore = hypercores.get(synced_discovery_key).unwrap();
-        let mut hypercore = hypercore.lock().await;
-        hypercore
-            .entries(
-                content.cursor_length(synced_discovery_key),
-                synced_contiguous_length,
-            )
-            .await?
-    };
+    let (_, entries) = get_new_entries(
+        synced_discovery_key,
+        Some(synced_contiguous_length),
+        content,
+        &hypercores,
+    )
+    .await?;
 
+    update_content_with_entries(
+        entries,
+        synced_discovery_key,
+        synced_contiguous_length,
+        content,
+        unapplied_entries,
+    )
+    .await
+}
+
+async fn get_new_entries<T>(
+    discovery_key: &[u8; 32],
+    known_contiguous_length: Option<u64>,
+    content: &mut DocContent,
+    hypercores: &Arc<DashMap<[u8; 32], Arc<Mutex<HypercoreWrapper<T>>>>>,
+) -> anyhow::Result<(u64, Vec<Entry>)>
+where
+    T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send + 'static,
+{
+    let hypercore = hypercores.get(discovery_key).unwrap();
+    let mut hypercore = hypercore.lock().await;
+    let contiguous_length = if let Some(known_contiguous_length) = known_contiguous_length {
+        known_contiguous_length
+    } else {
+        hypercore.contiguous_length().await
+    };
+    let entries = hypercore
+        .entries(content.cursor_length(discovery_key), contiguous_length)
+        .await?;
+    Ok((contiguous_length, entries))
+}
+
+async fn update_content_with_entries(
+    entries: Vec<Entry>,
+    synced_discovery_key: &[u8; 32],
+    synced_contiguous_length: u64,
+    content: &mut DocContent,
+    unapplied_entries: &mut UnappliedEntries,
+) -> anyhow::Result<(Vec<Patch>, Vec<([u8; 32], String)>, Vec<([u8; 32], u64)>)> {
     let (patches, new_names, peer_syncs) = {
         let doc = content.doc.as_mut().unwrap();
         let result = apply_entries_autocommit(

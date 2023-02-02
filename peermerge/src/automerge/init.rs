@@ -69,7 +69,7 @@ pub(crate) fn init_doc_from_entries(
     Ok((doc, data, result))
 }
 
-pub(super) fn init_doc_from_data(
+pub(crate) fn init_doc_from_data(
     peer_name: &str,
     discovery_key: &[u8; 32],
     data: &Vec<u8>,

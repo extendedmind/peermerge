@@ -131,6 +131,11 @@ where
         Ok(outcome.length)
     }
 
+    pub(crate) async fn contiguous_length(&self) -> u64 {
+        let hypercore = self.hypercore.lock().await;
+        hypercore.info().contiguous_length
+    }
+
     pub(crate) async fn notify_peer_synced(
         &mut self,
         contiguous_length: u64,
