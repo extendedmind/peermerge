@@ -13,14 +13,14 @@ use std::sync::Arc;
 use std::{fmt::Debug, path::PathBuf};
 use tracing::{debug, instrument, warn};
 
-#[cfg(feature = "async-std")]
-use async_std::sync::Mutex;
 #[cfg(all(not(target_arch = "wasm32"), feature = "async-std"))]
 use async_std::task;
-#[cfg(feature = "tokio")]
-use tokio::sync::Mutex;
+#[cfg(feature = "async-std")]
+use async_std::{sync::Mutex, task::yield_now};
 #[cfg(all(not(target_arch = "wasm32"), feature = "tokio"))]
 use tokio::task;
+#[cfg(feature = "tokio")]
+use tokio::{sync::Mutex, task::yield_now};
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_futures::spawn_local;
 
@@ -31,8 +31,10 @@ use crate::automerge::{
 use crate::common::cipher::{doc_url_to_public_key, keys_to_doc_url};
 use crate::common::PeerEvent;
 #[cfg(not(target_arch = "wasm32"))]
-use crate::hypercore::{create_new_read_disk_hypercore, create_new_write_disk_hypercore};
-use crate::hypercore::{discovery_key_from_public_key, on_protocol, open_disk_hypercore};
+use crate::hypercore::{
+    create_new_read_disk_hypercore, create_new_write_disk_hypercore, open_disk_hypercore,
+};
+use crate::hypercore::{discovery_key_from_public_key, on_protocol};
 use crate::{
     automerge::{init_doc_with_root_scalars, put_object_autocommit},
     common::{
@@ -632,21 +634,31 @@ async fn create_and_insert_read_memory_hypercores(
     for public_key in public_keys {
         let discovery_key = discovery_key_from_public_key(&public_key);
         // Make sure to insert only once even if two protocols notice the same new
-        // hypercore at the same timeusing the entry API.
-        let entry = hypercores.entry(discovery_key);
-        match entry {
-            dashmap::mapref::entry::Entry::Occupied(_) => {
-                debug!("Concurrent creating of hypercores noticed, continuing.");
-            }
-            dashmap::mapref::entry::Entry::Vacant(vacant) => {
-                let (_, hypercore) = create_new_read_memory_hypercore(
-                    &public_key,
-                    proxy_peer,
-                    encryption_key.is_some(),
-                    encryption_key,
-                )
-                .await;
-                vacant.insert(Arc::new(Mutex::new(hypercore)));
+        // hypercore at the same time using the entry API.
+
+        // There is a deadlock possibility with entry(), so we need to loop and yield
+        let mut entry_found = false;
+        while !entry_found {
+            if let Some(entry) = hypercores.try_entry(discovery_key.clone()) {
+                match entry {
+                    dashmap::mapref::entry::Entry::Occupied(_) => {
+                        debug!("Concurrent creating of hypercores noticed, continuing.");
+                    }
+                    dashmap::mapref::entry::Entry::Vacant(vacant) => {
+                        let (_, hypercore) = create_new_read_memory_hypercore(
+                            &public_key,
+                            proxy_peer,
+                            encryption_key.is_some(),
+                            encryption_key,
+                        )
+                        .await;
+                        vacant.insert(Arc::new(Mutex::new(hypercore)));
+                    }
+                }
+                entry_found = true;
+            } else {
+                debug!("Concurrent access to hypercores noticed, yielding and retrying.");
+                yield_now().await;
             }
         }
     }
@@ -1097,22 +1109,32 @@ async fn create_and_insert_read_disk_hypercores(
         let discovery_key = discovery_key_from_public_key(&public_key);
         // Make sure to insert only once even if two protocols notice the same new
         // hypercore at the same timeusing the entry API.
-        let entry = hypercores.entry(discovery_key);
-        match entry {
-            dashmap::mapref::entry::Entry::Occupied(_) => {
-                debug!("Concurrent creating of hypercores noticed, continuing.");
-            }
-            dashmap::mapref::entry::Entry::Vacant(vacant) => {
-                let (_, hypercore) = create_new_read_disk_hypercore(
-                    &data_root_dir,
-                    &public_key,
-                    &discovery_key,
-                    proxy_peer,
-                    encryption_key.is_some(),
-                    encryption_key,
-                )
-                .await;
-                vacant.insert(Arc::new(Mutex::new(hypercore)));
+
+        // There is a deadlock possibility with entry(), so we need to loop and yield
+        let mut entry_found = false;
+        while !entry_found {
+            if let Some(entry) = hypercores.try_entry(discovery_key.clone()) {
+                match entry {
+                    dashmap::mapref::entry::Entry::Occupied(_) => {
+                        debug!("Concurrent creating of hypercores noticed, continuing.");
+                    }
+                    dashmap::mapref::entry::Entry::Vacant(vacant) => {
+                        let (_, hypercore) = create_new_read_disk_hypercore(
+                            &data_root_dir,
+                            &public_key,
+                            &discovery_key,
+                            proxy_peer,
+                            encryption_key.is_some(),
+                            encryption_key,
+                        )
+                        .await;
+                        vacant.insert(Arc::new(Mutex::new(hypercore)));
+                    }
+                }
+                entry_found = true;
+            } else {
+                debug!("Concurrent access to hypercores noticed, yielding and retrying.");
+                yield_now().await;
             }
         }
     }

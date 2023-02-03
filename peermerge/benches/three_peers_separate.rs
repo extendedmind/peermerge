@@ -107,7 +107,8 @@ async fn bench_setup_mesh_of_three_iters(iters: u64, encrypted: bool) -> Duratio
     // println!("MESH ITERING {}", iters);
     // tracing_subscriber::fmt()
     //     .with_max_level(tracing::Level::DEBUG)
-    //     .init();
+    //     .try_init()
+    //     .ok();
 
     let start = Instant::now();
     for _ in 0..iters {
