@@ -22,12 +22,6 @@ use tokio::{
 mod common;
 use common::*;
 
-#[cfg(feature = "async-std")]
-type BoolCondvar = Arc<(Mutex<bool>, Condvar)>;
-
-#[cfg(feature = "tokio")]
-type BoolCondvar = Arc<(Mutex<bool>, Notify)>;
-
 #[derive(Clone, Debug, Default)]
 struct MemoryThreeWritersResult {
     joiner_merge: Option<String>,
@@ -501,70 +495,4 @@ async fn assert_text_equals_either(
             result, expected_1, expected_2
         );
     }
-}
-
-#[cfg(feature = "async-std")]
-fn init_condvar() -> BoolCondvar {
-    Arc::new((Mutex::new(false), Condvar::new()))
-}
-
-#[cfg(feature = "tokio")]
-fn init_condvar() -> BoolCondvar {
-    Arc::new((Mutex::new(false), Notify::new()))
-}
-
-#[cfg(feature = "async-std")]
-async fn wait_for_condvar(sync: BoolCondvar) {
-    let (lock, cvar) = &*sync;
-    let mut guard = lock.lock().await;
-    while !*guard {
-        guard = cvar.wait(guard).await;
-    }
-}
-
-#[cfg(feature = "tokio")]
-async fn wait_for_condvar(sync: BoolCondvar) {
-    let (lock, notify) = &*sync;
-    loop {
-        let future = notify.notified();
-        {
-            let guard = lock.lock().await;
-            if *guard {
-                return;
-            }
-        }
-        future.await;
-    }
-}
-
-#[cfg(feature = "async-std")]
-async fn notify_all_condvar(sync: BoolCondvar) {
-    let (lock, cvar) = &*sync;
-    let mut guard = lock.lock().await;
-    *guard = true;
-    cvar.notify_all();
-}
-
-#[cfg(feature = "tokio")]
-async fn notify_all_condvar(sync: BoolCondvar) {
-    let (lock, notify) = &*sync;
-    let mut guard = lock.lock().await;
-    *guard = true;
-    notify.notify_waiters();
-}
-
-#[cfg(feature = "async-std")]
-async fn notify_one_condvar(sync: BoolCondvar) {
-    let (lock, notify) = &*sync;
-    let mut guard = lock.lock().await;
-    *guard = true;
-    notify.notify_one();
-}
-
-#[cfg(feature = "tokio")]
-async fn notify_one_condvar(sync: BoolCondvar) {
-    let (lock, cvar) = &*sync;
-    let mut guard = lock.lock().await;
-    *guard = true;
-    cvar.notify_one();
 }

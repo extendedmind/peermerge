@@ -31,8 +31,8 @@ use crate::automerge::{
 use crate::common::cipher::{doc_url_to_public_key, keys_to_doc_url};
 use crate::common::PeerEvent;
 #[cfg(not(target_arch = "wasm32"))]
-use crate::hypercore::{create_new_write_disk_hypercore, open_read_disk_hypercore};
-use crate::hypercore::{discovery_key_from_public_key, on_protocol};
+use crate::hypercore::{create_new_read_disk_hypercore, create_new_write_disk_hypercore};
+use crate::hypercore::{discovery_key_from_public_key, on_protocol, open_disk_hypercore};
 use crate::{
     automerge::{init_doc_with_root_scalars, put_object_autocommit},
     common::{
@@ -718,7 +718,7 @@ impl Peermerge<RandomAccessDisk> {
         let doc_discovery_key = discovery_key_from_public_key(&doc_public_key);
 
         // Create/open the doc hypercore
-        let (_, doc_hypercore) = open_read_disk_hypercore(
+        let (_, doc_hypercore) = create_new_read_disk_hypercore(
             &data_root_dir,
             &doc_public_key,
             &doc_discovery_key,
@@ -772,7 +772,7 @@ impl Peermerge<RandomAccessDisk> {
         let doc_discovery_key = discovery_key_from_public_key(&doc_public_key);
 
         // Create/open the doc hypercore
-        let (_, doc_hypercore) = open_read_disk_hypercore(
+        let (_, doc_hypercore) = create_new_read_disk_hypercore(
             &data_root_dir,
             &doc_public_key,
             &doc_discovery_key,
@@ -815,9 +815,8 @@ impl Peermerge<RandomAccessDisk> {
 
         let mut discovery_keys: Vec<[u8; 32]> = vec![];
         // Open doc hypercore
-        let (_, doc_hypercore) = open_read_disk_hypercore(
+        let (_, doc_hypercore) = open_disk_hypercore(
             &data_root_dir,
-            &state.doc_public_key,
             &state.doc_discovery_key,
             proxy_peer,
             encrypted,
@@ -829,9 +828,8 @@ impl Peermerge<RandomAccessDisk> {
 
         // Open all peer hypercores
         for peer in &state.peers {
-            let (_, peer_hypercore) = open_read_disk_hypercore(
+            let (_, peer_hypercore) = open_disk_hypercore(
                 &data_root_dir,
-                &peer.public_key,
                 &peer.discovery_key,
                 proxy_peer,
                 encrypted,
@@ -846,9 +844,8 @@ impl Peermerge<RandomAccessDisk> {
         let hypercores = if let Some(write_public_key) = state.write_public_key {
             let write_discovery_key = discovery_key_from_public_key(&write_public_key);
             if write_public_key != state.doc_public_key {
-                let (_, write_hypercore) = open_read_disk_hypercore(
+                let (_, write_hypercore) = open_disk_hypercore(
                     &data_root_dir,
-                    &write_public_key,
                     &write_discovery_key,
                     proxy_peer,
                     encrypted,
@@ -1106,7 +1103,7 @@ async fn create_and_insert_read_disk_hypercores(
                 debug!("Concurrent creating of hypercores noticed, continuing.");
             }
             dashmap::mapref::entry::Entry::Vacant(vacant) => {
-                let (_, hypercore) = open_read_disk_hypercore(
+                let (_, hypercore) = create_new_read_disk_hypercore(
                     &data_root_dir,
                     &public_key,
                     &discovery_key,
