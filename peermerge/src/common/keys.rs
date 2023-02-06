@@ -1,7 +1,6 @@
-use hypercore_protocol::{
-    discovery_key,
-    hypercore::{generate_keypair, Keypair},
-};
+use hypercore_protocol::{discovery_key, hypercore::generate_keypair};
+
+pub(crate) use hypercore_protocol::hypercore::Keypair;
 
 pub(crate) fn generate_keys() -> (Keypair, [u8; 32]) {
     let key_pair = generate_keypair();
