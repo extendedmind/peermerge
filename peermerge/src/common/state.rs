@@ -3,7 +3,7 @@ use std::fmt::Debug;
 
 use crate::automerge::AutomergeDoc;
 
-use super::{cipher::doc_url_to_public_key, crypto::discovery_key_from_public_key};
+use super::{cipher::doc_url_to_public_key, keys::discovery_key_from_public_key};
 
 /// A RepositoryState stores serialized information about the Repo.
 #[derive(Debug)]

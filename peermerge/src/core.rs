@@ -29,7 +29,7 @@ use crate::automerge::{
     splice_text, AutomergeDoc, UnappliedEntries,
 };
 use crate::common::cipher::{doc_url_to_public_key, keys_to_doc_url};
-use crate::common::crypto::{discovery_key_from_public_key, generate_keys};
+use crate::common::keys::{discovery_key_from_public_key, generate_keys};
 use crate::common::PeerEvent;
 use crate::feed::on_protocol;
 #[cfg(not(target_arch = "wasm32"))]

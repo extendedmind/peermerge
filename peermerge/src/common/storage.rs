@@ -12,7 +12,7 @@ use crate::{
 };
 
 use super::{
-    crypto::discovery_key_from_public_key,
+    keys::discovery_key_from_public_key,
     state::{DocContent, DocPeerState},
 };
 #[derive(Debug)]

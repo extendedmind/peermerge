@@ -15,7 +15,7 @@ use async_std::sync::Mutex;
 use tokio::sync::Mutex;
 
 use super::{messaging::NEW_PEERS_CREATED_LOCAL_SIGNAL_NAME, HypercoreWrapper};
-use crate::common::crypto::discovery_key_from_public_key;
+use crate::common::keys::discovery_key_from_public_key;
 use crate::common::{message::NewPeersCreatedMessage, storage::DocStateWrapper, PeerEvent};
 
 #[instrument(
