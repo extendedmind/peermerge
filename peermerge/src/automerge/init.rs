@@ -35,7 +35,7 @@ pub fn init_doc_with_root_scalars<P: Into<Prop>, V: Into<ScalarValue>>(
 }
 
 pub(crate) fn init_doc_from_entries(
-    write_peer_name: &str,
+    writer_name: &str,
     write_discovery_key: &[u8; 32],
     synced_discovery_key: &[u8; 32],
     mut entries: Vec<Entry>,
@@ -49,7 +49,7 @@ pub(crate) fn init_doc_from_entries(
     let init_entry = entries.remove(0);
     assert!(init_entry.entry_type == EntryType::InitDoc);
     let peer_name = init_entry.peer_name.unwrap();
-    let mut doc = init_doc_from_data(write_peer_name, write_discovery_key, &init_entry.data);
+    let mut doc = init_doc_from_data(writer_name, write_discovery_key, &init_entry.data);
     let mut result = apply_entries_autocommit(
         &mut doc,
         &synced_discovery_key,
