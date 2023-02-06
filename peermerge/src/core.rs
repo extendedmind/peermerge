@@ -29,12 +29,13 @@ use crate::automerge::{
     splice_text, AutomergeDoc, UnappliedEntries,
 };
 use crate::common::cipher::{doc_url_to_public_key, keys_to_doc_url};
+use crate::common::crypto::{discovery_key_from_public_key, generate_keys};
 use crate::common::PeerEvent;
+use crate::feed::on_protocol;
 #[cfg(not(target_arch = "wasm32"))]
-use crate::hypercore::{
+use crate::feed::{
     create_new_read_disk_hypercore, create_new_write_disk_hypercore, open_disk_hypercore,
 };
-use crate::hypercore::{discovery_key_from_public_key, on_protocol};
 use crate::{
     automerge::{init_doc_with_root_scalars, put_object_autocommit},
     common::{
@@ -42,10 +43,7 @@ use crate::{
         state::{DocContent, DocCursor},
         storage::DocStateWrapper,
     },
-    hypercore::{
-        create_new_read_memory_hypercore, create_new_write_memory_hypercore, generate_keys,
-        HypercoreWrapper,
-    },
+    feed::{create_new_read_memory_hypercore, create_new_write_memory_hypercore, Feed},
     StateEvent,
 };
 
@@ -57,7 +55,7 @@ pub struct Peermerge<T>
 where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send,
 {
-    hypercores: Arc<DashMap<[u8; 32], Arc<Mutex<HypercoreWrapper<T>>>>>,
+    hypercores: Arc<DashMap<[u8; 32], Arc<Mutex<Feed<T>>>>>,
     doc_state: Arc<Mutex<DocStateWrapper<T>>>,
     state_event_sender: Arc<Mutex<Option<UnboundedSender<StateEvent>>>>,
     prefix: PathBuf,
@@ -521,8 +519,8 @@ impl Peermerge<RandomAccessMemory> {
     }
 
     async fn new_memory(
-        write_hypercore: Option<([u8; 32], [u8; 32], HypercoreWrapper<RandomAccessMemory>)>,
-        peer_hypercores: Vec<([u8; 32], [u8; 32], HypercoreWrapper<RandomAccessMemory>)>,
+        write_hypercore: Option<([u8; 32], [u8; 32], Feed<RandomAccessMemory>)>,
+        peer_hypercores: Vec<([u8; 32], [u8; 32], Feed<RandomAccessMemory>)>,
         content: Option<DocContent>,
         discovery_key: [u8; 32],
         peer_name: &str,
@@ -531,8 +529,7 @@ impl Peermerge<RandomAccessMemory> {
         encrypted: bool,
         encryption_key: Option<Vec<u8>>,
     ) -> Self {
-        let hypercores: DashMap<[u8; 32], Arc<Mutex<HypercoreWrapper<RandomAccessMemory>>>> =
-            DashMap::new();
+        let hypercores: DashMap<[u8; 32], Arc<Mutex<Feed<RandomAccessMemory>>>> = DashMap::new();
         let write_public_key =
             if let Some((write_public_key, write_discovery_key, write_hypercore)) = write_hypercore
             {
@@ -576,7 +573,7 @@ async fn on_peer_event_memory(
     mut peer_event_receiver: UnboundedReceiver<PeerEvent>,
     mut state_event_sender: UnboundedSender<StateEvent>,
     mut doc_state: Arc<Mutex<DocStateWrapper<RandomAccessMemory>>>,
-    mut hypercores: Arc<DashMap<[u8; 32], Arc<Mutex<HypercoreWrapper<RandomAccessMemory>>>>>,
+    mut hypercores: Arc<DashMap<[u8; 32], Arc<Mutex<Feed<RandomAccessMemory>>>>>,
     peer_name: &str,
     proxy_peer: bool,
     encryption_key: &Option<Vec<u8>>,
@@ -627,7 +624,7 @@ async fn on_peer_event_memory(
 
 async fn create_and_insert_read_memory_hypercores(
     public_keys: Vec<[u8; 32]>,
-    hypercores: Arc<DashMap<[u8; 32], Arc<Mutex<HypercoreWrapper<RandomAccessMemory>>>>>,
+    hypercores: Arc<DashMap<[u8; 32], Arc<Mutex<Feed<RandomAccessMemory>>>>>,
     proxy_peer: bool,
     encryption_key: &Option<Vec<u8>>,
 ) {
@@ -822,8 +819,7 @@ impl Peermerge<RandomAccessDisk> {
         let doc_url = state.doc_url.clone();
         let peer_name = state.name.clone();
 
-        let hypercores: DashMap<[u8; 32], Arc<Mutex<HypercoreWrapper<RandomAccessDisk>>>> =
-            DashMap::new();
+        let hypercores: DashMap<[u8; 32], Arc<Mutex<Feed<RandomAccessDisk>>>> = DashMap::new();
 
         let mut discovery_keys: Vec<[u8; 32]> = vec![];
         // Open doc hypercore
@@ -988,8 +984,8 @@ impl Peermerge<RandomAccessDisk> {
     }
 
     async fn new_disk(
-        write_hypercore: Option<([u8; 32], [u8; 32], HypercoreWrapper<RandomAccessDisk>)>,
-        peer_hypercores: Vec<([u8; 32], [u8; 32], HypercoreWrapper<RandomAccessDisk>)>,
+        write_hypercore: Option<([u8; 32], [u8; 32], Feed<RandomAccessDisk>)>,
+        peer_hypercores: Vec<([u8; 32], [u8; 32], Feed<RandomAccessDisk>)>,
         content: Option<DocContent>,
         discovery_key: [u8; 32],
         peer_name: &str,
@@ -999,8 +995,7 @@ impl Peermerge<RandomAccessDisk> {
         encryption_key: Option<Vec<u8>>,
         data_root_dir: &PathBuf,
     ) -> Self {
-        let hypercores: DashMap<[u8; 32], Arc<Mutex<HypercoreWrapper<RandomAccessDisk>>>> =
-            DashMap::new();
+        let hypercores: DashMap<[u8; 32], Arc<Mutex<Feed<RandomAccessDisk>>>> = DashMap::new();
         let write_public_key =
             if let Some((write_public_key, write_discovery_key, write_hypercore)) = write_hypercore
             {
@@ -1046,7 +1041,7 @@ async fn on_peer_event_disk(
     mut peer_event_receiver: UnboundedReceiver<PeerEvent>,
     mut state_event_sender: UnboundedSender<StateEvent>,
     mut doc_state: Arc<Mutex<DocStateWrapper<RandomAccessDisk>>>,
-    mut hypercores: Arc<DashMap<[u8; 32], Arc<Mutex<HypercoreWrapper<RandomAccessDisk>>>>>,
+    mut hypercores: Arc<DashMap<[u8; 32], Arc<Mutex<Feed<RandomAccessDisk>>>>>,
     peer_name: &str,
     proxy_peer: bool,
     encryption_key: &Option<Vec<u8>>,
@@ -1100,7 +1095,7 @@ async fn on_peer_event_disk(
 #[cfg(not(target_arch = "wasm32"))]
 async fn create_and_insert_read_disk_hypercores(
     public_keys: Vec<[u8; 32]>,
-    hypercores: Arc<DashMap<[u8; 32], Arc<Mutex<HypercoreWrapper<RandomAccessDisk>>>>>,
+    hypercores: Arc<DashMap<[u8; 32], Arc<Mutex<Feed<RandomAccessDisk>>>>>,
     proxy_peer: bool,
     encryption_key: &Option<Vec<u8>>,
     data_root_dir: &PathBuf,
@@ -1147,7 +1142,7 @@ async fn create_and_insert_read_disk_hypercores(
 #[instrument(level = "debug", skip_all)]
 async fn notify_new_peers_created<T>(
     doc_discovery_key: &[u8; 32],
-    hypercores: &mut Arc<DashMap<[u8; 32], Arc<Mutex<HypercoreWrapper<T>>>>>,
+    hypercores: &mut Arc<DashMap<[u8; 32], Arc<Mutex<Feed<T>>>>>,
     public_keys: Vec<[u8; 32]>,
 ) where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send + 'static,
@@ -1168,7 +1163,7 @@ async fn process_peer_event<T>(
     doc_discovery_key: &[u8; 32],
     state_event_sender: &mut UnboundedSender<StateEvent>,
     doc_state: &mut Arc<Mutex<DocStateWrapper<T>>>,
-    hypercores: &mut Arc<DashMap<[u8; 32], Arc<Mutex<HypercoreWrapper<T>>>>>,
+    hypercores: &mut Arc<DashMap<[u8; 32], Arc<Mutex<Feed<T>>>>>,
     peer_name: &str,
     proxy_peer: bool,
 ) where
@@ -1331,7 +1326,7 @@ async fn create_content<T>(
     doc_discovery_key: &[u8; 32],
     write_peer_name: &str,
     write_discovery_key: &[u8; 32],
-    hypercores: Arc<DashMap<[u8; 32], Arc<Mutex<HypercoreWrapper<T>>>>>,
+    hypercores: Arc<DashMap<[u8; 32], Arc<Mutex<Feed<T>>>>>,
     unapplied_entries: &mut UnappliedEntries,
 ) -> anyhow::Result<
     Option<(
@@ -1404,7 +1399,7 @@ where
 async fn update_content<T>(
     discovery_keys: Vec<[u8; 32]>,
     content: &mut DocContent,
-    hypercores: Arc<DashMap<[u8; 32], Arc<Mutex<HypercoreWrapper<T>>>>>,
+    hypercores: Arc<DashMap<[u8; 32], Arc<Mutex<Feed<T>>>>>,
     unapplied_entries: &mut UnappliedEntries,
 ) -> anyhow::Result<(bool, Vec<([u8; 32], String)>)>
 where
@@ -1437,7 +1432,7 @@ async fn update_synced_content<T>(
     synced_discovery_key: &[u8; 32],
     synced_contiguous_length: u64,
     content: &mut DocContent,
-    hypercores: Arc<DashMap<[u8; 32], Arc<Mutex<HypercoreWrapper<T>>>>>,
+    hypercores: Arc<DashMap<[u8; 32], Arc<Mutex<Feed<T>>>>>,
     unapplied_entries: &mut UnappliedEntries,
 ) -> anyhow::Result<(Vec<Patch>, Vec<([u8; 32], String)>, Vec<([u8; 32], u64)>)>
 where
@@ -1465,7 +1460,7 @@ async fn get_new_entries<T>(
     discovery_key: &[u8; 32],
     known_contiguous_length: Option<u64>,
     content: &mut DocContent,
-    hypercores: &Arc<DashMap<[u8; 32], Arc<Mutex<HypercoreWrapper<T>>>>>,
+    hypercores: &Arc<DashMap<[u8; 32], Arc<Mutex<Feed<T>>>>>,
 ) -> anyhow::Result<(u64, Vec<Entry>)>
 where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send + 'static,

@@ -1,19 +1,18 @@
-use automerge::{Change, ChangeHash, ObjId};
+use automerge::ObjId;
 use hypercore_protocol::hypercore::compact_encoding::{CompactEncoding, State};
 #[cfg(not(target_arch = "wasm32"))]
 use random_access_disk::RandomAccessDisk;
 use random_access_memory::RandomAccessMemory;
 use random_access_storage::RandomAccess;
-use std::{collections::HashMap, fmt::Debug, path::PathBuf};
+use std::{fmt::Debug, path::PathBuf};
 
 use crate::{
     automerge::{AutomergeDoc, UnappliedEntries},
     common::state::{DocState, RepositoryState},
-    hypercore::discovery_key_from_public_key,
 };
 
 use super::{
-    entry::Entry,
+    crypto::discovery_key_from_public_key,
     state::{DocContent, DocPeerState},
 };
 #[derive(Debug)]

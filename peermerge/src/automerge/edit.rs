@@ -219,7 +219,7 @@ mod tests {
     use super::*;
     use crate::{
         automerge::{init_doc_from_data, init_doc_with_root_scalars},
-        hypercore::generate_keys,
+        common::crypto::generate_keys,
     };
 
     fn assert_int_value(doc: &AutomergeDoc, key: &ObjId, prop: &str, expected: i64) {

@@ -1,10 +1,9 @@
 use automerge::ObjId;
 use std::fmt::Debug;
-use tracing::debug;
 
-use crate::{automerge::AutomergeDoc, doc_url_encrypted, hypercore::discovery_key_from_public_key};
+use crate::automerge::AutomergeDoc;
 
-use super::cipher::doc_url_to_public_key;
+use super::{cipher::doc_url_to_public_key, crypto::discovery_key_from_public_key};
 
 /// A RepositoryState stores serialized information about the Repo.
 #[derive(Debug)]

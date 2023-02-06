@@ -1,7 +1,4 @@
-use hypercore_protocol::{
-    discovery_key,
-    hypercore::{generate_keypair, Hypercore, Keypair, PartialKeypair, PublicKey, Storage},
-};
+use hypercore_protocol::hypercore::{Hypercore, Keypair, PartialKeypair, PublicKey, Storage};
 #[cfg(not(target_arch = "wasm32"))]
 use random_access_disk::RandomAccessDisk;
 use random_access_memory::RandomAccessMemory;
@@ -9,16 +6,6 @@ use random_access_memory::RandomAccessMemory;
 use std::path::PathBuf;
 
 use super::HypercoreWrapper;
-
-pub(crate) fn generate_keys() -> (Keypair, [u8; 32]) {
-    let key_pair = generate_keypair();
-    let discovery_key = discovery_key(&key_pair.public.to_bytes());
-    (key_pair, discovery_key)
-}
-
-pub(crate) fn discovery_key_from_public_key(public_key: &[u8; 32]) -> [u8; 32] {
-    discovery_key(public_key)
-}
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) async fn create_new_write_disk_hypercore(

@@ -14,9 +14,8 @@ use async_std::sync::Mutex;
 #[cfg(feature = "tokio")]
 use tokio::sync::Mutex;
 
-use super::{
-    discovery_key_from_public_key, messaging::NEW_PEERS_CREATED_LOCAL_SIGNAL_NAME, HypercoreWrapper,
-};
+use super::{messaging::NEW_PEERS_CREATED_LOCAL_SIGNAL_NAME, HypercoreWrapper};
+use crate::common::crypto::discovery_key_from_public_key;
 use crate::common::{message::NewPeersCreatedMessage, storage::DocStateWrapper, PeerEvent};
 
 #[instrument(
