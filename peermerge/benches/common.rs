@@ -41,7 +41,7 @@ pub async fn setup_peermerge_mesh(
 
         let peer_name = format!("p{}", i + 1);
         let mut peermerge_peer =
-            Peermerge::attach_write_peer_memory(&peer_name, &doc_url, &encryption_key).await;
+            Peermerge::attach_writer_memory(&peer_name, &doc_url, &encryption_key).await;
         peermerge_peer.watch(vec![ROOT]).await;
 
         let peermerge_peer_for_task = peermerge_peer.clone();

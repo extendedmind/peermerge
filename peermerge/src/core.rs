@@ -56,7 +56,7 @@ where
     state_event_sender: Arc<Mutex<Option<UnboundedSender<StateEvent>>>>,
     prefix: PathBuf,
     name: String,
-    proxy_peer: bool,
+    proxy: bool,
     discovery_key: [u8; 32],
     doc_url: String,
     encrypted: bool,
@@ -73,8 +73,8 @@ where
 
     #[instrument(skip(self))]
     pub async fn watch(&mut self, ids: Vec<ObjId>) {
-        if self.proxy_peer {
-            panic!("Can not watch on a proxy peer");
+        if self.proxy {
+            panic!("Can not watch on a proxy");
         }
         let mut doc_state = self.doc_state.lock().await;
         doc_state.watch(ids);
@@ -86,8 +86,8 @@ where
         obj: O,
         prop: P,
     ) -> anyhow::Result<Option<(Value, ObjId)>> {
-        if self.proxy_peer {
-            panic!("Can not get document values on a proxy peer");
+        if self.proxy {
+            panic!("Can not get document values on a proxy");
         }
         let doc_state = &self.doc_state;
         let result = {
@@ -117,8 +117,8 @@ where
 
     #[instrument(skip(self, obj), fields(obj = obj.as_ref().to_string(), peer_name = self.name))]
     pub async fn realize_text<O: AsRef<ObjId>>(&self, obj: O) -> anyhow::Result<Option<String>> {
-        if self.proxy_peer {
-            panic!("Can not realize text on a proxy peer");
+        if self.proxy {
+            panic!("Can not realize text on a proxy");
         }
         let doc_state = &self.doc_state;
         let result = {
@@ -162,8 +162,8 @@ where
         prop: P,
         object: ObjType,
     ) -> anyhow::Result<ObjId> {
-        if self.proxy_peer {
-            panic!("Can not put object on a proxy peer");
+        if self.proxy {
+            panic!("Can not put object on a proxy");
         }
         let id = {
             let mut doc_state = self.doc_state.lock().await;
@@ -197,8 +197,8 @@ where
         prop: P,
         value: V,
     ) -> anyhow::Result<()> {
-        if self.proxy_peer {
-            panic!("Can not put scalar on a proxy peer");
+        if self.proxy {
+            panic!("Can not put scalar on a proxy");
         }
         {
             let mut doc_state = self.doc_state.lock().await;
@@ -232,8 +232,8 @@ where
         delete: usize,
         text: &str,
     ) -> anyhow::Result<()> {
-        if self.proxy_peer {
-            panic!("Can not splice text on a proxy peer");
+        if self.proxy {
+            panic!("Can not splice text on a proxy");
         }
         {
             let mut doc_state = self.doc_state.lock().await;
@@ -260,8 +260,8 @@ where
 
     #[instrument(skip(self))]
     pub async fn cork(&mut self) {
-        if self.proxy_peer {
-            panic!("Can not cork a proxy peer");
+        if self.proxy {
+            panic!("Can not cork a proxy");
         }
         let doc_state = self.doc_state.lock().await;
         let write_discovery_key = doc_state.write_discovery_key();
@@ -272,8 +272,8 @@ where
 
     #[instrument(skip(self))]
     pub async fn uncork(&mut self) -> anyhow::Result<()> {
-        if self.proxy_peer {
-            panic!("Can not uncork a proxy peer");
+        if self.proxy {
+            panic!("Can not uncork a proxy");
         }
         let doc_state = self.doc_state.lock().await;
         let write_discovery_key = doc_state.write_discovery_key();
@@ -290,8 +290,8 @@ where
 
     #[instrument(skip(self))]
     pub fn encryption_key(&self) -> Option<Vec<u8>> {
-        if self.proxy_peer {
-            panic!("A proxy peer does not store the encryption key");
+        if self.proxy {
+            panic!("A proxy does not store the encryption key");
         }
         self.encryption_key.clone()
     }
@@ -360,12 +360,12 @@ impl Peermerge<RandomAccessMemory> {
         .await
     }
 
-    pub async fn attach_write_peer_memory(
+    pub async fn attach_writer_memory(
         name: &str,
         doc_url: &str,
         encryption_key: &Option<Vec<u8>>,
     ) -> Self {
-        let proxy_peer = false;
+        let proxy = false;
 
         // Process keys from doc URL
         let (doc_public_key, encrypted) = doc_url_to_public_key(doc_url, &encryption_key);
@@ -376,8 +376,7 @@ impl Peermerge<RandomAccessMemory> {
 
         // Create the doc feed
         let (_, doc_feed) =
-            create_new_read_memory_feed(&doc_public_key, proxy_peer, encrypted, encryption_key)
-                .await;
+            create_new_read_memory_feed(&doc_public_key, proxy, encrypted, encryption_key).await;
 
         // Create the write feed
         let (write_key_pair, write_discovery_key) = generate_keys();
@@ -396,7 +395,7 @@ impl Peermerge<RandomAccessMemory> {
             None,
             doc_discovery_key,
             name,
-            proxy_peer,
+            proxy,
             doc_url,
             encrypted,
             encryption_key.clone(),
@@ -404,8 +403,8 @@ impl Peermerge<RandomAccessMemory> {
         .await
     }
 
-    pub async fn attach_proxy_peer_memory(name: &str, doc_url: &str) -> Self {
-        let proxy_peer = true;
+    pub async fn attach_proxy_memory(name: &str, doc_url: &str) -> Self {
+        let proxy = true;
 
         // Process keys from doc URL
         let (doc_public_key, encrypted) = doc_url_to_public_key(doc_url, &None);
@@ -413,7 +412,7 @@ impl Peermerge<RandomAccessMemory> {
 
         // Create the doc feed
         let (_, doc_feed) =
-            create_new_read_memory_feed(&doc_public_key, proxy_peer, encrypted, &None).await;
+            create_new_read_memory_feed(&doc_public_key, proxy, encrypted, &None).await;
 
         Self::new_memory(
             None,
@@ -421,7 +420,7 @@ impl Peermerge<RandomAccessMemory> {
             None,
             doc_discovery_key,
             name,
-            proxy_peer,
+            proxy,
             doc_url,
             encrypted,
             None,
@@ -459,7 +458,7 @@ impl Peermerge<RandomAccessMemory> {
         let name_for_task = self.name.clone();
         let task_span = tracing::debug_span!("call_on_peer_event_memory").or_current();
         let encryption_key_for_task = self.encryption_key.clone();
-        let proxy_peer = self.proxy_peer;
+        let proxy = self.proxy;
         #[cfg(not(target_arch = "wasm32"))]
         task::spawn(async move {
             let _entered = task_span.enter();
@@ -470,7 +469,7 @@ impl Peermerge<RandomAccessMemory> {
                 doc_state,
                 feeds_for_task,
                 &name_for_task,
-                proxy_peer,
+                proxy,
                 &encryption_key_for_task,
             )
             .await;
@@ -485,7 +484,7 @@ impl Peermerge<RandomAccessMemory> {
                 doc_state,
                 feeds_for_task,
                 &name_for_task,
-                proxy_peer,
+                proxy,
                 &encryption_key_for_task,
             )
             .await;
@@ -507,7 +506,7 @@ impl Peermerge<RandomAccessMemory> {
         content: Option<DocContent>,
         discovery_key: [u8; 32],
         name: &str,
-        proxy_peer: bool,
+        proxy: bool,
         doc_url: &str,
         encrypted: bool,
         encryption_key: Option<Vec<u8>>,
@@ -528,7 +527,7 @@ impl Peermerge<RandomAccessMemory> {
         let doc_state = DocStateWrapper::new_memory(
             doc_url,
             name,
-            proxy_peer,
+            proxy,
             write_public_key,
             peer_public_keys,
             content,
@@ -542,7 +541,7 @@ impl Peermerge<RandomAccessMemory> {
             discovery_key,
             doc_url: doc_url.to_string(),
             name: name.to_string(),
-            proxy_peer,
+            proxy: proxy,
             encrypted,
             encryption_key,
         }
@@ -557,7 +556,7 @@ async fn on_peer_event_memory(
     mut doc_state: Arc<Mutex<DocStateWrapper<RandomAccessMemory>>>,
     mut feeds: Arc<DashMap<[u8; 32], Arc<Mutex<Feed<RandomAccessMemory>>>>>,
     name: &str,
-    proxy_peer: bool,
+    proxy: bool,
     encryption_key: &Option<Vec<u8>>,
 ) {
     while let Some(event) = peer_event_receiver.next().await {
@@ -576,7 +575,7 @@ async fn on_peer_event_memory(
                         create_and_insert_read_memory_feeds(
                             public_keys.clone(),
                             feeds.clone(),
-                            proxy_peer,
+                            proxy,
                             encryption_key,
                         )
                         .await;
@@ -594,7 +593,7 @@ async fn on_peer_event_memory(
                     &mut doc_state,
                     &mut feeds,
                     name,
-                    proxy_peer,
+                    proxy,
                 )
                 .await
             }
@@ -606,7 +605,7 @@ async fn on_peer_event_memory(
 async fn create_and_insert_read_memory_feeds(
     public_keys: Vec<[u8; 32]>,
     feeds: Arc<DashMap<[u8; 32], Arc<Mutex<Feed<RandomAccessMemory>>>>>,
-    proxy_peer: bool,
+    proxy: bool,
     encryption_key: &Option<Vec<u8>>,
 ) {
     for public_key in public_keys {
@@ -625,7 +624,7 @@ async fn create_and_insert_read_memory_feeds(
                     dashmap::mapref::entry::Entry::Vacant(vacant) => {
                         let (_, feed) = create_new_read_memory_feed(
                             &public_key,
-                            proxy_peer,
+                            proxy,
                             encryption_key.is_some(),
                             encryption_key,
                         )
@@ -692,13 +691,13 @@ impl Peermerge<RandomAccessDisk> {
         .await
     }
 
-    pub async fn attach_write_peer_disk(
+    pub async fn attach_writer_disk(
         name: &str,
         doc_url: &str,
         encryption_key: &Option<Vec<u8>>,
         data_root_dir: &PathBuf,
     ) -> Self {
-        let proxy_peer = false;
+        let proxy = false;
 
         // Process keys from doc URL
         let (doc_public_key, encrypted) = doc_url_to_public_key(doc_url, &encryption_key);
@@ -712,7 +711,7 @@ impl Peermerge<RandomAccessDisk> {
             &data_root_dir,
             &doc_public_key,
             &doc_discovery_key,
-            proxy_peer,
+            proxy,
             encrypted,
             encryption_key,
         )
@@ -737,7 +736,7 @@ impl Peermerge<RandomAccessDisk> {
             None,
             doc_discovery_key,
             name,
-            proxy_peer,
+            proxy,
             doc_url,
             encrypted,
             encryption_key,
@@ -746,12 +745,8 @@ impl Peermerge<RandomAccessDisk> {
         .await
     }
 
-    pub async fn attach_proxy_peer_disk(
-        name: &str,
-        doc_url: &str,
-        data_root_dir: &PathBuf,
-    ) -> Self {
-        let proxy_peer = true;
+    pub async fn attach_proxy_disk(name: &str, doc_url: &str, data_root_dir: &PathBuf) -> Self {
+        let proxy = true;
 
         // Process keys from doc URL
         let (doc_public_key, encrypted) = doc_url_to_public_key(doc_url, &None);
@@ -762,7 +757,7 @@ impl Peermerge<RandomAccessDisk> {
             &data_root_dir,
             &doc_public_key,
             &doc_discovery_key,
-            proxy_peer,
+            proxy,
             encrypted,
             &None,
         )
@@ -774,7 +769,7 @@ impl Peermerge<RandomAccessDisk> {
             None,
             doc_discovery_key,
             name,
-            proxy_peer,
+            proxy,
             doc_url,
             encrypted,
             None,
@@ -787,7 +782,7 @@ impl Peermerge<RandomAccessDisk> {
         let mut doc_state_wrapper = DocStateWrapper::open_disk(data_root_dir).await;
         let state = doc_state_wrapper.state();
         let encrypted = state.encrypted;
-        let proxy_peer = state.proxy;
+        let proxy = state.proxy;
         let discovery_key = state.doc_discovery_key.clone();
         let doc_url = state.doc_url.clone();
         let name = state.name.clone();
@@ -799,7 +794,7 @@ impl Peermerge<RandomAccessDisk> {
         let (_, doc_feed) = open_disk_feed(
             &data_root_dir,
             &state.doc_discovery_key,
-            proxy_peer,
+            proxy,
             encrypted,
             encryption_key,
         )
@@ -812,7 +807,7 @@ impl Peermerge<RandomAccessDisk> {
             let (_, peer_feed) = open_disk_feed(
                 &data_root_dir,
                 &peer.discovery_key,
-                proxy_peer,
+                proxy,
                 encrypted,
                 encryption_key,
             )
@@ -828,7 +823,7 @@ impl Peermerge<RandomAccessDisk> {
                 let (_, write_feed) = open_disk_feed(
                     &data_root_dir,
                     &write_discovery_key,
-                    proxy_peer,
+                    proxy,
                     encrypted,
                     encryption_key,
                 )
@@ -871,7 +866,7 @@ impl Peermerge<RandomAccessDisk> {
             discovery_key,
             doc_url,
             name,
-            proxy_peer,
+            proxy: proxy,
             encrypted,
             encryption_key: encryption_key.clone(),
         }
@@ -908,7 +903,7 @@ impl Peermerge<RandomAccessDisk> {
         let data_root_dir = self.prefix.clone();
         let task_span = tracing::debug_span!("call_on_peer_event_memory").or_current();
         let encryption_key_for_task = self.encryption_key.clone();
-        let proxy_peer = self.proxy_peer;
+        let proxy = self.proxy;
         #[cfg(not(target_arch = "wasm32"))]
         task::spawn(async move {
             let _entered = task_span.enter();
@@ -919,7 +914,7 @@ impl Peermerge<RandomAccessDisk> {
                 doc_state,
                 feeds_for_task,
                 &name_for_task,
-                proxy_peer,
+                proxy,
                 &encryption_key_for_task,
                 &data_root_dir,
             )
@@ -935,7 +930,7 @@ impl Peermerge<RandomAccessDisk> {
                 doc_state,
                 feeds_for_task,
                 &name_for_task,
-                proxy_peer,
+                proxy,
                 &encryption_key_for_task,
                 &data_root_dir,
             )
@@ -958,7 +953,7 @@ impl Peermerge<RandomAccessDisk> {
         content: Option<DocContent>,
         discovery_key: [u8; 32],
         name: &str,
-        proxy_peer: bool,
+        proxy: bool,
         doc_url: &str,
         encrypted: bool,
         encryption_key: Option<Vec<u8>>,
@@ -980,7 +975,7 @@ impl Peermerge<RandomAccessDisk> {
         let doc_state = DocStateWrapper::new_disk(
             doc_url,
             name,
-            proxy_peer,
+            proxy,
             write_public_key,
             peer_public_keys,
             content,
@@ -995,7 +990,7 @@ impl Peermerge<RandomAccessDisk> {
             discovery_key,
             doc_url: doc_url.to_string(),
             name: name.to_string(),
-            proxy_peer,
+            proxy: proxy,
             encrypted,
             encryption_key,
         }
@@ -1011,7 +1006,7 @@ async fn on_peer_event_disk(
     mut doc_state: Arc<Mutex<DocStateWrapper<RandomAccessDisk>>>,
     mut feeds: Arc<DashMap<[u8; 32], Arc<Mutex<Feed<RandomAccessDisk>>>>>,
     name: &str,
-    proxy_peer: bool,
+    proxy: bool,
     encryption_key: &Option<Vec<u8>>,
     data_root_dir: &PathBuf,
 ) {
@@ -1031,7 +1026,7 @@ async fn on_peer_event_disk(
                         create_and_insert_read_disk_feeds(
                             public_keys.clone(),
                             feeds.clone(),
-                            proxy_peer,
+                            proxy,
                             encryption_key,
                             data_root_dir,
                         )
@@ -1050,7 +1045,7 @@ async fn on_peer_event_disk(
                     &mut doc_state,
                     &mut feeds,
                     name,
-                    proxy_peer,
+                    proxy,
                 )
                 .await
             }
@@ -1063,7 +1058,7 @@ async fn on_peer_event_disk(
 async fn create_and_insert_read_disk_feeds(
     public_keys: Vec<[u8; 32]>,
     feeds: Arc<DashMap<[u8; 32], Arc<Mutex<Feed<RandomAccessDisk>>>>>,
-    proxy_peer: bool,
+    proxy: bool,
     encryption_key: &Option<Vec<u8>>,
     data_root_dir: &PathBuf,
 ) {
@@ -1085,7 +1080,7 @@ async fn create_and_insert_read_disk_feeds(
                             &data_root_dir,
                             &public_key,
                             &discovery_key,
-                            proxy_peer,
+                            proxy,
                             encryption_key.is_some(),
                             encryption_key,
                         )
@@ -1132,7 +1127,7 @@ async fn process_peer_event<T>(
     doc_state: &mut Arc<Mutex<DocStateWrapper<T>>>,
     feeds: &mut Arc<DashMap<[u8; 32], Arc<Mutex<Feed<T>>>>>,
     name: &str,
-    proxy_peer: bool,
+    proxy: bool,
 ) where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send + 'static,
 {
@@ -1156,7 +1151,7 @@ async fn process_peer_event<T>(
             }
         }
         PeerEvent::PeerSynced((discovery_key, synced_contiguous_length)) => {
-            if proxy_peer {
+            if proxy {
                 // Just notify a peer sync forward
                 match state_event_sender.unbounded_send(StateEvent::PeerSynced((
                     None,

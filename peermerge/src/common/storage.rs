@@ -191,19 +191,12 @@ impl DocStateWrapper<RandomAccessMemory> {
     pub async fn new_memory(
         doc_url: &str,
         peer_name: &str,
-        proxy_peer: bool,
+        proxy: bool,
         write_public_key: Option<[u8; 32]>,
         peer_public_keys: Vec<[u8; 32]>,
         content: Option<DocContent>,
     ) -> Self {
-        let mut state = DocState::new(
-            doc_url,
-            peer_name,
-            proxy_peer,
-            vec![],
-            write_public_key,
-            content,
-        );
+        let mut state = DocState::new(doc_url, peer_name, proxy, vec![], write_public_key, content);
         add_peer_public_keys_to_doc_state(&mut state, peer_public_keys);
         let storage = RandomAccessMemory::default();
         Self {
@@ -219,20 +212,13 @@ impl DocStateWrapper<RandomAccessDisk> {
     pub async fn new_disk(
         doc_url: &str,
         peer_name: &str,
-        proxy_peer: bool,
+        proxy: bool,
         write_public_key: Option<[u8; 32]>,
         peer_public_keys: Vec<[u8; 32]>,
         content: Option<DocContent>,
         data_root_dir: &PathBuf,
     ) -> Self {
-        let mut state = DocState::new(
-            doc_url,
-            peer_name,
-            proxy_peer,
-            vec![],
-            write_public_key,
-            content,
-        );
+        let mut state = DocState::new(doc_url, peer_name, proxy, vec![], write_public_key, content);
         add_peer_public_keys_to_doc_state(&mut state, peer_public_keys);
         let state_path = get_state_path(data_root_dir);
         let mut storage = RandomAccessDisk::builder(state_path).build().await.unwrap();

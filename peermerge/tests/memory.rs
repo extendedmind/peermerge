@@ -76,7 +76,7 @@ async fn memory_three_writers() -> anyhow::Result<()> {
     });
 
     let peermerge_joiner =
-        Peermerge::attach_write_peer_memory("joiner", &peermerge_creator.doc_url(), &None).await;
+        Peermerge::attach_writer_memory("joiner", &peermerge_creator.doc_url(), &None).await;
     let peermerge_joiner_for_task = peermerge_joiner.clone();
     task::spawn(async move {
         connect(
@@ -326,12 +326,9 @@ async fn process_creator_state_events(
                         UnboundedSender<StateEvent>,
                         UnboundedReceiver<StateEvent>,
                     ) = unbounded();
-                    let peermerge_latecomer = Peermerge::attach_write_peer_memory(
-                        "latecomer",
-                        &peermerge.doc_url(),
-                        &None,
-                    )
-                    .await;
+                    let peermerge_latecomer =
+                        Peermerge::attach_writer_memory("latecomer", &peermerge.doc_url(), &None)
+                            .await;
                     let peermerge_latecomer_for_task = peermerge_latecomer.clone();
                     let peermerge_creator_for_task = peermerge.clone();
                     let creator_state_event_sender_for_task = creator_state_event_sender.clone();

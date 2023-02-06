@@ -54,7 +54,7 @@ async fn disk_two_peers(encrypted: bool) -> anyhow::Result<()> {
         .unwrap()
         .into_path();
     let peermerge_joiner =
-        Peermerge::attach_write_peer_disk("joiner", &doc_url, &encryption_key, &joiner_dir).await;
+        Peermerge::attach_writer_disk("joiner", &doc_url, &encryption_key, &joiner_dir).await;
 
     run_disk_two_peers(
         peermerge_creator,
