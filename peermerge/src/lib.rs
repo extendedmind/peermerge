@@ -5,7 +5,7 @@ mod feed;
 mod repository;
 
 pub use crate::common::cipher::doc_url_encrypted;
-pub use crate::common::StateEvent;
+pub use crate::common::{StateEvent, StateEventContent};
 pub use crate::core::Peermerge;
 pub use crate::repository::PeermergeRepository;
 pub use ::automerge::*;

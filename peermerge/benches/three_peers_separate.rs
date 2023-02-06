@@ -4,7 +4,7 @@ use criterion::Criterion;
 use criterion::{black_box, criterion_group, criterion_main};
 use futures::channel::mpsc::{Sender, UnboundedReceiver};
 use futures::stream::StreamExt;
-use peermerge::StateEvent;
+use peermerge::{StateEvent, StateEventContent::*};
 use pprof::criterion::{Output, PProfProfiler};
 
 #[cfg(feature = "async-std")]
@@ -28,8 +28,8 @@ async fn append_three(
     let mut patches_remaining: i64 = 9;
 
     while let Some(event) = receiver.next().await {
-        match event {
-            StateEvent::PeerSynced(_) => {
+        match event.content {
+            PeerSynced(_) => {
                 sync_remaining -= 1;
                 // println!(
                 //     "PS i={} sr={}, rsr={}, pr={}",
@@ -39,7 +39,7 @@ async fn append_three(
                     break;
                 }
             }
-            StateEvent::DocumentChanged((_, patches)) => {
+            DocumentChanged(patches) => {
                 patches_remaining -= patches.len() as i64;
                 // println!(
                 //     "DC: i={} sr={}, rsr={}, pr={}",
@@ -49,7 +49,7 @@ async fn append_three(
                     break;
                 }
             }
-            StateEvent::RemotePeerSynced(..) => {
+            RemotePeerSynced(..) => {
                 remote_sync_remaining -= 1;
                 // println!(
                 //     "RPS: i={} sr={}, rsr={}, pr={}",

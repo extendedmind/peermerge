@@ -16,7 +16,7 @@ use super::{
     messaging::{create_broadcast_message, create_initial_synchronize},
     on_message, PeerState,
 };
-use crate::common::PeerEvent;
+use crate::common::{PeerEvent, PeerEventContent};
 
 #[instrument(level = "debug", skip_all)]
 pub(super) async fn on_peer<T>(
@@ -100,7 +100,7 @@ where
     let event = on_message(hypercore, peer_state, channel, message).await?;
     if let Some(event) = event {
         peer_event_sender.unbounded_send(event.clone())?;
-        if let PeerEvent::PeerDisconnected(_) = event {
+        if let PeerEventContent::PeerDisconnected(_) = event.content {
             return Ok(true);
         }
     }

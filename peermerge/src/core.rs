@@ -28,7 +28,7 @@ use crate::automerge::{
 };
 use crate::common::cipher::{doc_url_to_public_key, keys_to_doc_url};
 use crate::common::keys::{discovery_key_from_public_key, generate_keys, Keypair};
-use crate::common::PeerEvent;
+use crate::common::{PeerEvent, PeerEventContent, StateEventContent};
 use crate::feed::on_protocol;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::feed::{create_new_read_disk_feed, create_new_write_disk_feed, open_disk_feed};
@@ -307,10 +307,10 @@ where
                     let patches = doc.observer().take_patches();
                     if patches.len() > 0 {
                         sender
-                            .unbounded_send(StateEvent::DocumentChanged((
+                            .unbounded_send(StateEvent::new(
                                 self.doc_discovery_key.clone(),
-                                patches,
-                            )))
+                                StateEventContent::DocumentChanged(patches),
+                            ))
                             .unwrap();
                     }
                 }
@@ -564,8 +564,8 @@ async fn on_peer_event_memory(
 ) {
     while let Some(event) = peer_event_receiver.next().await {
         debug!("Received event {:?}", event);
-        match event {
-            PeerEvent::NewPeersBroadcasted((doc_discovery_key, public_keys)) => {
+        match event.content {
+            PeerEventContent::NewPeersBroadcasted(public_keys) => {
                 let changed = {
                     let mut doc_state = doc_state.lock().await;
                     doc_state
@@ -1015,8 +1015,8 @@ async fn on_peer_event_disk(
 ) {
     while let Some(event) = peer_event_receiver.next().await {
         debug!("Received event {:?}", event);
-        match event {
-            PeerEvent::NewPeersBroadcasted((doc_discovery_key, public_keys)) => {
+        match event.content {
+            PeerEventContent::NewPeersBroadcasted(public_keys) => {
                 let changed = {
                     let mut doc_state = doc_state.lock().await;
                     doc_state
@@ -1134,21 +1134,16 @@ async fn process_peer_event<T>(
 ) where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send + 'static,
 {
-    match event {
-        PeerEvent::NewPeersBroadcasted(_) => unreachable!("Implemented by concrete type"),
-        PeerEvent::PeerDisconnected(_) => {
+    match event.content {
+        PeerEventContent::NewPeersBroadcasted(_) => unreachable!("Implemented by concrete type"),
+        PeerEventContent::PeerDisconnected(_) => {
             // This is an FYI message, just continue for now
         }
-        PeerEvent::RemotePeerSynced((
-            doc_discovery_key,
-            discovery_key,
-            synced_contiguous_length,
-        )) => {
-            match state_event_sender.unbounded_send(StateEvent::RemotePeerSynced((
-                doc_discovery_key,
-                discovery_key,
-                synced_contiguous_length,
-            ))) {
+        PeerEventContent::RemotePeerSynced((discovery_key, synced_contiguous_length)) => {
+            match state_event_sender.unbounded_send(StateEvent::new(
+                *doc_discovery_key,
+                StateEventContent::RemotePeerSynced((discovery_key, synced_contiguous_length)),
+            )) {
                 Ok(()) => {}
                 Err(err) => warn!(
                     "{}: could not notify remote peer synced to len {}, err {}",
@@ -1158,15 +1153,13 @@ async fn process_peer_event<T>(
                 ),
             }
         }
-        PeerEvent::PeerSynced((doc_discovery_key, discovery_key, synced_contiguous_length)) => {
+        PeerEventContent::PeerSynced((discovery_key, synced_contiguous_length)) => {
             if proxy {
                 // Just notify a peer sync forward
-                match state_event_sender.unbounded_send(StateEvent::PeerSynced((
-                    doc_discovery_key,
-                    None,
-                    discovery_key,
-                    synced_contiguous_length,
-                ))) {
+                match state_event_sender.unbounded_send(StateEvent::new(
+                    *doc_discovery_key,
+                    StateEventContent::PeerSynced((None, discovery_key, synced_contiguous_length)),
+                )) {
                     Ok(()) => {}
                     Err(err) => warn!(
                         "{}: could not notify peer synced to len {}, err {}",
@@ -1236,12 +1229,10 @@ async fn process_peer_event<T>(
                     .iter()
                     .map(|sync| {
                         let name = doc_state.peer_name(&sync.0).unwrap();
-                        StateEvent::PeerSynced((
-                            doc_discovery_key,
-                            Some(name),
-                            sync.0.clone(),
-                            sync.1,
-                        ))
+                        StateEvent::new(
+                            *doc_discovery_key,
+                            StateEventContent::PeerSynced((Some(name), sync.0.clone(), sync.1)),
+                        )
                     })
                     .collect();
                 (peer_synced_events, patches)
@@ -1253,7 +1244,10 @@ async fn process_peer_event<T>(
             }
             if patches.len() > 0 {
                 state_event_sender
-                    .unbounded_send(StateEvent::DocumentChanged((doc_discovery_key, patches)))
+                    .unbounded_send(StateEvent::new(
+                        *doc_discovery_key,
+                        StateEventContent::DocumentChanged(patches),
+                    ))
                     .unwrap();
             }
 

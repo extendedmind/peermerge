@@ -21,6 +21,7 @@ use super::PeerState;
 use crate::common::{
     message::{BroadcastMessage, NewPeersCreatedMessage, PeerSyncedMessage},
     PeerEvent,
+    PeerEventContent::*,
 };
 
 // Messages sent over-the-wire
@@ -223,11 +224,10 @@ where
                 let peer_synced: Option<PeerEvent> =
                     if new_info.contiguous_length == new_info.length {
                         peer_state.synced_contiguous_length = new_info.contiguous_length;
-                        Some(PeerEvent::PeerSynced((
+                        Some(PeerEvent::new(
                             peer_state.doc_discovery_key.clone(),
-                            *channel.discovery_key(),
-                            new_info.contiguous_length,
-                        )))
+                            PeerSynced((*channel.discovery_key(), new_info.contiguous_length)),
+                        ))
                     } else {
                         None
                     };
@@ -288,11 +288,13 @@ where
                             < peer_state.remote_contiguous_length
                         {
                             // The peer has advertised that they now have what we have
-                            let event = Some(PeerEvent::RemotePeerSynced((
+                            let event = Some(PeerEvent::new(
                                 peer_state.doc_discovery_key.clone(),
-                                *channel.discovery_key(),
-                                peer_state.remote_contiguous_length,
-                            )));
+                                RemotePeerSynced((
+                                    *channel.discovery_key(),
+                                    peer_state.remote_contiguous_length,
+                                )),
+                            ));
                             peer_state.notified_remote_synced_contiguous_length =
                                 peer_state.remote_contiguous_length;
                             event
@@ -347,10 +349,10 @@ where
                     }
                 } else if !new_remote_public_keys.is_empty() {
                     // New peers found, return a peer event
-                    return Ok(Some(PeerEvent::NewPeersBroadcasted((
+                    return Ok(Some(PeerEvent::new(
                         peer_state.doc_discovery_key.clone(),
-                        new_remote_public_keys,
-                    ))));
+                        NewPeersBroadcasted(new_remote_public_keys),
+                    )));
                 }
             }
             _ => {
@@ -430,10 +432,10 @@ where
             }
         },
         Message::Close(message) => {
-            return Ok(Some(PeerEvent::PeerDisconnected((
+            return Ok(Some(PeerEvent::new(
                 peer_state.doc_discovery_key.clone(),
-                message.channel,
-            ))));
+                PeerDisconnected(message.channel),
+            )));
         }
         _ => {
             panic!("Received unexpected message {:?}", message);

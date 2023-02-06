@@ -3,7 +3,7 @@ use futures::channel::mpsc::{
 };
 use futures::stream::StreamExt;
 use hypercore_protocol::{Duplex, Protocol, ProtocolBuilder};
-use peermerge::{Peermerge, StateEvent, ROOT};
+use peermerge::{Peermerge, StateEvent, StateEventContent::*, ROOT};
 use random_access_memory::RandomAccessMemory;
 
 #[cfg(feature = "async-std")]
@@ -69,14 +69,14 @@ pub async fn setup_peermerge_mesh(
         let mut remote_sync_remaining = i * 2;
 
         while let Some(event) = state_event_receiver.next().await {
-            match event {
-                StateEvent::RemotePeerSynced(..) => {
+            match event.content {
+                RemotePeerSynced(..) => {
                     remote_sync_remaining -= 1;
                 }
-                StateEvent::PeerSynced(..) => {
+                PeerSynced(..) => {
                     sync_remaining -= 1;
                 }
-                StateEvent::DocumentChanged(..) => {
+                DocumentChanged(..) => {
                     // Ignore
                 }
             }

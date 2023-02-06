@@ -9,4 +9,4 @@ pub(crate) mod message;
 pub(crate) mod state;
 pub(crate) mod storage;
 
-pub use event::{PeerEvent, StateEvent};
+pub use event::{PeerEvent, PeerEventContent, StateEvent, StateEventContent};

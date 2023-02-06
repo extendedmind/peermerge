@@ -1,16 +1,46 @@
 use automerge::Patch;
 
 #[derive(Clone, Debug)]
-pub enum StateEvent {
-    PeerSynced(([u8; 32], Option<String>, [u8; 32], u64)),
-    RemotePeerSynced(([u8; 32], [u8; 32], u64)),
-    DocumentChanged(([u8; 32], Vec<Patch>)),
+pub struct StateEvent {
+    pub doc_discovery_key: [u8; 32],
+    pub content: StateEventContent,
+}
+
+impl StateEvent {
+    pub fn new(doc_discovery_key: [u8; 32], content: StateEventContent) -> Self {
+        Self {
+            doc_discovery_key,
+            content,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
-pub enum PeerEvent {
-    NewPeersBroadcasted(([u8; 32], Vec<[u8; 32]>)),
-    PeerSynced(([u8; 32], [u8; 32], u64)),
-    PeerDisconnected(([u8; 32], u64)),
-    RemotePeerSynced(([u8; 32], [u8; 32], u64)),
+pub enum StateEventContent {
+    PeerSynced((Option<String>, [u8; 32], u64)),
+    RemotePeerSynced(([u8; 32], u64)),
+    DocumentChanged(Vec<Patch>),
+}
+
+#[derive(Clone, Debug)]
+pub struct PeerEvent {
+    pub doc_discovery_key: [u8; 32],
+    pub content: PeerEventContent,
+}
+
+impl PeerEvent {
+    pub fn new(doc_discovery_key: [u8; 32], content: PeerEventContent) -> Self {
+        Self {
+            doc_discovery_key,
+            content,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum PeerEventContent {
+    NewPeersBroadcasted(Vec<[u8; 32]>),
+    PeerSynced(([u8; 32], u64)),
+    PeerDisconnected(u64),
+    RemotePeerSynced(([u8; 32], u64)),
 }

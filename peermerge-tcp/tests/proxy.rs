@@ -3,8 +3,8 @@ use futures::stream::StreamExt;
 use peermerge::doc_url_encrypted;
 use peermerge::Patch;
 use peermerge::Peermerge;
-use peermerge::StateEvent;
 use peermerge::ROOT;
+use peermerge::{StateEvent, StateEventContent::*};
 use peermerge_tcp::{connect_tcp_client_disk, connect_tcp_server_memory};
 use random_access_memory::RandomAccessMemory;
 use tempfile::Builder;
@@ -85,8 +85,8 @@ async fn process_proxy_state_event(
     let mut peer_syncs = 0;
     while let Some(event) = proxy_state_event_receiver.next().await {
         info!("Received event {:?}", event);
-        match event {
-            StateEvent::PeerSynced((_, None, _, len)) => {
+        match event.content {
+            PeerSynced((None, _, len)) => {
                 peer_syncs += 1;
                 if peer_syncs == 1 {
                     assert_eq!(len, 1);
@@ -96,10 +96,10 @@ async fn process_proxy_state_event(
                     panic!("Too many peer syncs");
                 }
             }
-            StateEvent::RemotePeerSynced(_) => {
+            RemotePeerSynced(_) => {
                 panic!("Should not get remote peer synced events {:?}", event);
             }
-            StateEvent::DocumentChanged(_) => {
+            DocumentChanged(_) => {
                 panic!("Should not get document changed event {:?}", event);
             }
             _ => {
@@ -122,11 +122,11 @@ async fn process_creator_state_events(
             "Received event {:?}, document_changes {:?}",
             event, document_changes
         );
-        match event {
-            StateEvent::PeerSynced(_) => {
+        match event.content {
+            PeerSynced(_) => {
                 panic!("Should not get remote peer synced events {:?}", event);
             }
-            StateEvent::RemotePeerSynced((_, _, len)) => {
+            RemotePeerSynced((_, len)) => {
                 remote_peer_syncs += 1;
                 if remote_peer_syncs == 1 {
                     assert_eq!(len, 1);
@@ -137,7 +137,7 @@ async fn process_creator_state_events(
                     break;
                 }
             }
-            StateEvent::DocumentChanged((_, patches)) => {
+            DocumentChanged(patches) => {
                 document_changes.push(patches);
             }
         }

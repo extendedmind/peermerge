@@ -4,7 +4,7 @@ use futures::stream::StreamExt;
 use peermerge::doc_url_encrypted;
 use peermerge::Patch;
 use peermerge::Peermerge;
-use peermerge::StateEvent;
+use peermerge::{StateEvent, StateEventContent::*};
 use random_access_disk::RandomAccessDisk;
 use std::sync::Arc;
 use tempfile::Builder;
@@ -148,8 +148,8 @@ async fn process_joiner_state_event(
             "Received event {:?}, document_changes {:?}",
             event, document_changes
         );
-        match event {
-            StateEvent::PeerSynced((_, Some(name), _, len)) => {
+        match event.content {
+            PeerSynced((Some(name), _, len)) => {
                 assert_eq!(name, "creator");
                 assert_eq!(len, expected_scalars.len() as u64);
                 for (field, expected) in &expected_scalars {
@@ -159,8 +159,8 @@ async fn process_joiner_state_event(
                 notify_one_condvar(assert_sync.clone()).await;
                 break;
             }
-            StateEvent::RemotePeerSynced(_) => {}
-            StateEvent::DocumentChanged((_, patches)) => {
+            RemotePeerSynced(_) => {}
+            DocumentChanged(patches) => {
                 document_changes.push(patches);
             }
             _ => {
@@ -180,8 +180,8 @@ async fn process_creator_state_events(
 ) -> anyhow::Result<()> {
     while let Some(event) = creator_state_event_receiver.next().await {
         info!("Received event {:?}", event);
-        match event {
-            StateEvent::PeerSynced((_, Some(name), _, len)) => {
+        match event.content {
+            PeerSynced((Some(name), _, len)) => {
                 if expected_scalars.len() == 2 {
                     panic!("Invalid creator peer sync {:?}", name);
                 }
@@ -194,7 +194,7 @@ async fn process_creator_state_events(
                 wait_for_condvar(assert_sync).await;
                 break;
             }
-            StateEvent::RemotePeerSynced((_, _, len)) => {
+            RemotePeerSynced((_, len)) => {
                 if expected_scalars.len() > 1 {
                     assert_eq!(len, expected_scalars.len() as u64);
                     for (field, expected) in &expected_scalars {
@@ -205,7 +205,7 @@ async fn process_creator_state_events(
                     break;
                 }
             }
-            StateEvent::DocumentChanged((_, patches)) => {
+            DocumentChanged(patches) => {
                 if expected_scalars.len() == 1 {
                     panic!("Invalid creator document changes {:?}", patches);
                 }

@@ -1,7 +1,7 @@
 use automerge::{ObjId, ROOT};
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use futures::stream::StreamExt;
-use peermerge::{Patch, Peermerge, StateEvent};
+use peermerge::{Patch, Peermerge, StateEvent, StateEventContent::*};
 use random_access_memory::RandomAccessMemory;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -139,8 +139,8 @@ async fn process_joiner_state_event(
             event,
             document_changes.len()
         );
-        match event {
-            StateEvent::PeerSynced((_, Some(name), _, len)) => {
+        match event.content {
+            PeerSynced((Some(name), _, len)) => {
                 if !peer_synced.contains_key("creator") {
                     assert_eq!(name, "creator");
                     let (_value, local_texts_id) = peermerge.get(ROOT, "texts").await?.unwrap();
@@ -156,10 +156,10 @@ async fn process_joiner_state_event(
                 }
                 peer_synced.insert(name.clone(), len);
             }
-            StateEvent::RemotePeerSynced((_, discovery_key, len)) => {
+            RemotePeerSynced((discovery_key, len)) => {
                 remote_peer_synced.insert(discovery_key, len);
             }
-            StateEvent::DocumentChanged((_, patches)) => {
+            DocumentChanged(patches) => {
                 if document_changes.len() == 0 {
                     assert_eq!(patches.len(), 5); // "Hello" has 5 chars
                     document_changes.push(patches);
@@ -252,8 +252,8 @@ async fn process_creator_state_events(
             document_changes.len()
         );
         let text_id = text_id.clone();
-        match event {
-            StateEvent::PeerSynced((_, Some(name), _, len)) => {
+        match event.content {
+            PeerSynced((Some(name), _, len)) => {
                 peer_synced.insert(name.clone(), len);
                 if latecomer_attached {
                     assert!(name == "joiner" || name == "latecomer");
@@ -261,7 +261,7 @@ async fn process_creator_state_events(
                     assert_eq!(name, "joiner");
                 }
             }
-            StateEvent::RemotePeerSynced((_, discovery_key, len)) => {
+            RemotePeerSynced((discovery_key, len)) => {
                 if remote_peer_synced.is_empty() {
                     peermerge
                         .splice_text(&text_id, 0, 0, "Hello")
@@ -271,7 +271,7 @@ async fn process_creator_state_events(
                 }
                 remote_peer_synced.insert(discovery_key, len);
             }
-            StateEvent::DocumentChanged((_, patches)) => {
+            DocumentChanged(patches) => {
                 if document_changes.len() == 0 {
                     assert_eq!(patches.len(), 2); // Original creation of "texts" and "text";
                     document_changes.push(patches);
@@ -401,8 +401,8 @@ async fn process_latecomer_state_event(
             event,
             document_changes.len()
         );
-        match event {
-            StateEvent::PeerSynced((_, Some(name), _, len)) => {
+        match event.content {
+            PeerSynced((Some(name), _, len)) => {
                 assert!(name == "creator" || name == "joiner");
                 peer_synced.insert(name.clone(), len);
                 if peer_synced.contains_key("creator")
@@ -427,10 +427,10 @@ async fn process_latecomer_state_event(
                     peermerge.splice_text(&local_text_id, 13, 0, "ZZ").await?;
                 }
             }
-            StateEvent::RemotePeerSynced((_, discovery_key, len)) => {
+            RemotePeerSynced((discovery_key, len)) => {
                 remote_peer_synced.insert(discovery_key, len);
             }
-            StateEvent::DocumentChanged((_, patches)) => {
+            DocumentChanged(patches) => {
                 if document_changes.len() == 0 {
                     assert_eq!(patches.len(), 1); // Two local additions as one Splice
                     assert_text_equals_either(
