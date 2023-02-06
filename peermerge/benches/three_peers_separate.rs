@@ -39,7 +39,7 @@ async fn append_three(
                     break;
                 }
             }
-            StateEvent::DocumentChanged(patches) => {
+            StateEvent::DocumentChanged((_, patches)) => {
                 patches_remaining -= patches.len() as i64;
                 // println!(
                 //     "DC: i={} sr={}, rsr={}, pr={}",

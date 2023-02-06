@@ -79,6 +79,7 @@ where
                             let channel_sender = channel.local_sender();
                             hypercore.on_channel(
                                 is_doc_channel,
+                                doc_discovery_key,
                                 channel,
                                 channel_receiver,
                                 channel_sender,

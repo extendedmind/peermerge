@@ -79,7 +79,7 @@ async fn process_proxy_state_event(
     while let Some(event) = proxy_state_event_receiver.next().await {
         info!("Received event {:?}", event);
         match event {
-            StateEvent::PeerSynced((None, _, len)) => {
+            StateEvent::PeerSynced((_, None, _, len)) => {
                 peer_syncs += 1;
                 if peer_syncs == 1 {
                     assert_eq!(len, 1);
@@ -119,7 +119,7 @@ async fn process_creator_state_events(
             StateEvent::PeerSynced(_) => {
                 panic!("Should not get remote peer synced events {:?}", event);
             }
-            StateEvent::RemotePeerSynced((_, len)) => {
+            StateEvent::RemotePeerSynced((_, _, len)) => {
                 remote_peer_syncs += 1;
                 if remote_peer_syncs == 1 {
                     assert_eq!(len, 1);
@@ -130,7 +130,7 @@ async fn process_creator_state_events(
                     break;
                 }
             }
-            StateEvent::DocumentChanged(patches) => {
+            StateEvent::DocumentChanged((_, patches)) => {
                 document_changes.push(patches);
             }
         }

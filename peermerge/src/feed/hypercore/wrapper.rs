@@ -209,6 +209,7 @@ where
     pub(super) fn on_channel(
         &mut self,
         is_doc: bool,
+        doc_discovery_key: [u8; 32],
         channel: Channel,
         channel_receiver: ChannelReceiver<Message>,
         channel_sender: ChannelSender<Message>,
@@ -218,7 +219,12 @@ where
     ) {
         debug!("Processing channel id={}", channel.id(),);
         self.channel_senders.push(channel_sender);
-        let peer_state = PeerState::new(is_doc, write_public_key, peer_public_keys);
+        let peer_state = PeerState::new(
+            is_doc,
+            doc_discovery_key,
+            write_public_key,
+            peer_public_keys,
+        );
         let hypercore = self.hypercore.clone();
         let mut peer_event_sender_for_task = peer_event_sender.clone();
         let task_span = if is_doc {

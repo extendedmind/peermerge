@@ -224,6 +224,7 @@ where
                     if new_info.contiguous_length == new_info.length {
                         peer_state.synced_contiguous_length = new_info.contiguous_length;
                         Some(PeerEvent::PeerSynced((
+                            peer_state.doc_discovery_key.clone(),
                             *channel.discovery_key(),
                             new_info.contiguous_length,
                         )))
@@ -288,6 +289,7 @@ where
                         {
                             // The peer has advertised that they now have what we have
                             let event = Some(PeerEvent::RemotePeerSynced((
+                                peer_state.doc_discovery_key.clone(),
                                 *channel.discovery_key(),
                                 peer_state.remote_contiguous_length,
                             )));
@@ -345,7 +347,10 @@ where
                     }
                 } else if !new_remote_public_keys.is_empty() {
                     // New peers found, return a peer event
-                    return Ok(Some(PeerEvent::NewPeersBroadcasted(new_remote_public_keys)));
+                    return Ok(Some(PeerEvent::NewPeersBroadcasted((
+                        peer_state.doc_discovery_key.clone(),
+                        new_remote_public_keys,
+                    ))));
                 }
             }
             _ => {
@@ -425,7 +430,10 @@ where
             }
         },
         Message::Close(message) => {
-            return Ok(Some(PeerEvent::PeerDisconnected(message.channel)));
+            return Ok(Some(PeerEvent::PeerDisconnected((
+                peer_state.doc_discovery_key.clone(),
+                message.channel,
+            ))));
         }
         _ => {
             panic!("Received unexpected message {:?}", message);

@@ -149,7 +149,7 @@ async fn process_joiner_state_event(
             event, document_changes
         );
         match event {
-            StateEvent::PeerSynced((Some(name), _, len)) => {
+            StateEvent::PeerSynced((_, Some(name), _, len)) => {
                 assert_eq!(name, "creator");
                 assert_eq!(len, expected_scalars.len() as u64);
                 for (field, expected) in &expected_scalars {
@@ -160,7 +160,7 @@ async fn process_joiner_state_event(
                 break;
             }
             StateEvent::RemotePeerSynced(_) => {}
-            StateEvent::DocumentChanged(patches) => {
+            StateEvent::DocumentChanged((_, patches)) => {
                 document_changes.push(patches);
             }
             _ => {
@@ -181,7 +181,7 @@ async fn process_creator_state_events(
     while let Some(event) = creator_state_event_receiver.next().await {
         info!("Received event {:?}", event);
         match event {
-            StateEvent::PeerSynced((Some(name), _, len)) => {
+            StateEvent::PeerSynced((_, Some(name), _, len)) => {
                 if expected_scalars.len() == 2 {
                     panic!("Invalid creator peer sync {:?}", name);
                 }
@@ -194,7 +194,7 @@ async fn process_creator_state_events(
                 wait_for_condvar(assert_sync).await;
                 break;
             }
-            StateEvent::RemotePeerSynced((_, len)) => {
+            StateEvent::RemotePeerSynced((_, _, len)) => {
                 if expected_scalars.len() > 1 {
                     assert_eq!(len, expected_scalars.len() as u64);
                     for (field, expected) in &expected_scalars {
@@ -205,7 +205,7 @@ async fn process_creator_state_events(
                     break;
                 }
             }
-            StateEvent::DocumentChanged(patches) => {
+            StateEvent::DocumentChanged((_, patches)) => {
                 if expected_scalars.len() == 1 {
                     panic!("Invalid creator document changes {:?}", patches);
                 }

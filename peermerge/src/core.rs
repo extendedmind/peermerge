@@ -57,7 +57,7 @@ where
     prefix: PathBuf,
     name: String,
     proxy: bool,
-    discovery_key: [u8; 32],
+    doc_discovery_key: [u8; 32],
     doc_url: String,
     encrypted: bool,
     encryption_key: Option<Vec<u8>>,
@@ -307,7 +307,10 @@ where
                     let patches = doc.observer().take_patches();
                     if patches.len() > 0 {
                         sender
-                            .unbounded_send(StateEvent::DocumentChanged(patches))
+                            .unbounded_send(StateEvent::DocumentChanged((
+                                self.doc_discovery_key.clone(),
+                                patches,
+                            )))
                             .unwrap();
                     }
                 }
@@ -453,7 +456,7 @@ impl Peermerge<RandomAccessMemory> {
 
         let state_event_sender_for_task = state_event_sender.clone();
         let doc_state = self.doc_state.clone();
-        let discovery_key_for_task = self.discovery_key.clone();
+        let discovery_key_for_task = self.doc_discovery_key.clone();
         let feeds_for_task = self.feeds.clone();
         let name_for_task = self.name.clone();
         let task_span = tracing::debug_span!("call_on_peer_event_memory").or_current();
@@ -504,7 +507,7 @@ impl Peermerge<RandomAccessMemory> {
         write_feed: Option<([u8; 32], [u8; 32], Feed<RandomAccessMemory>)>,
         peer_feeds: Vec<([u8; 32], [u8; 32], Feed<RandomAccessMemory>)>,
         content: Option<DocContent>,
-        discovery_key: [u8; 32],
+        doc_discovery_key: [u8; 32],
         name: &str,
         proxy: bool,
         doc_url: &str,
@@ -538,10 +541,10 @@ impl Peermerge<RandomAccessMemory> {
             doc_state: Arc::new(Mutex::new(doc_state)),
             state_event_sender: Arc::new(Mutex::new(None)),
             prefix: PathBuf::new(),
-            discovery_key,
+            doc_discovery_key,
             doc_url: doc_url.to_string(),
             name: name.to_string(),
-            proxy: proxy,
+            proxy,
             encrypted,
             encryption_key,
         }
@@ -562,7 +565,7 @@ async fn on_peer_event_memory(
     while let Some(event) = peer_event_receiver.next().await {
         debug!("Received event {:?}", event);
         match event {
-            PeerEvent::NewPeersBroadcasted(public_keys) => {
+            PeerEvent::NewPeersBroadcasted((doc_discovery_key, public_keys)) => {
                 let changed = {
                     let mut doc_state = doc_state.lock().await;
                     doc_state
@@ -581,7 +584,7 @@ async fn on_peer_event_memory(
                         .await;
                     }
                     {
-                        notify_new_peers_created(doc_discovery_key, &mut feeds, public_keys).await;
+                        notify_new_peers_created(&doc_discovery_key, &mut feeds, public_keys).await;
                     }
                 }
             }
@@ -783,7 +786,7 @@ impl Peermerge<RandomAccessDisk> {
         let state = doc_state_wrapper.state();
         let encrypted = state.encrypted;
         let proxy = state.proxy;
-        let discovery_key = state.doc_discovery_key.clone();
+        let doc_discovery_key = state.doc_discovery_key.clone();
         let doc_url = state.doc_url.clone();
         let name = state.name.clone();
 
@@ -863,10 +866,10 @@ impl Peermerge<RandomAccessDisk> {
             doc_state: Arc::new(Mutex::new(doc_state_wrapper)),
             state_event_sender: Arc::new(Mutex::new(None)),
             prefix: data_root_dir.clone(),
-            discovery_key,
+            doc_discovery_key,
             doc_url,
             name,
-            proxy: proxy,
+            proxy,
             encrypted,
             encryption_key: encryption_key.clone(),
         }
@@ -897,7 +900,7 @@ impl Peermerge<RandomAccessDisk> {
 
         let state_event_sender_for_task = state_event_sender.clone();
         let doc_state = self.doc_state.clone();
-        let discovery_key_for_task = self.discovery_key.clone();
+        let discovery_key_for_task = self.doc_discovery_key.clone();
         let feeds_for_task = self.feeds.clone();
         let name_for_task = self.name.clone();
         let data_root_dir = self.prefix.clone();
@@ -951,7 +954,7 @@ impl Peermerge<RandomAccessDisk> {
         write_feed: Option<([u8; 32], [u8; 32], Feed<RandomAccessDisk>)>,
         peer_feeds: Vec<([u8; 32], [u8; 32], Feed<RandomAccessDisk>)>,
         content: Option<DocContent>,
-        discovery_key: [u8; 32],
+        doc_discovery_key: [u8; 32],
         name: &str,
         proxy: bool,
         doc_url: &str,
@@ -987,10 +990,10 @@ impl Peermerge<RandomAccessDisk> {
             doc_state: Arc::new(Mutex::new(doc_state)),
             state_event_sender: Arc::new(Mutex::new(None)),
             prefix: data_root_dir.clone(),
-            discovery_key,
+            doc_discovery_key,
             doc_url: doc_url.to_string(),
             name: name.to_string(),
-            proxy: proxy,
+            proxy,
             encrypted,
             encryption_key,
         }
@@ -1013,7 +1016,7 @@ async fn on_peer_event_disk(
     while let Some(event) = peer_event_receiver.next().await {
         debug!("Received event {:?}", event);
         match event {
-            PeerEvent::NewPeersBroadcasted(public_keys) => {
+            PeerEvent::NewPeersBroadcasted((doc_discovery_key, public_keys)) => {
                 let changed = {
                     let mut doc_state = doc_state.lock().await;
                     doc_state
@@ -1033,7 +1036,7 @@ async fn on_peer_event_disk(
                         .await;
                     }
                     {
-                        notify_new_peers_created(doc_discovery_key, &mut feeds, public_keys).await;
+                        notify_new_peers_created(&doc_discovery_key, &mut feeds, public_keys).await;
                     }
                 }
             }
@@ -1136,8 +1139,13 @@ async fn process_peer_event<T>(
         PeerEvent::PeerDisconnected(_) => {
             // This is an FYI message, just continue for now
         }
-        PeerEvent::RemotePeerSynced((discovery_key, synced_contiguous_length)) => {
+        PeerEvent::RemotePeerSynced((
+            doc_discovery_key,
+            discovery_key,
+            synced_contiguous_length,
+        )) => {
             match state_event_sender.unbounded_send(StateEvent::RemotePeerSynced((
+                doc_discovery_key,
                 discovery_key,
                 synced_contiguous_length,
             ))) {
@@ -1150,10 +1158,11 @@ async fn process_peer_event<T>(
                 ),
             }
         }
-        PeerEvent::PeerSynced((discovery_key, synced_contiguous_length)) => {
+        PeerEvent::PeerSynced((doc_discovery_key, discovery_key, synced_contiguous_length)) => {
             if proxy {
                 // Just notify a peer sync forward
                 match state_event_sender.unbounded_send(StateEvent::PeerSynced((
+                    doc_discovery_key,
                     None,
                     discovery_key,
                     synced_contiguous_length,
@@ -1193,7 +1202,7 @@ async fn process_peer_event<T>(
                     if let Some((content, patches, new_peer_names, peer_syncs)) = create_content(
                         &discovery_key,
                         synced_contiguous_length,
-                        doc_discovery_key,
+                        &doc_discovery_key,
                         name,
                         &write_discovery_key,
                         feeds.clone(),
@@ -1227,7 +1236,12 @@ async fn process_peer_event<T>(
                     .iter()
                     .map(|sync| {
                         let name = doc_state.peer_name(&sync.0).unwrap();
-                        StateEvent::PeerSynced((Some(name), sync.0.clone(), sync.1))
+                        StateEvent::PeerSynced((
+                            doc_discovery_key,
+                            Some(name),
+                            sync.0.clone(),
+                            sync.1,
+                        ))
                     })
                     .collect();
                 (peer_synced_events, patches)
@@ -1239,7 +1253,7 @@ async fn process_peer_event<T>(
             }
             if patches.len() > 0 {
                 state_event_sender
-                    .unbounded_send(StateEvent::DocumentChanged(patches))
+                    .unbounded_send(StateEvent::DocumentChanged((doc_discovery_key, patches)))
                     .unwrap();
             }
 

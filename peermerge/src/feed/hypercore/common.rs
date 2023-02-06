@@ -9,6 +9,7 @@ use hypercore_protocol::{
 #[derive(Debug)]
 pub(super) struct PeerState {
     pub(super) is_doc: bool,
+    pub(super) doc_discovery_key: [u8; 32],
     pub(super) write_public_key: Option<[u8; 32]>,
     pub(super) peer_public_keys: Vec<[u8; 32]>,
     pub(super) can_upgrade: bool,
@@ -41,11 +42,13 @@ pub(super) struct PeerState {
 impl PeerState {
     pub fn new(
         is_doc: bool,
+        doc_discovery_key: [u8; 32],
         write_public_key: Option<[u8; 32]>,
         peer_public_keys: Vec<[u8; 32]>,
     ) -> Self {
         PeerState {
             is_doc,
+            doc_discovery_key,
             write_public_key,
             peer_public_keys,
             can_upgrade: true,
