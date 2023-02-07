@@ -20,3 +20,5 @@ impl<T> IO for T where T: AsyncWrite + AsyncRead + Send + Unpin + 'static {}
 #[cfg(not(target_arch = "wasm32"))]
 pub use feed::FeedDiskPersistence;
 pub use feed::{FeedMemoryPersistence, FeedPersistence};
+
+pub type DocumentId = [u8; 32];

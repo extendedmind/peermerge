@@ -2,6 +2,7 @@ use automerge::Patch;
 
 #[derive(Clone, Debug)]
 pub struct StateEvent {
+    // FIXME: Rename to document_id: DocumentId
     pub doc_discovery_key: [u8; 32],
     pub content: StateEventContent,
 }
@@ -24,6 +25,7 @@ pub enum StateEventContent {
 
 #[derive(Clone, Debug)]
 pub struct PeerEvent {
+    // FIXME: Rename to document_id: DocumentId
     pub doc_discovery_key: [u8; 32],
     pub content: PeerEventContent,
 }

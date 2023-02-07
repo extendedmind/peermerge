@@ -23,7 +23,7 @@ use tokio::{
 
 //////////////////////////////////////////////////////
 //
-// RandomAccessMemory
+// Memory
 
 #[cfg(feature = "async-std")]
 #[instrument(skip_all, fields(peer_name = peermerge.name(), host = host, port = port))]
@@ -109,7 +109,7 @@ pub async fn connect_tcp_client_memory(
 
 //////////////////////////////////////////////////////
 //
-// RandomAccessDisk
+// Disk
 
 #[cfg(feature = "async-std")]
 #[instrument(skip_all, fields(peer_name = peermerge.name(), host = host, port = port))]

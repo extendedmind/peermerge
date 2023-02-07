@@ -1,3 +1,4 @@
+use automerge::Patch;
 use dashmap::DashMap;
 use futures::{
     channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender},
@@ -10,7 +11,7 @@ use random_access_storage::RandomAccess;
 use std::fmt::Debug;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tracing::{debug, instrument};
+use tracing::{debug, instrument, warn};
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "async-std"))]
 use async_std::task;
@@ -23,12 +24,16 @@ use tokio::{sync::Mutex, task::yield_now};
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_futures::spawn_local;
 
-use crate::common::PeerEvent;
-use crate::common::{keys::discovery_key_from_public_key, storage::RepositoryStateWrapper};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::feed::FeedDiskPersistence;
-use crate::feed::{
-    create_new_read_memory_feed, Feed, FeedMemoryPersistence, FeedPersistence, Protocol, IO,
+use crate::{common::PeerEvent, feed::on_protocol_new, DocumentId, IO};
+use crate::{
+    common::PeerEventContent,
+    feed::{create_new_read_memory_feed, Feed, FeedMemoryPersistence, FeedPersistence, Protocol},
+};
+use crate::{
+    common::{keys::discovery_key_from_public_key, storage::RepositoryStateWrapper},
+    StateEventContent,
 };
 use crate::{Peermerge, StateEvent};
 
@@ -43,12 +48,10 @@ where
     name: String,
     /// Current storable state
     repository_state: Arc<Mutex<RepositoryStateWrapper<T>>>,
-    /// Created peermerges
-    peermerges: Arc<DashMap<[u8; 32], Peermerge<T>>>,
+    /// Created documents
+    documents: Arc<DashMap<DocumentId, Peermerge<T, U>>>,
     /// Map of independent docs' discovery keys with their children.
     peermerge_dependencies: Arc<DashMap<[u8; 32], Vec<[u8; 32]>>>,
-    /// All feeds
-    feeds: Arc<DashMap<[u8; 32], Arc<Mutex<Feed<U>>>>>,
     /// Sender for events
     state_event_sender: Option<UnboundedSender<StateEvent>>,
 }
@@ -58,60 +61,26 @@ where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send + 'static,
     U: FeedPersistence,
 {
-}
-
-//////////////////////////////////////////////////////
-//
-// RandomAccessMemory
-
-impl PeermergeRepository<RandomAccessMemory, FeedMemoryPersistence> {
-    pub async fn create_new_memory() -> Self {
-        let state = RepositoryStateWrapper::new_memory().await;
-        Self {
-            name: "".to_string(),
-            repository_state: Arc::new(Mutex::new(state)),
-            peermerges: Arc::new(DashMap::new()),
-            peermerge_dependencies: Arc::new(DashMap::new()),
-            feeds: Arc::new(DashMap::new()),
-            state_event_sender: None,
-        }
-    }
-}
-
-async fn create_and_insert_read_memory_feeds(
-    public_keys: Vec<[u8; 32]>,
-    feeds: Arc<DashMap<[u8; 32], Arc<Mutex<Feed<FeedMemoryPersistence>>>>>,
-    proxy: bool,
-    encryption_key: &Option<Vec<u8>>,
-) {
-    for public_key in public_keys {
-        let discovery_key = discovery_key_from_public_key(&public_key);
-        // Make sure to insert only once even if two protocols notice the same new
-        // feed at the same time using the entry API.
-
-        // There is a deadlock possibility with entry(), so we need to loop and yield
-        let mut entry_found = false;
-        while !entry_found {
-            if let Some(entry) = feeds.try_entry(discovery_key.clone()) {
-                match entry {
-                    dashmap::mapref::entry::Entry::Occupied(_) => {
-                        debug!("Concurrent creating of feeds noticed, continuing.");
-                    }
-                    dashmap::mapref::entry::Entry::Vacant(vacant) => {
-                        let (_, feed) = create_new_read_memory_feed(
-                            &public_key,
-                            proxy,
-                            encryption_key.is_some(),
-                            encryption_key,
-                        )
-                        .await;
-                        vacant.insert(Arc::new(Mutex::new(feed)));
+    async fn notify_of_document_changes(&mut self) {
+        if let Some(sender) = self.state_event_sender.as_mut() {
+            if sender.is_closed() {
+                self.state_event_sender = None;
+            } else {
+                let mut peermerge_patches: Vec<([u8; 32], Vec<Patch>)> = vec![];
+                for mut peermerge in self.documents.iter_mut() {
+                    let new_patches = peermerge.take_patches().await;
+                    if new_patches.len() > 0 {
+                        peermerge_patches.push((peermerge.id(), new_patches))
                     }
                 }
-                entry_found = true;
-            } else {
-                debug!("Concurrent access to feeds noticed, yielding and retrying.");
-                yield_now().await;
+                for (doc_discovery_key, patches) in peermerge_patches {
+                    sender
+                        .unbounded_send(StateEvent::new(
+                            doc_discovery_key,
+                            StateEventContent::DocumentChanged(patches),
+                        ))
+                        .unwrap();
+                }
             }
         }
     }
@@ -119,7 +88,111 @@ async fn create_and_insert_read_memory_feeds(
 
 //////////////////////////////////////////////////////
 //
-// RandomAccessDisk
+// Memory
+
+impl PeermergeRepository<RandomAccessMemory, FeedMemoryPersistence> {
+    pub async fn create_new_memory() -> Self {
+        let state = RepositoryStateWrapper::new_memory().await;
+        Self {
+            name: "".to_string(),
+            repository_state: Arc::new(Mutex::new(state)),
+            documents: Arc::new(DashMap::new()),
+            peermerge_dependencies: Arc::new(DashMap::new()),
+            state_event_sender: None,
+        }
+    }
+
+    #[instrument(skip_all, fields(name = self.name))]
+    pub async fn connect_protocol_memory<T>(
+        &mut self,
+        protocol: &mut Protocol<T>,
+        state_event_sender: &mut UnboundedSender<StateEvent>,
+    ) -> anyhow::Result<()>
+    where
+        T: IO,
+    {
+        // First let's drain any patches that are not yet sent out, and push them out. These can
+        // be created by scalar values inserted with peermerge.create_doc_memory() or other
+        // mutating calls executed before this call.
+        self.state_event_sender = Some(state_event_sender.clone());
+        {
+            self.notify_of_document_changes().await;
+        }
+        let (mut peer_event_sender, peer_event_receiver): (
+            UnboundedSender<PeerEvent>,
+            UnboundedReceiver<PeerEvent>,
+        ) = unbounded();
+
+        let state_event_sender_for_task = state_event_sender.clone();
+        let repository_state = self.repository_state.clone();
+        let documents_for_task = self.documents.clone();
+        let name_for_task = self.name.clone();
+        let task_span = tracing::debug_span!("call_on_peer_event_memory").or_current();
+        #[cfg(not(target_arch = "wasm32"))]
+        task::spawn(async move {
+            let _entered = task_span.enter();
+            on_peer_event_memory(
+                peer_event_receiver,
+                state_event_sender_for_task,
+                repository_state,
+                documents_for_task,
+                &name_for_task,
+            )
+            .await;
+        });
+        #[cfg(target_arch = "wasm32")]
+        spawn_local(async move {
+            let _entered = task_span.enter();
+            on_peer_event_memory(
+                peer_event_receiver,
+                state_event_sender_for_task,
+                repository_state,
+                documents_for_task,
+                &name_for_task,
+            )
+            .await;
+        });
+
+        on_protocol_new(protocol, self.documents.clone(), &mut peer_event_sender).await?;
+        Ok(())
+    }
+}
+
+#[instrument(level = "debug", skip_all)]
+async fn on_peer_event_memory(
+    mut peer_event_receiver: UnboundedReceiver<PeerEvent>,
+    mut state_event_sender: UnboundedSender<StateEvent>,
+    mut repository_state: Arc<Mutex<RepositoryStateWrapper<RandomAccessMemory>>>,
+    mut documents: Arc<DashMap<DocumentId, Peermerge<RandomAccessMemory, FeedMemoryPersistence>>>,
+    name: &str,
+) {
+    while let Some(event) = peer_event_receiver.next().await {
+        debug!("Received event {:?}", event);
+        match event.content {
+            PeerEventContent::NewPeersBroadcasted(public_keys) => {
+                let mut document = documents.get_mut(&event.doc_discovery_key).unwrap();
+                document
+                    .process_new_peers_broadcasted_memory(public_keys)
+                    .await;
+            }
+            _ => {
+                process_peer_event(
+                    event,
+                    &mut state_event_sender,
+                    &mut repository_state,
+                    &mut documents,
+                    name,
+                )
+                .await
+            }
+        }
+    }
+    debug!("Exiting");
+}
+
+//////////////////////////////////////////////////////
+//
+// Disk
 
 #[cfg(not(target_arch = "wasm32"))]
 impl PeermergeRepository<RandomAccessDisk, FeedDiskPersistence> {
@@ -128,9 +201,8 @@ impl PeermergeRepository<RandomAccessDisk, FeedDiskPersistence> {
         Self {
             name: "".to_string(),
             repository_state: Arc::new(Mutex::new(state)),
-            peermerges: Arc::new(DashMap::new()),
+            documents: Arc::new(DashMap::new()),
             peermerge_dependencies: Arc::new(DashMap::new()),
-            feeds: Arc::new(DashMap::new()),
             state_event_sender: None,
         }
     }
@@ -140,19 +212,44 @@ impl PeermergeRepository<RandomAccessDisk, FeedDiskPersistence> {
 //
 // Utilities
 
-async fn notify_new_peers_created<T>(
-    doc_discovery_key: &[u8; 32],
-    feeds: &mut Arc<DashMap<[u8; 32], Arc<Mutex<Feed<T>>>>>,
-    public_keys: Vec<[u8; 32]>,
+#[instrument(level = "debug", skip_all)]
+async fn process_peer_event<T, U>(
+    event: PeerEvent,
+    state_event_sender: &mut UnboundedSender<StateEvent>,
+    repository_state: &mut Arc<Mutex<RepositoryStateWrapper<T>>>,
+    documents: &mut Arc<DashMap<DocumentId, Peermerge<T, U>>>,
+    name: &str,
 ) where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send + 'static,
+    U: FeedPersistence,
 {
-    // Send message to doc feed that new peers have been created to get all open protocols to
-    // open channels to it.
-    let doc_feed = feeds.get(doc_discovery_key).unwrap();
-    let mut doc_feed = doc_feed.lock().await;
-    doc_feed
-        .notify_new_peers_created(public_keys)
-        .await
-        .unwrap();
+    match event.content {
+        PeerEventContent::NewPeersBroadcasted(_) => unreachable!("Implemented by concrete type"),
+        PeerEventContent::PeerDisconnected(_) => {
+            // This is an FYI message, just continue for now
+        }
+        PeerEventContent::RemotePeerSynced((discovery_key, synced_contiguous_length)) => {
+            match state_event_sender.unbounded_send(StateEvent::new(
+                event.doc_discovery_key,
+                StateEventContent::RemotePeerSynced((discovery_key, synced_contiguous_length)),
+            )) {
+                Ok(()) => {}
+                Err(err) => warn!(
+                    "{}: could not notify remote peer synced to len {}, err {}",
+                    name.to_string(),
+                    synced_contiguous_length,
+                    err
+                ),
+            }
+        }
+        PeerEventContent::PeerSynced((discovery_key, synced_contiguous_length)) => {
+            let mut document = documents.get_mut(&event.doc_discovery_key).unwrap();
+            let state_events = document
+                .process_peer_synced(discovery_key, synced_contiguous_length)
+                .await;
+            for state_event in state_events {
+                state_event_sender.unbounded_send(state_event).unwrap();
+            }
+        }
+    }
 }

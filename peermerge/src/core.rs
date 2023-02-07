@@ -32,6 +32,7 @@ use crate::common::{PeerEvent, PeerEventContent, StateEventContent};
 use crate::feed::on_protocol;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::feed::{create_new_read_disk_feed, create_new_write_disk_feed, open_disk_feed};
+use crate::DocumentId;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::FeedDiskPersistence;
 use crate::{
@@ -74,6 +75,22 @@ where
     pub fn name(&self) -> String {
         self.name.clone()
     }
+
+    pub fn id(&self) -> DocumentId {
+        self.doc_discovery_key.clone()
+    }
+
+    pub fn root_feed(&self) -> Arc<Mutex<Feed<U>>> {
+        self.feeds.get(&self.doc_discovery_key).unwrap().clone()
+    }
+
+    // pub fn leaf_feeds(&self) -> Arc<Mutex<Feed<U>>> {
+    //     self.feeds
+    //         .iter()
+    //         .filter(|multi| multi.key() != &self.doc_discovery_key)
+    //         .map(|feed| feed.clone())
+    //         .collect()
+    // }
 
     #[instrument(skip(self))]
     pub async fn watch(&mut self, ids: Vec<ObjId>) {
@@ -300,6 +317,17 @@ where
         self.encryption_key.clone()
     }
 
+    #[instrument(level = "debug", skip_all, fields(peer_name = self.name))]
+    pub(crate) async fn take_patches(&mut self) -> Vec<Patch> {
+        let mut doc_state = self.doc_state.lock().await;
+        if let Some(doc) = doc_state.doc_mut() {
+            doc.observer().take_patches()
+        } else {
+            vec![]
+        }
+    }
+
+    #[instrument(level = "debug", skip_all, fields(peer_name = self.name))]
     async fn notify_of_document_changes(&mut self) {
         let mut doc_state = self.doc_state.lock().await;
         if let Some(doc) = doc_state.doc_mut() {
@@ -321,11 +349,124 @@ where
             }
         }
     }
+
+    #[instrument(level = "debug", skip_all, fields(peer_name = self.name))]
+    async fn notify_new_peers_created(&mut self, public_keys: Vec<[u8; 32]>) {
+        // Send message to doc feed that new peers have been created to get all open protocols to
+        // open channels to it.
+        let doc_feed = self.feeds.get(&self.doc_discovery_key).unwrap();
+        let mut doc_feed = doc_feed.lock().await;
+        doc_feed
+            .notify_new_peers_created(public_keys)
+            .await
+            .unwrap();
+    }
+
+    #[instrument(level = "debug", skip_all, fields(peer_name = self.name))]
+    pub(crate) async fn process_peer_synced(
+        &mut self,
+        discovery_key: [u8; 32],
+        synced_contiguous_length: u64,
+    ) -> Vec<StateEvent> {
+        if self.proxy {
+            // Just notify a peer sync forward
+            return vec![StateEvent::new(
+                self.id(),
+                StateEventContent::PeerSynced((None, discovery_key, synced_contiguous_length)),
+            )];
+        }
+        let (mut state_events, patches): (Vec<StateEvent>, Vec<Patch>) = {
+            // Sync doc state exclusively...
+            let mut doc_state = self.doc_state.lock().await;
+            let (mut patches, peer_syncs) = if let Some((content, unapplied_entries)) =
+                doc_state.content_and_unapplied_entries_mut()
+            {
+                let (patches, new_peer_names, peer_syncs) = update_synced_content(
+                    &discovery_key,
+                    synced_contiguous_length,
+                    content,
+                    self.feeds.clone(),
+                    unapplied_entries,
+                )
+                .await
+                .unwrap();
+                doc_state
+                    .persist_content_and_new_peer_names(new_peer_names)
+                    .await;
+                (patches, peer_syncs)
+            } else {
+                let write_discovery_key = doc_state.write_discovery_key();
+                let unapplied_entries = doc_state.unappliend_entries_mut();
+                if let Some((content, patches, new_peer_names, peer_syncs)) = create_content(
+                    &discovery_key,
+                    synced_contiguous_length,
+                    &self.doc_discovery_key,
+                    &self.name,
+                    &write_discovery_key,
+                    self.feeds.clone(),
+                    unapplied_entries,
+                )
+                .await
+                .unwrap()
+                {
+                    doc_state
+                        .set_content_and_new_peer_names(content, new_peer_names)
+                        .await;
+                    (patches, peer_syncs)
+                } else {
+                    // Could not create content from this peer's data, needs more peers
+                    (vec![], vec![])
+                }
+            };
+
+            // Filter out unwatched patches
+            let watched_ids = &doc_state.state().watched_ids;
+            patches.retain(|patch| match patch {
+                Patch::Put { obj, .. } => watched_ids.contains(obj),
+                Patch::Insert { obj, .. } => watched_ids.contains(obj),
+                Patch::Delete { obj, .. } => watched_ids.contains(obj),
+                Patch::Increment { obj, .. } => watched_ids.contains(obj),
+                Patch::Expose { obj, .. } => watched_ids.contains(obj),
+                Patch::Splice { obj, .. } => watched_ids.contains(obj),
+            });
+
+            let peer_synced_events: Vec<StateEvent> = peer_syncs
+                .iter()
+                .map(|sync| {
+                    let name = doc_state.peer_name(&sync.0).unwrap();
+                    StateEvent::new(
+                        self.id(),
+                        StateEventContent::PeerSynced((Some(name), sync.0.clone(), sync.1)),
+                    )
+                })
+                .collect();
+            (peer_synced_events, patches)
+            // ..doc state sync ready, release lock
+        };
+
+        if patches.len() > 0 {
+            state_events.push(StateEvent::new(
+                self.id(),
+                StateEventContent::DocumentChanged(patches),
+            ));
+        }
+
+        // Finally, notify about the new sync so that other protocols can get synced as
+        // well. The message reaches the same feed that sent this, but is disregarded.
+        {
+            let feed = self.feeds.get_mut(&discovery_key).unwrap();
+            let mut feed = feed.lock().await;
+            feed.notify_peer_synced(synced_contiguous_length)
+                .await
+                .unwrap();
+        }
+        state_events
+    }
 }
 
 //////////////////////////////////////////////////////
 //
-// RandomAccessMemory
+// Memory
 
 impl Peermerge<RandomAccessMemory, FeedMemoryPersistence> {
     pub async fn create_new_memory<P: Into<Prop>, V: Into<ScalarValue>>(
@@ -507,6 +648,35 @@ impl Peermerge<RandomAccessMemory, FeedMemoryPersistence> {
         Ok(())
     }
 
+    #[instrument(level = "debug", skip_all, fields(peer_name = self.name))]
+    pub(crate) async fn process_new_peers_broadcasted_memory(
+        &mut self,
+        public_keys: Vec<[u8; 32]>,
+    ) -> bool {
+        let changed = {
+            let mut doc_state = self.doc_state.lock().await;
+            doc_state
+                .add_peer_public_keys_to_state(public_keys.clone())
+                .await
+        };
+        if changed {
+            {
+                // Create and insert all new feeds
+                create_and_insert_read_memory_feeds(
+                    public_keys.clone(),
+                    self.feeds.clone(),
+                    self.proxy,
+                    &self.encryption_key,
+                )
+                .await;
+            }
+            {
+                self.notify_new_peers_created(public_keys).await;
+            }
+        }
+        changed
+    }
+
     async fn new_memory(
         write_feed: Option<([u8; 32], [u8; 32], Feed<FeedMemoryPersistence>)>,
         peer_feeds: Vec<([u8; 32], [u8; 32], Feed<FeedMemoryPersistence>)>,
@@ -650,7 +820,7 @@ async fn create_and_insert_read_memory_feeds(
 
 //////////////////////////////////////////////////////
 //
-// RandomAccessDisk
+// Disk
 
 #[cfg(not(target_arch = "wasm32"))]
 impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
@@ -796,7 +966,6 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
 
         let feeds: DashMap<[u8; 32], Arc<Mutex<Feed<FeedDiskPersistence>>>> = DashMap::new();
 
-        let mut discovery_keys: Vec<[u8; 32]> = vec![];
         // Open doc feed
         let (_, doc_feed) = open_disk_feed(
             &data_root_dir,
@@ -807,7 +976,6 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
         )
         .await;
         feeds.insert(state.doc_discovery_key, Arc::new(Mutex::new(doc_feed)));
-        discovery_keys.push(state.doc_discovery_key.clone());
 
         // Open all peer feeds
         for peer in &state.peers {
@@ -820,7 +988,6 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
             )
             .await;
             feeds.insert(peer.discovery_key, Arc::new(Mutex::new(peer_feed)));
-            discovery_keys.push(peer.discovery_key.clone());
         }
 
         // Open write feed, if any
@@ -836,7 +1003,6 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
                 )
                 .await;
                 feeds.insert(write_discovery_key, Arc::new(Mutex::new(write_feed)));
-                discovery_keys.push(write_discovery_key.clone());
             }
 
             let feeds = Arc::new(feeds);
@@ -850,7 +1016,7 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
                 content.doc = Some(doc);
 
                 let (changed, new_peer_names) =
-                    update_content(discovery_keys, content, feeds.clone(), unapplied_entries)
+                    update_content(content, feeds.clone(), unapplied_entries)
                         .await
                         .unwrap();
                 if changed {
@@ -1370,7 +1536,6 @@ where
 }
 
 async fn update_content<T>(
-    discovery_keys: Vec<[u8; 32]>,
     content: &mut DocContent,
     feeds: Arc<DashMap<[u8; 32], Arc<Mutex<Feed<T>>>>>,
     unapplied_entries: &mut UnappliedEntries,
@@ -1380,7 +1545,8 @@ where
 {
     let mut new_peer_names: Vec<([u8; 32], String)> = vec![];
     let mut changed = false;
-    for discovery_key in discovery_keys {
+    for multi in feeds.iter() {
+        let discovery_key = multi.key();
         let (contiguous_length, entries) =
             get_new_entries(&discovery_key, None, content, &feeds).await?;
 
