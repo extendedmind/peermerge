@@ -32,6 +32,8 @@ use crate::common::{PeerEvent, PeerEventContent, StateEventContent};
 use crate::feed::on_protocol;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::feed::{create_new_read_disk_feed, create_new_write_disk_feed, open_disk_feed};
+#[cfg(not(target_arch = "wasm32"))]
+use crate::FeedDiskPersistence;
 use crate::{
     automerge::{init_doc_with_root_scalars, put_object_autocommit},
     common::{
@@ -40,18 +42,19 @@ use crate::{
         storage::DocStateWrapper,
     },
     feed::{create_new_read_memory_feed, create_new_write_memory_feed, Feed, Protocol},
-    StateEvent,
+    FeedMemoryPersistence, FeedPersistence, StateEvent,
 };
 
 /// Peermerge is the main abstraction.
 #[derive(derivative::Derivative)]
 #[derivative(Clone(bound = ""))]
 #[derive(Debug)]
-pub struct Peermerge<T>
+pub struct Peermerge<T, U>
 where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send,
+    U: FeedPersistence,
 {
-    feeds: Arc<DashMap<[u8; 32], Arc<Mutex<Feed<T>>>>>,
+    feeds: Arc<DashMap<[u8; 32], Arc<Mutex<Feed<U>>>>>,
     doc_state: Arc<Mutex<DocStateWrapper<T>>>,
     state_event_sender: Arc<Mutex<Option<UnboundedSender<StateEvent>>>>,
     prefix: PathBuf,
@@ -63,9 +66,10 @@ where
     encryption_key: Option<Vec<u8>>,
 }
 
-impl<T> Peermerge<T>
+impl<T, U> Peermerge<T, U>
 where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send + 'static,
+    U: FeedPersistence,
 {
     pub fn name(&self) -> String {
         self.name.clone()
@@ -323,7 +327,7 @@ where
 //
 // RandomAccessMemory
 
-impl Peermerge<RandomAccessMemory> {
+impl Peermerge<RandomAccessMemory, FeedMemoryPersistence> {
     pub async fn create_new_memory<P: Into<Prop>, V: Into<ScalarValue>>(
         name: &str,
         root_scalars: Vec<(P, V)>,
@@ -504,8 +508,8 @@ impl Peermerge<RandomAccessMemory> {
     }
 
     async fn new_memory(
-        write_feed: Option<([u8; 32], [u8; 32], Feed<RandomAccessMemory>)>,
-        peer_feeds: Vec<([u8; 32], [u8; 32], Feed<RandomAccessMemory>)>,
+        write_feed: Option<([u8; 32], [u8; 32], Feed<FeedMemoryPersistence>)>,
+        peer_feeds: Vec<([u8; 32], [u8; 32], Feed<FeedMemoryPersistence>)>,
         content: Option<DocContent>,
         doc_discovery_key: [u8; 32],
         name: &str,
@@ -514,7 +518,7 @@ impl Peermerge<RandomAccessMemory> {
         encrypted: bool,
         encryption_key: Option<Vec<u8>>,
     ) -> Self {
-        let feeds: DashMap<[u8; 32], Arc<Mutex<Feed<RandomAccessMemory>>>> = DashMap::new();
+        let feeds: DashMap<[u8; 32], Arc<Mutex<Feed<FeedMemoryPersistence>>>> = DashMap::new();
         let write_public_key =
             if let Some((write_public_key, write_discovery_key, write_feed)) = write_feed {
                 feeds.insert(write_discovery_key, Arc::new(Mutex::new(write_feed)));
@@ -557,7 +561,7 @@ async fn on_peer_event_memory(
     mut peer_event_receiver: UnboundedReceiver<PeerEvent>,
     mut state_event_sender: UnboundedSender<StateEvent>,
     mut doc_state: Arc<Mutex<DocStateWrapper<RandomAccessMemory>>>,
-    mut feeds: Arc<DashMap<[u8; 32], Arc<Mutex<Feed<RandomAccessMemory>>>>>,
+    mut feeds: Arc<DashMap<[u8; 32], Arc<Mutex<Feed<FeedMemoryPersistence>>>>>,
     name: &str,
     proxy: bool,
     encryption_key: &Option<Vec<u8>>,
@@ -607,7 +611,7 @@ async fn on_peer_event_memory(
 
 async fn create_and_insert_read_memory_feeds(
     public_keys: Vec<[u8; 32]>,
-    feeds: Arc<DashMap<[u8; 32], Arc<Mutex<Feed<RandomAccessMemory>>>>>,
+    feeds: Arc<DashMap<[u8; 32], Arc<Mutex<Feed<FeedMemoryPersistence>>>>>,
     proxy: bool,
     encryption_key: &Option<Vec<u8>>,
 ) {
@@ -649,7 +653,7 @@ async fn create_and_insert_read_memory_feeds(
 // RandomAccessDisk
 
 #[cfg(not(target_arch = "wasm32"))]
-impl Peermerge<RandomAccessDisk> {
+impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
     pub async fn create_new_disk<P: Into<Prop>, V: Into<ScalarValue>>(
         name: &str,
         root_scalars: Vec<(P, V)>,
@@ -790,7 +794,7 @@ impl Peermerge<RandomAccessDisk> {
         let doc_url = state.doc_url.clone();
         let name = state.name.clone();
 
-        let feeds: DashMap<[u8; 32], Arc<Mutex<Feed<RandomAccessDisk>>>> = DashMap::new();
+        let feeds: DashMap<[u8; 32], Arc<Mutex<Feed<FeedDiskPersistence>>>> = DashMap::new();
 
         let mut discovery_keys: Vec<[u8; 32]> = vec![];
         // Open doc feed
@@ -951,8 +955,8 @@ impl Peermerge<RandomAccessDisk> {
     }
 
     async fn new_disk(
-        write_feed: Option<([u8; 32], [u8; 32], Feed<RandomAccessDisk>)>,
-        peer_feeds: Vec<([u8; 32], [u8; 32], Feed<RandomAccessDisk>)>,
+        write_feed: Option<([u8; 32], [u8; 32], Feed<FeedDiskPersistence>)>,
+        peer_feeds: Vec<([u8; 32], [u8; 32], Feed<FeedDiskPersistence>)>,
         content: Option<DocContent>,
         doc_discovery_key: [u8; 32],
         name: &str,
@@ -962,7 +966,7 @@ impl Peermerge<RandomAccessDisk> {
         encryption_key: Option<Vec<u8>>,
         data_root_dir: &PathBuf,
     ) -> Self {
-        let feeds: DashMap<[u8; 32], Arc<Mutex<Feed<RandomAccessDisk>>>> = DashMap::new();
+        let feeds: DashMap<[u8; 32], Arc<Mutex<Feed<FeedDiskPersistence>>>> = DashMap::new();
         let write_public_key =
             if let Some((write_public_key, write_discovery_key, write_feed)) = write_feed {
                 feeds.insert(write_discovery_key, Arc::new(Mutex::new(write_feed)));
@@ -1007,7 +1011,7 @@ async fn on_peer_event_disk(
     mut peer_event_receiver: UnboundedReceiver<PeerEvent>,
     mut state_event_sender: UnboundedSender<StateEvent>,
     mut doc_state: Arc<Mutex<DocStateWrapper<RandomAccessDisk>>>,
-    mut feeds: Arc<DashMap<[u8; 32], Arc<Mutex<Feed<RandomAccessDisk>>>>>,
+    mut feeds: Arc<DashMap<[u8; 32], Arc<Mutex<Feed<FeedDiskPersistence>>>>>,
     name: &str,
     proxy: bool,
     encryption_key: &Option<Vec<u8>>,
@@ -1060,7 +1064,7 @@ async fn on_peer_event_disk(
 #[cfg(not(target_arch = "wasm32"))]
 async fn create_and_insert_read_disk_feeds(
     public_keys: Vec<[u8; 32]>,
-    feeds: Arc<DashMap<[u8; 32], Arc<Mutex<Feed<RandomAccessDisk>>>>>,
+    feeds: Arc<DashMap<[u8; 32], Arc<Mutex<Feed<FeedDiskPersistence>>>>>,
     proxy: bool,
     encryption_key: &Option<Vec<u8>>,
     data_root_dir: &PathBuf,

@@ -1,5 +1,7 @@
 use futures::channel::mpsc::UnboundedSender;
-use peermerge::{Peermerge, ProtocolBuilder, StateEvent};
+use peermerge::{
+    FeedDiskPersistence, FeedMemoryPersistence, Peermerge, ProtocolBuilder, StateEvent,
+};
 use random_access_disk::RandomAccessDisk;
 use random_access_memory::RandomAccessMemory;
 use tracing::instrument;
@@ -26,7 +28,7 @@ use tokio::{
 #[cfg(feature = "async-std")]
 #[instrument(skip_all, fields(peer_name = peermerge.name(), host = host, port = port))]
 pub async fn connect_tcp_server_memory(
-    peermerge: Peermerge<RandomAccessMemory>,
+    peermerge: Peermerge<RandomAccessMemory, FeedMemoryPersistence>,
     host: &str,
     port: u32,
     state_event_sender: &mut UnboundedSender<StateEvent>,
@@ -50,7 +52,7 @@ pub async fn connect_tcp_server_memory(
 #[cfg(feature = "tokio")]
 #[instrument(skip_all, fields(peer_name = peermerge.name(), host = host, port = port))]
 pub async fn connect_tcp_server_memory(
-    peermerge: Peermerge<RandomAccessMemory>,
+    peermerge: Peermerge<RandomAccessMemory, FeedMemoryPersistence>,
     host: &str,
     port: u32,
     state_event_sender: &mut UnboundedSender<StateEvent>,
@@ -74,7 +76,7 @@ pub async fn connect_tcp_server_memory(
 #[cfg(feature = "async-std")]
 #[instrument(skip_all, fields(peer_name = peermerge.name(), host = host, port = port))]
 pub async fn connect_tcp_client_memory(
-    mut peermerge: Peermerge<RandomAccessMemory>,
+    mut peermerge: Peermerge<RandomAccessMemory, FeedMemoryPersistence>,
     host: &str,
     port: u32,
     state_event_sender: &mut UnboundedSender<StateEvent>,
@@ -91,7 +93,7 @@ pub async fn connect_tcp_client_memory(
 #[cfg(feature = "tokio")]
 #[instrument(skip_all, fields(peer_name = peermerge.name(), host = host, port = port))]
 pub async fn connect_tcp_client_memory(
-    mut peermerge: Peermerge<RandomAccessMemory>,
+    mut peermerge: Peermerge<RandomAccessMemory, FeedMemoryPersistence>,
     host: &str,
     port: u32,
     state_event_sender: &mut UnboundedSender<StateEvent>,
@@ -112,7 +114,7 @@ pub async fn connect_tcp_client_memory(
 #[cfg(feature = "async-std")]
 #[instrument(skip_all, fields(peer_name = peermerge.name(), host = host, port = port))]
 pub async fn connect_tcp_server_disk(
-    peermerge: Peermerge<RandomAccessDisk>,
+    peermerge: Peermerge<RandomAccessDisk, FeedDiskPersistence>,
     host: &str,
     port: u32,
     state_event_sender: &mut UnboundedSender<StateEvent>,
@@ -136,7 +138,7 @@ pub async fn connect_tcp_server_disk(
 #[cfg(feature = "tokio")]
 #[instrument(skip_all, fields(peer_name = peermerge.name(), host = host, port = port))]
 pub async fn connect_tcp_server_disk(
-    peermerge: Peermerge<RandomAccessDisk>,
+    peermerge: Peermerge<RandomAccessDisk, FeedDiskPersistence>,
     host: &str,
     port: u32,
     state_event_sender: &mut UnboundedSender<StateEvent>,
@@ -160,7 +162,7 @@ pub async fn connect_tcp_server_disk(
 #[cfg(feature = "async-std")]
 #[instrument(skip_all, fields(peer_name = peermerge.name(), host = host, port = port))]
 pub async fn connect_tcp_client_disk(
-    mut peermerge: Peermerge<RandomAccessDisk>,
+    mut peermerge: Peermerge<RandomAccessDisk, FeedDiskPersistence>,
     host: &str,
     port: u32,
     state_event_sender: &mut UnboundedSender<StateEvent>,
@@ -177,7 +179,7 @@ pub async fn connect_tcp_client_disk(
 #[cfg(feature = "tokio")]
 #[instrument(skip_all, fields(peer_name = peermerge.name(), host = host, port = port))]
 pub async fn connect_tcp_client_disk(
-    mut peermerge: Peermerge<RandomAccessDisk>,
+    mut peermerge: Peermerge<RandomAccessDisk, FeedDiskPersistence>,
     host: &str,
     port: u32,
     state_event_sender: &mut UnboundedSender<StateEvent>,

@@ -1,10 +1,11 @@
 use automerge::ROOT;
-use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
-use futures::stream::StreamExt;
-use peermerge::doc_url_encrypted;
-use peermerge::Patch;
-use peermerge::Peermerge;
-use peermerge::{StateEvent, StateEventContent::*};
+use futures::{
+    channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender},
+    stream::StreamExt,
+};
+use peermerge::{
+    doc_url_encrypted, FeedDiskPersistence, Patch, Peermerge, StateEvent, StateEventContent::*,
+};
 use random_access_disk::RandomAccessDisk;
 use std::sync::Arc;
 use tempfile::Builder;
@@ -81,8 +82,8 @@ async fn disk_two_peers(encrypted: bool) -> anyhow::Result<()> {
 }
 
 async fn run_disk_two_peers(
-    peermerge_creator: Peermerge<RandomAccessDisk>,
-    peermerge_joiner: Peermerge<RandomAccessDisk>,
+    peermerge_creator: Peermerge<RandomAccessDisk, FeedDiskPersistence>,
+    peermerge_joiner: Peermerge<RandomAccessDisk, FeedDiskPersistence>,
     expected_scalars: Vec<(String, u64)>,
 ) -> anyhow::Result<()> {
     let (mut proto_responder, mut proto_initiator) = create_pair_memory().await;
@@ -137,7 +138,7 @@ async fn run_disk_two_peers(
 
 #[instrument(skip_all)]
 async fn process_joiner_state_event(
-    peermerge: Peermerge<RandomAccessDisk>,
+    peermerge: Peermerge<RandomAccessDisk, FeedDiskPersistence>,
     mut joiner_state_event_receiver: UnboundedReceiver<StateEvent>,
     assert_sync: BoolCondvar,
     expected_scalars: Vec<(String, u64)>,
@@ -173,7 +174,7 @@ async fn process_joiner_state_event(
 
 #[instrument(skip_all)]
 async fn process_creator_state_events(
-    peermerge: Peermerge<RandomAccessDisk>,
+    peermerge: Peermerge<RandomAccessDisk, FeedDiskPersistence>,
     mut creator_state_event_receiver: UnboundedReceiver<StateEvent>,
     assert_sync: BoolCondvar,
     expected_scalars: Vec<(String, u64)>,

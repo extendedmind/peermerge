@@ -4,7 +4,7 @@ use peermerge::doc_url_encrypted;
 use peermerge::Patch;
 use peermerge::Peermerge;
 use peermerge::ROOT;
-use peermerge::{StateEvent, StateEventContent::*};
+use peermerge::{FeedMemoryPersistence, StateEvent, StateEventContent::*};
 use peermerge_tcp::{connect_tcp_client_disk, connect_tcp_server_memory};
 use random_access_memory::RandomAccessMemory;
 use tempfile::Builder;
@@ -112,7 +112,7 @@ async fn process_proxy_state_event(
 
 #[instrument(skip_all)]
 async fn process_creator_state_events(
-    mut peermerge: Peermerge<RandomAccessMemory>,
+    mut peermerge: Peermerge<RandomAccessMemory, FeedMemoryPersistence>,
     mut creator_state_event_receiver: UnboundedReceiver<StateEvent>,
 ) -> anyhow::Result<()> {
     let mut document_changes: Vec<Vec<Patch>> = vec![];

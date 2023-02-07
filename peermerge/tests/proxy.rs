@@ -1,10 +1,9 @@
 use automerge::ROOT;
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use futures::stream::StreamExt;
-use peermerge::doc_url_encrypted;
-use peermerge::Patch;
-use peermerge::Peermerge;
-use peermerge::{StateEvent, StateEventContent::*};
+use peermerge::{
+    doc_url_encrypted, FeedMemoryPersistence, Patch, Peermerge, StateEvent, StateEventContent::*,
+};
 use random_access_memory::RandomAccessMemory;
 use tempfile::Builder;
 use test_log::test;
@@ -105,7 +104,7 @@ async fn process_proxy_state_event(
 
 #[instrument(skip_all)]
 async fn process_creator_state_events(
-    mut peermerge: Peermerge<RandomAccessMemory>,
+    mut peermerge: Peermerge<RandomAccessMemory, FeedMemoryPersistence>,
     mut creator_state_event_receiver: UnboundedReceiver<StateEvent>,
 ) -> anyhow::Result<()> {
     let mut document_changes: Vec<Vec<Patch>> = vec![];

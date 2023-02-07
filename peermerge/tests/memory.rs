@@ -1,7 +1,7 @@
 use automerge::{ObjId, ROOT};
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use futures::stream::StreamExt;
-use peermerge::{Patch, Peermerge, StateEvent, StateEventContent::*};
+use peermerge::{FeedMemoryPersistence, Patch, Peermerge, StateEvent, StateEventContent::*};
 use random_access_memory::RandomAccessMemory;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -123,7 +123,7 @@ async fn memory_three_writers() -> anyhow::Result<()> {
 
 #[instrument(skip_all)]
 async fn process_joiner_state_event(
-    mut peermerge: Peermerge<RandomAccessMemory>,
+    mut peermerge: Peermerge<RandomAccessMemory, FeedMemoryPersistence>,
     mut joiner_state_event_receiver: UnboundedReceiver<StateEvent>,
     cork_sync: BoolCondvar,
     merge_result: Arc<Mutex<MemoryThreeWritersResult>>,
@@ -232,7 +232,7 @@ async fn process_joiner_state_event(
 
 #[instrument(skip_all)]
 async fn process_creator_state_events(
-    mut peermerge: Peermerge<RandomAccessMemory>,
+    mut peermerge: Peermerge<RandomAccessMemory, FeedMemoryPersistence>,
     creator_state_event_sender: UnboundedSender<StateEvent>,
     mut creator_state_event_receiver: UnboundedReceiver<StateEvent>,
     text_id: ObjId,
@@ -387,7 +387,7 @@ async fn process_creator_state_events(
 
 #[instrument(skip_all)]
 async fn process_latecomer_state_event(
-    mut peermerge: Peermerge<RandomAccessMemory>,
+    mut peermerge: Peermerge<RandomAccessMemory, FeedMemoryPersistence>,
     mut latecomer_state_event_receiver: UnboundedReceiver<StateEvent>,
     append_sync: BoolCondvar,
 ) -> anyhow::Result<()> {
@@ -456,7 +456,7 @@ async fn process_latecomer_state_event(
 }
 
 async fn connect(
-    mut peermerge: Peermerge<RandomAccessMemory>,
+    mut peermerge: Peermerge<RandomAccessMemory, FeedMemoryPersistence>,
     mut protocol: MemoryProtocol,
     mut state_event_sender: UnboundedSender<StateEvent>,
 ) -> anyhow::Result<()> {
@@ -467,7 +467,7 @@ async fn connect(
 }
 
 async fn assert_text_equals(
-    peermerge: &Peermerge<RandomAccessMemory>,
+    peermerge: &Peermerge<RandomAccessMemory, FeedMemoryPersistence>,
     obj: &ObjId,
     expected: &str,
 ) {
@@ -476,7 +476,7 @@ async fn assert_text_equals(
 }
 
 async fn assert_text_equals_either(
-    peermerge: &Peermerge<RandomAccessMemory>,
+    peermerge: &Peermerge<RandomAccessMemory, FeedMemoryPersistence>,
     obj: &ObjId,
     expected_1: &str,
     expected_2: &str,

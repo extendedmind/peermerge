@@ -3,7 +3,7 @@ use futures::channel::mpsc::{
 };
 use futures::stream::StreamExt;
 use hypercore_protocol::{Duplex, Protocol, ProtocolBuilder};
-use peermerge::{Peermerge, StateEvent, StateEventContent::*, ROOT};
+use peermerge::{FeedMemoryPersistence, Peermerge, StateEvent, StateEventContent::*, ROOT};
 use random_access_memory::RandomAccessMemory;
 
 #[cfg(feature = "async-std")]
@@ -15,7 +15,7 @@ pub async fn setup_peermerge_mesh(
     peers: usize,
     encrypted: bool,
 ) -> (Vec<Sender<u64>>, UnboundedReceiver<StateEvent>) {
-    let mut peermerge_creator: Peermerge<RandomAccessMemory> =
+    let mut peermerge_creator: Peermerge<RandomAccessMemory, FeedMemoryPersistence> =
         Peermerge::create_new_memory("p1", vec![("version", 1)], encrypted).await;
     let encryption_key = peermerge_creator.encryption_key();
     peermerge_creator.watch(vec![ROOT]).await;
@@ -111,7 +111,7 @@ async fn create_pair_memory() -> (MemoryProtocol, MemoryProtocol) {
 }
 
 async fn connect(
-    mut peermerge: Peermerge<RandomAccessMemory>,
+    mut peermerge: Peermerge<RandomAccessMemory, FeedMemoryPersistence>,
     mut protocol: MemoryProtocol,
     mut state_event_sender: UnboundedSender<StateEvent>,
 ) {
@@ -123,7 +123,7 @@ async fn connect(
 
 async fn append_value(
     peer_name: &str,
-    mut peermerge: Peermerge<RandomAccessMemory>,
+    mut peermerge: Peermerge<RandomAccessMemory, FeedMemoryPersistence>,
     mut append_index_receiver: Receiver<u64>,
 ) {
     while let Some(i) = append_index_receiver.next().await {
