@@ -113,6 +113,10 @@ where
         (state.write_public_key, peer_public_keys)
     }
 
+    pub(crate) fn doc_state(&self) -> Arc<Mutex<DocStateWrapper<T>>> {
+        self.doc_state.clone()
+    }
+
     #[instrument(skip(self))]
     pub async fn watch(&mut self, ids: Vec<ObjId>) {
         if self.proxy {

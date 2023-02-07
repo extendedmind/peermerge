@@ -1,4 +1,4 @@
-use automerge::Patch;
+use automerge::{ObjId, ObjType, Patch, Prop, ReadDoc, ScalarValue, Value};
 use dashmap::DashMap;
 use futures::{
     channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender},
@@ -26,14 +26,11 @@ use wasm_bindgen_futures::spawn_local;
 
 #[cfg(not(target_arch = "wasm32"))]
 use crate::feed::FeedDiskPersistence;
+use crate::{common::storage::RepositoryStateWrapper, StateEventContent};
 use crate::{common::PeerEvent, feed::on_protocol_new, DocumentId, IO};
 use crate::{
     common::PeerEventContent,
-    feed::{create_new_read_memory_feed, Feed, FeedMemoryPersistence, FeedPersistence, Protocol},
-};
-use crate::{
-    common::{keys::discovery_key_from_public_key, storage::RepositoryStateWrapper},
-    StateEventContent,
+    feed::{FeedMemoryPersistence, FeedPersistence, Protocol},
 };
 use crate::{Peermerge, StateEvent};
 
@@ -50,8 +47,6 @@ where
     repository_state: Arc<Mutex<RepositoryStateWrapper<T>>>,
     /// Created documents
     documents: Arc<DashMap<DocumentId, Peermerge<T, U>>>,
-    /// Map of independent docs' discovery keys with their children.
-    peermerge_dependencies: Arc<DashMap<[u8; 32], Vec<[u8; 32]>>>,
     /// Sender for events
     state_event_sender: Option<UnboundedSender<StateEvent>>,
 }
@@ -61,6 +56,123 @@ where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send + 'static,
     U: FeedPersistence,
 {
+    #[instrument(skip(self))]
+    pub async fn watch(&mut self, document_id: &DocumentId, ids: Vec<ObjId>) {
+        let mut document = self.documents.get_mut(document_id).unwrap();
+        document.watch(ids).await;
+    }
+
+    #[instrument(skip(self, obj, prop), fields(obj = obj.as_ref().to_string(), peer_name = self.name))]
+    pub async fn get<O: AsRef<ObjId>, P: Into<Prop>>(
+        &self,
+        document_id: &DocumentId,
+        obj: O,
+        prop: P,
+    ) -> anyhow::Result<Option<(Value, ObjId)>> {
+        let document = self.documents.get(document_id).unwrap();
+        let doc_state = document.doc_state();
+        let result = {
+            let doc_state = doc_state.lock().await;
+            if let Some(doc) = doc_state.doc() {
+                match doc.get(obj, prop) {
+                    Ok(result) => {
+                        if let Some(result) = result {
+                            let value = result.0.to_owned();
+                            let id = result.1.to_owned();
+                            Some((value, id))
+                        } else {
+                            None
+                        }
+                    }
+                    Err(_err) => {
+                        // TODO: Some errors should probably be errors
+                        None
+                    }
+                }
+            } else {
+                unimplemented!("TODO: No proper error code for trying to get from doc before a document is synced");
+            }
+        };
+        Ok(result)
+    }
+
+    #[instrument(skip(self, obj), fields(obj = obj.as_ref().to_string(), peer_name = self.name))]
+    pub async fn realize_text<O: AsRef<ObjId>>(
+        &self,
+        document_id: &DocumentId,
+        obj: O,
+    ) -> anyhow::Result<Option<String>> {
+        let document = self.documents.get(document_id).unwrap();
+        document.realize_text(obj).await
+    }
+
+    #[instrument(skip(self, obj, prop), fields(obj = obj.as_ref().to_string(), peer_name = self.name))]
+    pub async fn put_object<O: AsRef<ObjId>, P: Into<Prop>>(
+        &mut self,
+        document_id: &DocumentId,
+        obj: O,
+        prop: P,
+        object: ObjType,
+    ) -> anyhow::Result<ObjId> {
+        let result = {
+            let mut document = self.documents.get_mut(document_id).unwrap();
+            document.put_object(obj, prop, object).await?
+        };
+        {
+            self.notify_of_document_changes().await;
+        }
+        Ok(result)
+    }
+
+    #[instrument(skip(self, obj, prop, value), fields(obj = obj.as_ref().to_string(), peer_name = self.name))]
+    pub async fn put_scalar<O: AsRef<ObjId>, P: Into<Prop>, V: Into<ScalarValue>>(
+        &mut self,
+        document_id: &DocumentId,
+        obj: O,
+        prop: P,
+        value: V,
+    ) -> anyhow::Result<()> {
+        let result = {
+            let mut document = self.documents.get_mut(document_id).unwrap();
+            document.put_scalar(obj, prop, value).await?
+        };
+        {
+            self.notify_of_document_changes().await;
+        }
+        Ok(result)
+    }
+
+    #[instrument(skip(self, obj), fields(obj = obj.as_ref().to_string(), peer_name = self.name))]
+    pub async fn splice_text<O: AsRef<ObjId>>(
+        &mut self,
+        document_id: &DocumentId,
+        obj: O,
+        index: usize,
+        delete: usize,
+        text: &str,
+    ) -> anyhow::Result<()> {
+        let result = {
+            let mut document = self.documents.get_mut(document_id).unwrap();
+            document.splice_text(obj, index, delete, text).await?
+        };
+        {
+            self.notify_of_document_changes().await;
+        }
+        Ok(result)
+    }
+
+    #[instrument(skip(self))]
+    pub async fn cork(&mut self, document_id: &DocumentId) {
+        let mut document = self.documents.get_mut(document_id).unwrap();
+        document.cork().await
+    }
+
+    #[instrument(skip(self))]
+    pub async fn uncork(&mut self, document_id: &DocumentId) -> anyhow::Result<()> {
+        let mut document = self.documents.get_mut(document_id).unwrap();
+        document.uncork().await
+    }
+
     async fn notify_of_document_changes(&mut self) {
         if let Some(sender) = self.state_event_sender.as_mut() {
             if sender.is_closed() {
@@ -91,15 +203,36 @@ where
 // Memory
 
 impl PeermergeRepository<RandomAccessMemory, FeedMemoryPersistence> {
-    pub async fn create_new_memory() -> Self {
+    pub async fn new_memory(name: &str) -> Self {
         let state = RepositoryStateWrapper::new_memory().await;
         Self {
-            name: "".to_string(),
+            name: name.to_string(),
             repository_state: Arc::new(Mutex::new(state)),
             documents: Arc::new(DashMap::new()),
-            peermerge_dependencies: Arc::new(DashMap::new()),
             state_event_sender: None,
         }
+    }
+
+    pub async fn create_new_document_memory<P: Into<Prop>, V: Into<ScalarValue>>(
+        &mut self,
+        root_scalars: Vec<(P, V)>,
+        encrypted: bool,
+    ) -> DocumentId {
+        let document = Peermerge::create_new_memory(&self.name, root_scalars, encrypted).await;
+        let id = document.id();
+        self.documents.insert(id, document);
+        id
+    }
+
+    pub async fn attach_writer_document_memory(
+        &mut self,
+        doc_url: &str,
+        encryption_key: &Option<Vec<u8>>,
+    ) -> DocumentId {
+        let document = Peermerge::attach_writer_memory(&self.name, doc_url, encryption_key).await;
+        let id = document.id();
+        self.documents.insert(id, document);
+        id
     }
 
     #[instrument(skip_all, fields(name = self.name))]
@@ -202,7 +335,6 @@ impl PeermergeRepository<RandomAccessDisk, FeedDiskPersistence> {
             name: "".to_string(),
             repository_state: Arc::new(Mutex::new(state)),
             documents: Arc::new(DashMap::new()),
-            peermerge_dependencies: Arc::new(DashMap::new()),
             state_event_sender: None,
         }
     }
