@@ -149,10 +149,11 @@ where
 
     pub(crate) async fn notify_new_peers_created(
         &mut self,
+        doc_discovery_key: [u8; 32],
         public_keys: Vec<[u8; 32]>,
     ) -> anyhow::Result<()> {
         if self.channel_senders.len() > 0 {
-            let message = create_new_peers_created_local_signal(public_keys);
+            let message = create_new_peers_created_local_signal(doc_discovery_key, public_keys);
             self.notify_listeners(&message).await?;
         }
         Ok(())

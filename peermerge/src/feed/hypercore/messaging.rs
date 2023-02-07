@@ -64,8 +64,14 @@ pub(super) fn create_peer_synced_local_signal(contiguous_length: u64) -> Message
     Message::LocalSignal((PEER_SYNCED_LOCAL_SIGNAL_NAME.to_string(), buffer.to_vec()))
 }
 
-pub(super) fn create_new_peers_created_local_signal(public_keys: Vec<[u8; 32]>) -> Message {
-    let message = NewPeersCreatedMessage { public_keys };
+pub(super) fn create_new_peers_created_local_signal(
+    doc_discovery_key: [u8; 32],
+    public_keys: Vec<[u8; 32]>,
+) -> Message {
+    let message = NewPeersCreatedMessage {
+        doc_discovery_key,
+        public_keys,
+    };
     let mut enc_state = State::new();
     enc_state.preencode(&message);
     let mut buffer = enc_state.create_buffer();

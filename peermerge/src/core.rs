@@ -76,21 +76,42 @@ where
         self.name.clone()
     }
 
-    pub fn id(&self) -> DocumentId {
+    pub(crate) fn id(&self) -> DocumentId {
         self.doc_discovery_key.clone()
     }
 
-    pub fn root_feed(&self) -> Arc<Mutex<Feed<U>>> {
+    pub(crate) fn root_feed(&self) -> Arc<Mutex<Feed<U>>> {
         self.feeds.get(&self.doc_discovery_key).unwrap().clone()
     }
 
-    // pub fn leaf_feeds(&self) -> Arc<Mutex<Feed<U>>> {
-    //     self.feeds
-    //         .iter()
-    //         .filter(|multi| multi.key() != &self.doc_discovery_key)
-    //         .map(|feed| feed.clone())
-    //         .collect()
-    // }
+    pub(crate) fn leaf_feeds(&self) -> Vec<Arc<Mutex<Feed<U>>>> {
+        self.feeds
+            .iter()
+            .filter(|multi| multi.key() != &self.doc_discovery_key)
+            .map(|multi| multi.value().clone())
+            .collect()
+    }
+
+    pub(crate) fn leaf_feed(&self, discovery_key: &[u8; 32]) -> Option<Arc<Mutex<Feed<U>>>> {
+        if discovery_key == &self.doc_discovery_key {
+            return None;
+        }
+        self.feeds
+            .iter()
+            .find(|multi| multi.key() == discovery_key)
+            .map(|multi| multi.value().clone())
+    }
+
+    pub(crate) async fn public_keys(&self) -> (Option<[u8; 32]>, Vec<[u8; 32]>) {
+        let state = self.doc_state.lock().await;
+        let state = state.state();
+        let peer_public_keys: Vec<[u8; 32]> = state
+            .peers
+            .iter()
+            .map(|peer| peer.public_key.clone())
+            .collect();
+        (state.write_public_key, peer_public_keys)
+    }
 
     #[instrument(skip(self))]
     pub async fn watch(&mut self, ids: Vec<ObjId>) {
@@ -357,7 +378,7 @@ where
         let doc_feed = self.feeds.get(&self.doc_discovery_key).unwrap();
         let mut doc_feed = doc_feed.lock().await;
         doc_feed
-            .notify_new_peers_created(public_keys)
+            .notify_new_peers_created(self.doc_discovery_key.clone(), public_keys)
             .await
             .unwrap();
     }
@@ -1287,7 +1308,7 @@ async fn notify_new_peers_created<T>(
     let doc_feed = feeds.get(doc_discovery_key).unwrap();
     let mut doc_feed = doc_feed.lock().await;
     doc_feed
-        .notify_new_peers_created(public_keys)
+        .notify_new_peers_created(doc_discovery_key.clone(), public_keys)
         .await
         .unwrap();
 }

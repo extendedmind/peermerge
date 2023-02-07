@@ -250,16 +250,19 @@ impl CompactEncoding<BroadcastMessage> for State {
 
 impl CompactEncoding<NewPeersCreatedMessage> for State {
     fn preencode(&mut self, value: &NewPeersCreatedMessage) {
+        self.end += 32;
         preencode_fixed_32_byte_vec(self, &value.public_keys);
     }
 
     fn encode(&mut self, value: &NewPeersCreatedMessage, buffer: &mut [u8]) {
+        self.encode_fixed_32(&value.doc_discovery_key, buffer);
         encode_fixed_32_byte_vec(self, &value.public_keys, buffer);
     }
 
     fn decode(&mut self, buffer: &[u8]) -> NewPeersCreatedMessage {
+        let doc_discovery_key: [u8; 32] = self.decode_fixed_32(buffer).to_vec().try_into().unwrap();
         let public_keys: Vec<[u8; 32]> = decode_fixed_32_byte_vec(self, buffer);
-        NewPeersCreatedMessage::new(public_keys)
+        NewPeersCreatedMessage::new(doc_discovery_key, public_keys)
     }
 }
 

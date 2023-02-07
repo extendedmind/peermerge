@@ -17,11 +17,15 @@ impl BroadcastMessage {
 /// public keys of created peer hypercores.
 #[derive(Debug)]
 pub(crate) struct NewPeersCreatedMessage {
+    pub(crate) doc_discovery_key: [u8; 32],
     pub(crate) public_keys: Vec<[u8; 32]>,
 }
 impl NewPeersCreatedMessage {
-    pub fn new(public_keys: Vec<[u8; 32]>) -> Self {
-        Self { public_keys }
+    pub fn new(doc_discovery_key: [u8; 32], public_keys: Vec<[u8; 32]>) -> Self {
+        Self {
+            doc_discovery_key,
+            public_keys,
+        }
     }
 }
 
