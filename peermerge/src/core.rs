@@ -156,6 +156,43 @@ where
     }
 
     #[instrument(skip(self, obj, prop), fields(obj = obj.as_ref().to_string(), peer_name = self.name))]
+    pub async fn get_scalar<O: AsRef<ObjId>, P: Into<Prop>>(
+        &self,
+        obj: O,
+        prop: P,
+    ) -> anyhow::Result<Option<ScalarValue>> {
+        if self.proxy {
+            panic!("Can not get id on a proxy");
+        }
+        let doc_state = &self.doc_state;
+        let result = {
+            let doc_state = doc_state.lock().await;
+            if let Some(doc) = doc_state.automerge_doc() {
+                match doc.get(obj, prop) {
+                    Ok(result) => {
+                        if let Some(result) = result {
+                            if let Some(value) = result.0.to_scalar() {
+                                Some(value.clone())
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    }
+                    Err(_err) => {
+                        // TODO: Some errors should probably be errors
+                        None
+                    }
+                }
+            } else {
+                unimplemented!("TODO: No proper error code for trying to get id from doc before a document is synced");
+            }
+        };
+        Ok(result)
+    }
+
+    #[instrument(skip(self, obj, prop), fields(obj = obj.as_ref().to_string(), peer_name = self.name))]
     pub async fn get<O: AsRef<ObjId>, P: Into<Prop>>(
         &self,
         obj: O,
@@ -542,7 +579,7 @@ impl Peermerge<RandomAccessMemory, FeedMemoryPersistence> {
         let content = DocumentContent::new(
             result.data,
             vec![DocumentCursor::new(result.discovery_key.clone(), length)],
-            result.doc,
+            result.automerge_doc,
         );
         Self::new_memory(
             Some((
@@ -900,7 +937,7 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
         let content = DocumentContent::new(
             result.data,
             vec![DocumentCursor::new(result.discovery_key.clone(), length)],
-            result.doc,
+            result.automerge_doc,
         );
 
         Self::new_disk(
@@ -1131,24 +1168,7 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
         let task_span = tracing::debug_span!("call_on_peer_event_memory").or_current();
         let encryption_key_for_task = self.encryption_key.clone();
         let proxy = self.proxy;
-        #[cfg(not(target_arch = "wasm32"))]
         task::spawn(async move {
-            let _entered = task_span.enter();
-            on_peer_event_disk(
-                &discovery_key_for_task,
-                peer_event_receiver,
-                state_event_sender_for_task,
-                doc_state,
-                feeds_for_task,
-                &name_for_task,
-                proxy,
-                &encryption_key_for_task,
-                &data_root_dir,
-            )
-            .await;
-        });
-        #[cfg(target_arch = "wasm32")]
-        spawn_local(async move {
             let _entered = task_span.enter();
             on_peer_event_disk(
                 &discovery_key_for_task,
@@ -1172,6 +1192,36 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
         )
         .await?;
         Ok(())
+    }
+
+    #[instrument(level = "debug", skip_all, fields(peer_name = self.name))]
+    pub(crate) async fn process_new_peers_broadcasted_disk(
+        &mut self,
+        public_keys: Vec<[u8; 32]>,
+    ) -> bool {
+        let changed = {
+            let mut doc_state = self.doc_state.lock().await;
+            doc_state
+                .add_peer_public_keys_to_state(public_keys.clone())
+                .await
+        };
+        if changed {
+            {
+                // Create and insert all new feeds
+                create_and_insert_read_disk_feeds(
+                    public_keys.clone(),
+                    self.feeds.clone(),
+                    self.proxy,
+                    &self.encryption_key,
+                    &self.prefix,
+                )
+                .await;
+            }
+            {
+                self.notify_new_peers_created(public_keys).await;
+            }
+        }
+        changed
     }
 
     async fn new_disk(
@@ -1491,7 +1541,7 @@ async fn process_peer_event<T>(
 struct PrepareCreateResult {
     key_pair: Keypair,
     discovery_key: [u8; 32],
-    doc: AutomergeDoc,
+    automerge_doc: AutomergeDoc,
     doc_public_key: [u8; 32],
     data: Vec<u8>,
 }
@@ -1502,12 +1552,13 @@ async fn prepare_create<P: Into<Prop>, V: Into<ScalarValue>>(
 ) -> PrepareCreateResult {
     // Generate a key pair, its discovery key and the public key string
     let (key_pair, discovery_key) = generate_keys();
-    let (doc, data) = init_automerge_doc_with_root_scalars(name, &discovery_key, root_scalars);
+    let (automerge_doc, data) =
+        init_automerge_doc_with_root_scalars(name, &discovery_key, root_scalars);
     let doc_public_key = *key_pair.public.as_bytes();
     PrepareCreateResult {
         key_pair,
         discovery_key,
-        doc,
+        automerge_doc,
         doc_public_key,
         data,
     }

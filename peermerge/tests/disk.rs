@@ -4,10 +4,11 @@ use futures::{
     stream::StreamExt,
 };
 use peermerge::{
-    doc_url_encrypted, FeedDiskPersistence, Patch, Peermerge, StateEvent, StateEventContent::*,
+    doc_url_encrypted, DocumentId, FeedDiskPersistence, Patch, PeermergeRepository, StateEvent,
+    StateEventContent::*,
 };
 use random_access_disk::RandomAccessDisk;
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 use tempfile::Builder;
 use test_log::test;
 use tracing::{info, instrument};
@@ -39,10 +40,12 @@ async fn disk_two_peers(encrypted: bool) -> anyhow::Result<()> {
         .tempdir()
         .unwrap()
         .into_path();
-    let peermerge_creator =
-        Peermerge::create_new_disk("creator", vec![("version", 1)], encrypted, &creator_dir).await;
-    let doc_url = peermerge_creator.doc_url();
-    let encryption_key = peermerge_creator.encryption_key();
+    let mut peermerge_creator = PeermergeRepository::create_new_disk("creator", &creator_dir).await;
+    let creator_doc_id = peermerge_creator
+        .create_new_document_disk(vec![("version", 1)], encrypted)
+        .await;
+    let doc_url = peermerge_creator.doc_url(&creator_doc_id);
+    let encryption_key = peermerge_creator.encryption_key(&creator_doc_id);
     assert_eq!(doc_url_encrypted(&doc_url), encrypted);
     assert_eq!(encryption_key.is_some(), encrypted);
 
@@ -54,26 +57,44 @@ async fn disk_two_peers(encrypted: bool) -> anyhow::Result<()> {
         .tempdir()
         .unwrap()
         .into_path();
-    let peermerge_joiner =
-        Peermerge::attach_writer_disk("joiner", &doc_url, &encryption_key, &joiner_dir).await;
+    let mut peermerge_joiner = PeermergeRepository::create_new_disk("joiner", &joiner_dir).await;
+    let joiner_doc_id = peermerge_joiner
+        .attach_writer_document_disk(&doc_url, &encryption_key)
+        .await;
 
     run_disk_two_peers(
         peermerge_creator,
+        creator_doc_id.clone(),
         peermerge_joiner,
+        joiner_doc_id.clone(),
         vec![("version".to_string(), 1)],
     )
     .await?;
 
     // Reopen the disk peermerges from disk, assert that opening works with new scalar
 
-    let mut peermerge_creator = Peermerge::open_disk(&encryption_key, &creator_dir).await;
-    peermerge_creator.put_scalar(ROOT, "open", 2).await?;
+    let mut creator_encryption_keys = HashMap::new();
+    if let Some(encryption_key) = encryption_key.as_ref() {
+        creator_encryption_keys.insert(creator_doc_id.clone(), encryption_key.clone());
+    }
+    let mut peermerge_creator =
+        PeermergeRepository::open_disk(creator_encryption_keys, &creator_dir).await;
+    peermerge_creator
+        .put_scalar(&creator_doc_id, ROOT, "open", 2)
+        .await?;
 
-    let peermerge_joiner = Peermerge::open_disk(&encryption_key, &joiner_dir).await;
+    let mut joiner_encryption_keys = HashMap::new();
+    if let Some(encryption_key) = encryption_key.as_ref() {
+        joiner_encryption_keys.insert(joiner_doc_id.clone(), encryption_key.clone());
+    }
+    let peermerge_joiner =
+        PeermergeRepository::open_disk(joiner_encryption_keys, &joiner_dir).await;
 
     run_disk_two_peers(
         peermerge_creator,
+        creator_doc_id,
         peermerge_joiner,
+        joiner_doc_id,
         vec![("version".to_string(), 1), ("open".to_string(), 2)],
     )
     .await?;
@@ -82,8 +103,10 @@ async fn disk_two_peers(encrypted: bool) -> anyhow::Result<()> {
 }
 
 async fn run_disk_two_peers(
-    peermerge_creator: Peermerge<RandomAccessDisk, FeedDiskPersistence>,
-    peermerge_joiner: Peermerge<RandomAccessDisk, FeedDiskPersistence>,
+    peermerge_creator: PeermergeRepository<RandomAccessDisk, FeedDiskPersistence>,
+    creator_doc_id: DocumentId,
+    peermerge_joiner: PeermergeRepository<RandomAccessDisk, FeedDiskPersistence>,
+    joiner_doc_id: DocumentId,
     expected_scalars: Vec<(String, u64)>,
 ) -> anyhow::Result<()> {
     let (mut proto_responder, mut proto_initiator) = create_pair_memory().await;
@@ -118,6 +141,7 @@ async fn run_disk_two_peers(
     task::spawn(async move {
         process_joiner_state_event(
             peermerge_joiner,
+            joiner_doc_id,
             joiner_state_event_receiver,
             assert_sync_joiner,
             expected_scalars_for_task,
@@ -128,6 +152,7 @@ async fn run_disk_two_peers(
 
     process_creator_state_events(
         peermerge_creator,
+        creator_doc_id,
         creator_state_event_receiver,
         assert_sync_creator,
         expected_scalars,
@@ -138,7 +163,8 @@ async fn run_disk_two_peers(
 
 #[instrument(skip_all)]
 async fn process_joiner_state_event(
-    peermerge: Peermerge<RandomAccessDisk, FeedDiskPersistence>,
+    peermerge: PeermergeRepository<RandomAccessDisk, FeedDiskPersistence>,
+    doc_id: DocumentId,
     mut joiner_state_event_receiver: UnboundedReceiver<StateEvent>,
     assert_sync: BoolCondvar,
     expected_scalars: Vec<(String, u64)>,
@@ -154,7 +180,7 @@ async fn process_joiner_state_event(
                 assert_eq!(name, "creator");
                 assert_eq!(len, expected_scalars.len() as u64);
                 for (field, expected) in &expected_scalars {
-                    let (value, _) = peermerge.get(ROOT, field).await?.unwrap();
+                    let value = peermerge.get_scalar(&doc_id, ROOT, field).await?.unwrap();
                     assert_eq!(value.to_u64().unwrap(), *expected);
                 }
                 notify_one_condvar(assert_sync.clone()).await;
@@ -174,7 +200,8 @@ async fn process_joiner_state_event(
 
 #[instrument(skip_all)]
 async fn process_creator_state_events(
-    peermerge: Peermerge<RandomAccessDisk, FeedDiskPersistence>,
+    peermerge: PeermergeRepository<RandomAccessDisk, FeedDiskPersistence>,
+    doc_id: DocumentId,
     mut creator_state_event_receiver: UnboundedReceiver<StateEvent>,
     assert_sync: BoolCondvar,
     expected_scalars: Vec<(String, u64)>,
@@ -189,7 +216,7 @@ async fn process_creator_state_events(
                 assert_eq!(name, "joiner");
                 assert_eq!(len, expected_scalars.len() as u64);
                 for (field, expected) in &expected_scalars {
-                    let (value, _) = peermerge.get(ROOT, field).await?.unwrap();
+                    let value = peermerge.get_scalar(&doc_id, ROOT, field).await?.unwrap();
                     assert_eq!(value.to_u64().unwrap(), *expected);
                 }
                 wait_for_condvar(assert_sync).await;
@@ -199,7 +226,7 @@ async fn process_creator_state_events(
                 if expected_scalars.len() > 1 {
                     assert_eq!(len, expected_scalars.len() as u64);
                     for (field, expected) in &expected_scalars {
-                        let (value, _) = peermerge.get(ROOT, field).await?.unwrap();
+                        let value = peermerge.get_scalar(&doc_id, ROOT, field).await?.unwrap();
                         assert_eq!(value.to_u64().unwrap(), *expected);
                     }
                     wait_for_condvar(assert_sync).await;

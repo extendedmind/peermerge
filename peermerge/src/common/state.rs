@@ -1,7 +1,7 @@
 use automerge::ObjId;
 use std::fmt::Debug;
 
-use crate::automerge::AutomergeDoc;
+use crate::{automerge::AutomergeDoc, DocumentId};
 
 use super::{cipher::doc_url_to_public_key, keys::discovery_key_from_public_key};
 
@@ -9,13 +9,19 @@ use super::{cipher::doc_url_to_public_key, keys::discovery_key_from_public_key};
 #[derive(Debug)]
 pub(crate) struct RepositoryState {
     pub(crate) version: u8,
-    pub(crate) doc_public_keys: Vec<[u8; 32]>,
+    pub(crate) name: String, // This peer's name
+    pub(crate) document_ids: Vec<DocumentId>,
 }
-impl Default for RepositoryState {
-    fn default() -> Self {
+impl RepositoryState {
+    pub fn new(name: &str, document_ids: Vec<DocumentId>) -> Self {
+        Self::new_with_version(1, name.to_string(), document_ids)
+    }
+
+    pub fn new_with_version(version: u8, name: String, document_ids: Vec<DocumentId>) -> Self {
         Self {
-            version: 1,
-            doc_public_keys: Vec::new(),
+            version,
+            name,
+            document_ids,
         }
     }
 }

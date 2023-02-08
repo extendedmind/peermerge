@@ -12,21 +12,21 @@ use super::state::{DocumentContent, DocumentCursor, DocumentPeerState};
 impl CompactEncoding<RepositoryState> for State {
     fn preencode(&mut self, value: &RepositoryState) {
         self.preencode(&value.version);
-        preencode_fixed_32_byte_vec(self, &value.doc_public_keys);
+        self.preencode(&value.name);
+        preencode_fixed_32_byte_vec(self, &value.document_ids);
     }
 
     fn encode(&mut self, value: &RepositoryState, buffer: &mut [u8]) {
         self.encode(&value.version, buffer);
-        encode_fixed_32_byte_vec(self, &value.doc_public_keys, buffer);
+        self.encode(&value.name, buffer);
+        encode_fixed_32_byte_vec(self, &value.document_ids, buffer);
     }
 
     fn decode(&mut self, buffer: &[u8]) -> RepositoryState {
         let version: u8 = self.decode(buffer);
-        let doc_public_keys = decode_fixed_32_byte_vec(self, buffer);
-        RepositoryState {
-            version,
-            doc_public_keys,
-        }
+        let name: String = self.decode(buffer);
+        let document_ids = decode_fixed_32_byte_vec(self, buffer);
+        RepositoryState::new_with_version(version, name, document_ids)
     }
 }
 

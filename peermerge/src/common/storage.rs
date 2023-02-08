@@ -9,6 +9,7 @@ use std::{fmt::Debug, path::PathBuf};
 use crate::{
     automerge::{AutomergeDoc, UnappliedEntries},
     common::state::{DocumentState, RepositoryState},
+    DocumentId,
 };
 
 use super::{
@@ -28,8 +29,8 @@ impl<T> RepositoryStateWrapper<T>
 where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send,
 {
-    pub async fn add_public_key_to_state(&mut self, public_key: &[u8; 32]) {
-        self.state.doc_public_keys.push(public_key.clone());
+    pub async fn add_document_id_to_state(&mut self, document_id: &DocumentId) {
+        self.state.document_ids.push(document_id.clone());
         write_repo_state(&self.state, &mut self.storage).await;
     }
 
@@ -39,8 +40,8 @@ where
 }
 
 impl RepositoryStateWrapper<RandomAccessMemory> {
-    pub async fn new_memory() -> Self {
-        let state = RepositoryState::default();
+    pub async fn new_memory(name: &str) -> Self {
+        let state = RepositoryState::new(name, vec![]);
         let mut storage = RandomAccessMemory::default();
         write_repo_state(&state, &mut storage).await;
         Self { state, storage }
@@ -49,13 +50,30 @@ impl RepositoryStateWrapper<RandomAccessMemory> {
 
 #[cfg(not(target_arch = "wasm32"))]
 impl RepositoryStateWrapper<RandomAccessDisk> {
-    pub async fn open_disk(data_root_dir: &PathBuf) -> Self {
-        let state = RepositoryState::default();
-        let state_path = data_root_dir.join(PathBuf::from("peermerge_state.bin"));
+    pub async fn new_disk(name: &str, data_root_dir: &PathBuf) -> Self {
+        let state = RepositoryState::new(name, vec![]);
+        let state_path = get_peermerge_state_path(data_root_dir);
         let mut storage = RandomAccessDisk::builder(state_path).build().await.unwrap();
         write_repo_state(&state, &mut storage).await;
         Self { state, storage }
     }
+
+    pub async fn open_disk(data_root_dir: &PathBuf) -> Self {
+        let state_path = get_peermerge_state_path(data_root_dir);
+        let mut storage = RandomAccessDisk::builder(state_path).build().await.unwrap();
+        let len = storage.len().await.expect("Could not get file length");
+        let buffer = storage
+            .read(0, len)
+            .await
+            .expect("Could not read file content");
+        let mut dec_state = State::from_buffer(&buffer);
+        let state: RepositoryState = dec_state.decode(&buffer);
+        Self { state, storage }
+    }
+}
+
+fn get_peermerge_state_path(data_root_dir: &PathBuf) -> PathBuf {
+    data_root_dir.join(PathBuf::from("peermerge_state.bin"))
 }
 
 #[derive(Debug)]
@@ -212,17 +230,16 @@ impl DocStateWrapper<RandomAccessMemory> {
 impl DocStateWrapper<RandomAccessDisk> {
     pub async fn new_disk(
         doc_url: &str,
-        peer_name: &str,
+        name: &str,
         proxy: bool,
         write_public_key: Option<[u8; 32]>,
         peer_public_keys: Vec<[u8; 32]>,
         content: Option<DocumentContent>,
         data_root_dir: &PathBuf,
     ) -> Self {
-        let mut state =
-            DocumentState::new(doc_url, peer_name, proxy, vec![], write_public_key, content);
+        let mut state = DocumentState::new(doc_url, name, proxy, vec![], write_public_key, content);
         add_peer_public_keys_to_doc_state(&mut state, peer_public_keys);
-        let state_path = get_state_path(data_root_dir);
+        let state_path = get_document_state_path(data_root_dir);
         let mut storage = RandomAccessDisk::builder(state_path).build().await.unwrap();
         write_doc_state(&state, &mut storage).await;
         Self {
@@ -233,7 +250,7 @@ impl DocStateWrapper<RandomAccessDisk> {
     }
 
     pub async fn open_disk(data_root_dir: &PathBuf) -> Self {
-        let state_path = get_state_path(data_root_dir);
+        let state_path = get_document_state_path(data_root_dir);
         let mut storage = RandomAccessDisk::builder(state_path).build().await.unwrap();
         let len = storage.len().await.expect("Could not get file length");
         let buffer = storage
@@ -250,8 +267,8 @@ impl DocStateWrapper<RandomAccessDisk> {
     }
 }
 
-fn get_state_path(data_root_dir: &PathBuf) -> PathBuf {
-    data_root_dir.join(PathBuf::from("peermerge_state.bin"))
+fn get_document_state_path(data_root_dir: &PathBuf) -> PathBuf {
+    data_root_dir.join(PathBuf::from("document_state.bin"))
 }
 
 async fn write_repo_state<T>(repo_state: &RepositoryState, storage: &mut T)
