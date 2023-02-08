@@ -46,11 +46,11 @@ use crate::{
     FeedMemoryPersistence, FeedPersistence, StateEvent,
 };
 
-/// Peermerge is the main abstraction.
+/// Document represents a single Automerge doc shared via feeds.
 #[derive(derivative::Derivative)]
 #[derivative(Clone(bound = ""))]
 #[derive(Debug)]
-pub struct Peermerge<T, U>
+pub struct Document<T, U>
 where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send,
     U: FeedPersistence,
@@ -67,7 +67,7 @@ where
     encryption_key: Option<Vec<u8>>,
 }
 
-impl<T, U> Peermerge<T, U>
+impl<T, U> Document<T, U>
 where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send + 'static,
     U: FeedPersistence,
@@ -559,7 +559,7 @@ where
 //
 // Memory
 
-impl Peermerge<RandomAccessMemory, FeedMemoryPersistence> {
+impl Document<RandomAccessMemory, FeedMemoryPersistence> {
     pub async fn create_new_memory<P: Into<Prop>, V: Into<ScalarValue>>(
         name: &str,
         root_scalars: Vec<(P, V)>,
@@ -914,7 +914,7 @@ async fn create_and_insert_read_memory_feeds(
 // Disk
 
 #[cfg(not(target_arch = "wasm32"))]
-impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
+impl Document<RandomAccessDisk, FeedDiskPersistence> {
     pub async fn create_new_disk<P: Into<Prop>, V: Into<ScalarValue>>(
         name: &str,
         root_scalars: Vec<(P, V)>,

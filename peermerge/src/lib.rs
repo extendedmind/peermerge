@@ -6,7 +6,7 @@ mod feed;
 
 pub use crate::common::cipher::doc_url_encrypted;
 pub use crate::common::{StateEvent, StateEventContent};
-pub use crate::core::PeermergeRepository;
+pub use crate::core::Peermerge;
 pub use ::automerge::*;
 pub use feed::{Protocol, ProtocolBuilder};
 use futures::{AsyncRead, AsyncWrite};

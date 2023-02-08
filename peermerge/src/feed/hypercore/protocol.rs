@@ -18,7 +18,7 @@ use tokio::sync::Mutex;
 use super::{messaging::NEW_PEERS_CREATED_LOCAL_SIGNAL_NAME, HypercoreWrapper};
 use crate::common::keys::discovery_key_from_public_key;
 use crate::common::{message::NewPeersCreatedMessage, storage::DocStateWrapper, PeerEvent};
-use crate::document::Peermerge;
+use crate::document::Document;
 use crate::{DocumentId, FeedPersistence, IO};
 
 #[instrument(
@@ -150,7 +150,7 @@ where
 #[instrument(level = "debug", skip_all, fields(is_initiator = protocol.is_initiator()))]
 pub(crate) async fn on_protocol_new<T, U, V>(
     protocol: &mut Protocol<V>,
-    documents: Arc<DashMap<DocumentId, Peermerge<T, U>>>,
+    documents: Arc<DashMap<DocumentId, Document<T, U>>>,
     peer_event_sender: &mut UnboundedSender<PeerEvent>,
 ) -> anyhow::Result<()>
 where
@@ -297,7 +297,7 @@ where
 
 fn get_openeable_hypercore_for_discovery_key<T, U>(
     discovery_key: &[u8; 32],
-    documents: &Arc<DashMap<DocumentId, Peermerge<T, U>>>,
+    documents: &Arc<DashMap<DocumentId, Document<T, U>>>,
     opened_documents: &Vec<DocumentId>,
 ) -> Option<Arc<Mutex<HypercoreWrapper<U>>>>
 where
@@ -320,9 +320,9 @@ where
 
 fn get_document_and_openeable_hypercore_for_discovery_key<T, U>(
     discovery_key: &[u8; 32],
-    documents: &Arc<DashMap<DocumentId, Peermerge<T, U>>>,
+    documents: &Arc<DashMap<DocumentId, Document<T, U>>>,
     opened_documents: &Vec<DocumentId>,
-) -> Option<(Peermerge<T, U>, Arc<Mutex<HypercoreWrapper<U>>>, bool)>
+) -> Option<(Document<T, U>, Arc<Mutex<HypercoreWrapper<U>>>, bool)>
 where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send + 'static,
     U: FeedPersistence,

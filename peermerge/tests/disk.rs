@@ -4,7 +4,7 @@ use futures::{
     stream::StreamExt,
 };
 use peermerge::{
-    doc_url_encrypted, DocumentId, FeedDiskPersistence, Patch, PeermergeRepository, StateEvent,
+    doc_url_encrypted, DocumentId, FeedDiskPersistence, Patch, Peermerge, StateEvent,
     StateEventContent::*,
 };
 use random_access_disk::RandomAccessDisk;
@@ -45,7 +45,7 @@ async fn disk_two_peers(encrypted: bool) -> anyhow::Result<()> {
     // std::fs::create_dir_all(&debug).unwrap();
     // let creator_dir = std::path::Path::new(&debug).to_path_buf();
 
-    let mut peermerge_creator = PeermergeRepository::create_new_disk("creator", &creator_dir).await;
+    let mut peermerge_creator = Peermerge::create_new_disk("creator", &creator_dir).await;
     let creator_doc_id = peermerge_creator
         .create_new_document_disk(vec![("version", 1)], encrypted)
         .await;
@@ -67,7 +67,7 @@ async fn disk_two_peers(encrypted: bool) -> anyhow::Result<()> {
     // std::fs::create_dir_all(&debug).unwrap();
     // let joiner_dir = std::path::Path::new(&debug).to_path_buf();
 
-    let mut peermerge_joiner = PeermergeRepository::create_new_disk("joiner", &joiner_dir).await;
+    let mut peermerge_joiner = Peermerge::create_new_disk("joiner", &joiner_dir).await;
     let joiner_doc_id = peermerge_joiner
         .attach_writer_document_disk(&doc_url, &encryption_key)
         .await;
@@ -87,8 +87,7 @@ async fn disk_two_peers(encrypted: bool) -> anyhow::Result<()> {
     if let Some(encryption_key) = encryption_key.as_ref() {
         creator_encryption_keys.insert(creator_doc_id.clone(), encryption_key.clone());
     }
-    let mut peermerge_creator =
-        PeermergeRepository::open_disk(creator_encryption_keys, &creator_dir).await;
+    let mut peermerge_creator = Peermerge::open_disk(creator_encryption_keys, &creator_dir).await;
     peermerge_creator
         .put_scalar(&creator_doc_id, ROOT, "open", 2)
         .await?;
@@ -97,8 +96,7 @@ async fn disk_two_peers(encrypted: bool) -> anyhow::Result<()> {
     if let Some(encryption_key) = encryption_key.as_ref() {
         joiner_encryption_keys.insert(joiner_doc_id.clone(), encryption_key.clone());
     }
-    let peermerge_joiner =
-        PeermergeRepository::open_disk(joiner_encryption_keys, &joiner_dir).await;
+    let peermerge_joiner = Peermerge::open_disk(joiner_encryption_keys, &joiner_dir).await;
 
     run_disk_two_peers(
         peermerge_creator,
@@ -113,9 +111,9 @@ async fn disk_two_peers(encrypted: bool) -> anyhow::Result<()> {
 }
 
 async fn run_disk_two_peers(
-    peermerge_creator: PeermergeRepository<RandomAccessDisk, FeedDiskPersistence>,
+    peermerge_creator: Peermerge<RandomAccessDisk, FeedDiskPersistence>,
     creator_doc_id: DocumentId,
-    peermerge_joiner: PeermergeRepository<RandomAccessDisk, FeedDiskPersistence>,
+    peermerge_joiner: Peermerge<RandomAccessDisk, FeedDiskPersistence>,
     joiner_doc_id: DocumentId,
     expected_scalars: Vec<(String, u64)>,
 ) -> anyhow::Result<()> {
@@ -173,7 +171,7 @@ async fn run_disk_two_peers(
 
 #[instrument(skip_all)]
 async fn process_joiner_state_event(
-    peermerge: PeermergeRepository<RandomAccessDisk, FeedDiskPersistence>,
+    peermerge: Peermerge<RandomAccessDisk, FeedDiskPersistence>,
     doc_id: DocumentId,
     mut joiner_state_event_receiver: UnboundedReceiver<StateEvent>,
     assert_sync: BoolCondvar,
@@ -210,7 +208,7 @@ async fn process_joiner_state_event(
 
 #[instrument(skip_all)]
 async fn process_creator_state_events(
-    peermerge: PeermergeRepository<RandomAccessDisk, FeedDiskPersistence>,
+    peermerge: Peermerge<RandomAccessDisk, FeedDiskPersistence>,
     doc_id: DocumentId,
     mut creator_state_event_receiver: UnboundedReceiver<StateEvent>,
     assert_sync: BoolCondvar,

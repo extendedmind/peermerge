@@ -2,7 +2,7 @@ use automerge::{ObjId, ROOT};
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use futures::stream::StreamExt;
 use peermerge::{
-    DocumentId, FeedMemoryPersistence, Patch, PeermergeRepository, StateEvent, StateEventContent::*,
+    DocumentId, FeedMemoryPersistence, Patch, Peermerge, StateEvent, StateEventContent::*,
 };
 use random_access_memory::RandomAccessMemory;
 use std::collections::HashMap;
@@ -41,7 +41,7 @@ async fn memory_three_writers() -> anyhow::Result<()> {
         UnboundedSender<StateEvent>,
         UnboundedReceiver<StateEvent>,
     ) = unbounded();
-    let mut peermerge_creator = PeermergeRepository::new_memory("creator").await;
+    let mut peermerge_creator = Peermerge::new_memory("creator").await;
     let creator_doc_id = peermerge_creator
         .create_new_document_memory(vec![("version", 1)], false)
         .await;
@@ -73,7 +73,7 @@ async fn memory_three_writers() -> anyhow::Result<()> {
         .unwrap();
     });
 
-    let mut peermerge_joiner = PeermergeRepository::new_memory("joiner").await;
+    let mut peermerge_joiner = Peermerge::new_memory("joiner").await;
     let joiner_doc_id = peermerge_joiner
         .attach_writer_document_memory(&peermerge_creator.doc_url(&creator_doc_id), &None)
         .await;
@@ -124,7 +124,7 @@ async fn memory_three_writers() -> anyhow::Result<()> {
 
 #[instrument(skip_all)]
 async fn process_joiner_state_event(
-    mut peermerge: PeermergeRepository<RandomAccessMemory, FeedMemoryPersistence>,
+    mut peermerge: Peermerge<RandomAccessMemory, FeedMemoryPersistence>,
     doc_id: DocumentId,
     mut joiner_state_event_receiver: UnboundedReceiver<StateEvent>,
     cork_sync: BoolCondvar,
@@ -240,7 +240,7 @@ async fn process_joiner_state_event(
 
 #[instrument(skip_all)]
 async fn process_creator_state_events(
-    mut peermerge: PeermergeRepository<RandomAccessMemory, FeedMemoryPersistence>,
+    mut peermerge: Peermerge<RandomAccessMemory, FeedMemoryPersistence>,
     doc_id: DocumentId,
     creator_state_event_sender: UnboundedSender<StateEvent>,
     mut creator_state_event_receiver: UnboundedReceiver<StateEvent>,
@@ -342,8 +342,7 @@ async fn process_creator_state_events(
                         UnboundedSender<StateEvent>,
                         UnboundedReceiver<StateEvent>,
                     ) = unbounded();
-                    let mut peermerge_latecomer =
-                        PeermergeRepository::new_memory("latecomer").await;
+                    let mut peermerge_latecomer = Peermerge::new_memory("latecomer").await;
                     let latecomer_doc_id = peermerge_latecomer
                         .attach_writer_document_memory(&peermerge.doc_url(&doc_id), &None)
                         .await;
@@ -407,7 +406,7 @@ async fn process_creator_state_events(
 
 #[instrument(skip_all)]
 async fn process_latecomer_state_event(
-    mut peermerge: PeermergeRepository<RandomAccessMemory, FeedMemoryPersistence>,
+    mut peermerge: Peermerge<RandomAccessMemory, FeedMemoryPersistence>,
     doc_id: DocumentId,
     mut latecomer_state_event_receiver: UnboundedReceiver<StateEvent>,
     append_sync: BoolCondvar,
@@ -483,7 +482,7 @@ async fn process_latecomer_state_event(
 }
 
 async fn connect(
-    mut peermerge: PeermergeRepository<RandomAccessMemory, FeedMemoryPersistence>,
+    mut peermerge: Peermerge<RandomAccessMemory, FeedMemoryPersistence>,
     mut protocol: MemoryProtocol,
     mut state_event_sender: UnboundedSender<StateEvent>,
 ) -> anyhow::Result<()> {
@@ -494,7 +493,7 @@ async fn connect(
 }
 
 async fn assert_text_equals(
-    peermerge: &PeermergeRepository<RandomAccessMemory, FeedMemoryPersistence>,
+    peermerge: &Peermerge<RandomAccessMemory, FeedMemoryPersistence>,
     doc_id: &DocumentId,
     obj: &ObjId,
     expected: &str,
@@ -504,7 +503,7 @@ async fn assert_text_equals(
 }
 
 async fn assert_text_equals_either(
-    peermerge: &PeermergeRepository<RandomAccessMemory, FeedMemoryPersistence>,
+    peermerge: &Peermerge<RandomAccessMemory, FeedMemoryPersistence>,
     doc_id: &DocumentId,
     obj: &ObjId,
     expected_1: &str,

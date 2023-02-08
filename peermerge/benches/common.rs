@@ -4,7 +4,7 @@ use futures::channel::mpsc::{
 use futures::stream::StreamExt;
 use hypercore_protocol::{Duplex, Protocol, ProtocolBuilder};
 use peermerge::{
-    DocumentId, FeedMemoryPersistence, PeermergeRepository, StateEvent, StateEventContent::*, ROOT,
+    DocumentId, FeedMemoryPersistence, Peermerge, StateEvent, StateEventContent::*, ROOT,
 };
 use random_access_memory::RandomAccessMemory;
 
@@ -17,8 +17,8 @@ pub async fn setup_peermerge_mesh(
     peers: usize,
     encrypted: bool,
 ) -> (Vec<Sender<u64>>, UnboundedReceiver<StateEvent>) {
-    let mut peermerge_creator: PeermergeRepository<RandomAccessMemory, FeedMemoryPersistence> =
-        PeermergeRepository::new_memory("p1").await;
+    let mut peermerge_creator: Peermerge<RandomAccessMemory, FeedMemoryPersistence> =
+        Peermerge::new_memory("p1").await;
     let doc_id = peermerge_creator
         .create_new_document_memory(vec![("version", 1)], encrypted)
         .await;
@@ -45,7 +45,7 @@ pub async fn setup_peermerge_mesh(
         });
 
         let peer_name = format!("p{}", i + 1);
-        let mut peermerge_peer = PeermergeRepository::new_memory(&peer_name).await;
+        let mut peermerge_peer = Peermerge::new_memory(&peer_name).await;
         let doc_id = peermerge_peer
             .attach_writer_document_memory(&doc_url, &encryption_key)
             .await;
@@ -118,7 +118,7 @@ async fn create_pair_memory() -> (MemoryProtocol, MemoryProtocol) {
 }
 
 async fn connect(
-    mut peermerge: PeermergeRepository<RandomAccessMemory, FeedMemoryPersistence>,
+    mut peermerge: Peermerge<RandomAccessMemory, FeedMemoryPersistence>,
     mut protocol: MemoryProtocol,
     mut state_event_sender: UnboundedSender<StateEvent>,
 ) {
@@ -130,7 +130,7 @@ async fn connect(
 
 async fn append_value(
     peer_name: &str,
-    mut peermerge: PeermergeRepository<RandomAccessMemory, FeedMemoryPersistence>,
+    mut peermerge: Peermerge<RandomAccessMemory, FeedMemoryPersistence>,
     doc_id: DocumentId,
     mut append_index_receiver: Receiver<u64>,
 ) {

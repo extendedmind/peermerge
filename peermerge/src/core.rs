@@ -35,13 +35,13 @@ use crate::{
     common::{cipher::encode_document_id, storage::RepositoryStateWrapper},
     StateEventContent,
 };
-use crate::{document::Peermerge, StateEvent};
+use crate::{document::Document, StateEvent};
 
-/// PeermergeRepository is a store for multiple Peermerges
+/// Peermerge is the main abstraction and a store for multiple documents.
 #[derive(derivative::Derivative)]
 #[derivative(Clone(bound = ""))]
 #[derive(Debug)]
-pub struct PeermergeRepository<T, U>
+pub struct Peermerge<T, U>
 where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send,
     U: FeedPersistence,
@@ -53,12 +53,12 @@ where
     /// Current storable state
     repository_state: Arc<Mutex<RepositoryStateWrapper<T>>>,
     /// Created documents
-    documents: Arc<DashMap<DocumentId, Peermerge<T, U>>>,
+    documents: Arc<DashMap<DocumentId, Document<T, U>>>,
     /// Sender for events
     state_event_sender: Arc<Mutex<Option<UnboundedSender<StateEvent>>>>,
 }
 
-impl<T, U> PeermergeRepository<T, U>
+impl<T, U> Peermerge<T, U>
 where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send + 'static,
     U: FeedPersistence,
@@ -209,7 +209,7 @@ where
         }
     }
 
-    async fn add_document(&mut self, document: Peermerge<T, U>) -> DocumentId {
+    async fn add_document(&mut self, document: Document<T, U>) -> DocumentId {
         let mut state = self.repository_state.lock().await;
         let id = document.id();
         self.documents.insert(id, document);
@@ -222,7 +222,7 @@ where
 //
 // Memory
 
-impl PeermergeRepository<RandomAccessMemory, FeedMemoryPersistence> {
+impl Peermerge<RandomAccessMemory, FeedMemoryPersistence> {
     pub async fn new_memory(name: &str) -> Self {
         let state = RepositoryStateWrapper::new_memory(name).await;
         Self {
@@ -239,7 +239,7 @@ impl PeermergeRepository<RandomAccessMemory, FeedMemoryPersistence> {
         root_scalars: Vec<(P, V)>,
         encrypted: bool,
     ) -> DocumentId {
-        let document = Peermerge::create_new_memory(&self.name, root_scalars, encrypted).await;
+        let document = Document::create_new_memory(&self.name, root_scalars, encrypted).await;
         self.add_document(document).await
     }
 
@@ -248,12 +248,12 @@ impl PeermergeRepository<RandomAccessMemory, FeedMemoryPersistence> {
         doc_url: &str,
         encryption_key: &Option<Vec<u8>>,
     ) -> DocumentId {
-        let document = Peermerge::attach_writer_memory(&self.name, doc_url, encryption_key).await;
+        let document = Document::attach_writer_memory(&self.name, doc_url, encryption_key).await;
         self.add_document(document).await
     }
 
     pub async fn attach_proxy_document_memory(&mut self, doc_url: &str) -> DocumentId {
-        let document = Peermerge::attach_proxy_memory(&self.name, doc_url).await;
+        let document = Document::attach_proxy_memory(&self.name, doc_url).await;
         self.add_document(document).await
     }
 
@@ -320,7 +320,7 @@ async fn on_peer_event_memory(
     mut peer_event_receiver: UnboundedReceiver<PeerEvent>,
     mut state_event_sender: UnboundedSender<StateEvent>,
     mut repository_state: Arc<Mutex<RepositoryStateWrapper<RandomAccessMemory>>>,
-    mut documents: Arc<DashMap<DocumentId, Peermerge<RandomAccessMemory, FeedMemoryPersistence>>>,
+    mut documents: Arc<DashMap<DocumentId, Document<RandomAccessMemory, FeedMemoryPersistence>>>,
     name: &str,
 ) {
     while let Some(event) = peer_event_receiver.next().await {
@@ -352,7 +352,7 @@ async fn on_peer_event_memory(
 // Disk
 
 #[cfg(not(target_arch = "wasm32"))]
-impl PeermergeRepository<RandomAccessDisk, FeedDiskPersistence> {
+impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
     pub async fn create_new_disk(name: &str, data_root_dir: &PathBuf) -> Self {
         let state = RepositoryStateWrapper::new_disk(name, data_root_dir).await;
         Self {
@@ -371,13 +371,13 @@ impl PeermergeRepository<RandomAccessDisk, FeedDiskPersistence> {
         let state_wrapper = RepositoryStateWrapper::open_disk(data_root_dir).await;
         let state = state_wrapper.state();
         let name = state.name.clone();
-        let documents: DashMap<DocumentId, Peermerge<RandomAccessDisk, FeedDiskPersistence>> =
+        let documents: DashMap<DocumentId, Document<RandomAccessDisk, FeedDiskPersistence>> =
             DashMap::new();
         for document_id in &state_wrapper.state.document_ids {
             let encryption_key: Option<Vec<u8>> = encryption_keys.get(document_id).cloned();
             let postfix = encode_document_id(&document_id);
             let document_data_root_dir = data_root_dir.join(postfix);
-            let document = Peermerge::open_disk(&encryption_key, &document_data_root_dir).await;
+            let document = Document::open_disk(&encryption_key, &document_data_root_dir).await;
             documents.insert(document_id.clone(), document);
         }
 
@@ -396,7 +396,7 @@ impl PeermergeRepository<RandomAccessDisk, FeedDiskPersistence> {
         encrypted: bool,
     ) -> DocumentId {
         let document =
-            Peermerge::create_new_disk(&self.name, root_scalars, encrypted, &self.prefix).await;
+            Document::create_new_disk(&self.name, root_scalars, encrypted, &self.prefix).await;
         self.add_document(document).await
     }
 
@@ -406,12 +406,12 @@ impl PeermergeRepository<RandomAccessDisk, FeedDiskPersistence> {
         encryption_key: &Option<Vec<u8>>,
     ) -> DocumentId {
         let document =
-            Peermerge::attach_writer_disk(&self.name, doc_url, encryption_key, &self.prefix).await;
+            Document::attach_writer_disk(&self.name, doc_url, encryption_key, &self.prefix).await;
         self.add_document(document).await
     }
 
     pub async fn attach_proxy_document_disk(&mut self, doc_url: &str) -> DocumentId {
-        let document = Peermerge::attach_proxy_disk(&self.name, doc_url, &self.prefix).await;
+        let document = Document::attach_proxy_disk(&self.name, doc_url, &self.prefix).await;
         self.add_document(document).await
     }
 
@@ -466,7 +466,7 @@ async fn on_peer_event_disk(
     mut peer_event_receiver: UnboundedReceiver<PeerEvent>,
     mut state_event_sender: UnboundedSender<StateEvent>,
     mut repository_state: Arc<Mutex<RepositoryStateWrapper<RandomAccessDisk>>>,
-    mut documents: Arc<DashMap<DocumentId, Peermerge<RandomAccessDisk, FeedDiskPersistence>>>,
+    mut documents: Arc<DashMap<DocumentId, Document<RandomAccessDisk, FeedDiskPersistence>>>,
     name: &str,
 ) {
     while let Some(event) = peer_event_receiver.next().await {
@@ -502,7 +502,7 @@ async fn process_peer_event<T, U>(
     event: PeerEvent,
     state_event_sender: &mut UnboundedSender<StateEvent>,
     repository_state: &mut Arc<Mutex<RepositoryStateWrapper<T>>>,
-    documents: &mut Arc<DashMap<DocumentId, Peermerge<T, U>>>,
+    documents: &mut Arc<DashMap<DocumentId, Document<T, U>>>,
     name: &str,
 ) where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send + 'static,

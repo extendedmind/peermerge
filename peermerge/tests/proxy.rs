@@ -2,7 +2,7 @@ use automerge::ROOT;
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use futures::stream::StreamExt;
 use peermerge::{
-    doc_url_encrypted, DocumentId, FeedMemoryPersistence, Patch, PeermergeRepository, StateEvent,
+    doc_url_encrypted, DocumentId, FeedMemoryPersistence, Patch, Peermerge, StateEvent,
     StateEventContent::*,
 };
 use random_access_memory::RandomAccessMemory;
@@ -29,7 +29,7 @@ async fn proxy_disk_encrypted() -> anyhow::Result<()> {
         UnboundedSender<StateEvent>,
         UnboundedReceiver<StateEvent>,
     ) = unbounded();
-    let mut peermerge_creator = PeermergeRepository::new_memory("creator").await;
+    let mut peermerge_creator = Peermerge::new_memory("creator").await;
     let creator_doc_id = peermerge_creator
         .create_new_document_memory(vec![("version", 1)], true)
         .await;
@@ -53,7 +53,7 @@ async fn proxy_disk_encrypted() -> anyhow::Result<()> {
         .unwrap()
         .into_path();
 
-    let mut peermerge_proxy = PeermergeRepository::create_new_disk("proxy", &proxy_dir).await;
+    let mut peermerge_proxy = Peermerge::create_new_disk("proxy", &proxy_dir).await;
     let _proxy_doc_id = peermerge_proxy.attach_proxy_document_disk(&doc_url).await;
     let mut peermerge_proxy_for_task = peermerge_proxy.clone();
     task::spawn(async move {
@@ -113,7 +113,7 @@ async fn process_proxy_state_event(
 
 #[instrument(skip_all)]
 async fn process_creator_state_events(
-    mut peermerge: PeermergeRepository<RandomAccessMemory, FeedMemoryPersistence>,
+    mut peermerge: Peermerge<RandomAccessMemory, FeedMemoryPersistence>,
     doc_id: DocumentId,
     mut creator_state_event_receiver: UnboundedReceiver<StateEvent>,
 ) -> anyhow::Result<()> {
