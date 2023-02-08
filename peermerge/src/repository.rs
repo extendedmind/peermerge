@@ -35,7 +35,9 @@ use crate::{
 use crate::{Peermerge, StateEvent};
 
 /// PeermergeRepository is a store for multiple Peermerges
-#[derive(Debug, Clone)]
+#[derive(derivative::Derivative)]
+#[derivative(Clone(bound = ""))]
+#[derive(Debug)]
 pub struct PeermergeRepository<T, U>
 where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send,
@@ -48,7 +50,7 @@ where
     /// Created documents
     documents: Arc<DashMap<DocumentId, Peermerge<T, U>>>,
     /// Sender for events
-    state_event_sender: Option<UnboundedSender<StateEvent>>,
+    state_event_sender: Arc<Mutex<Option<UnboundedSender<StateEvent>>>>,
 }
 
 impl<T, U> PeermergeRepository<T, U>
@@ -173,10 +175,17 @@ where
         document.uncork().await
     }
 
+    #[instrument(skip(self))]
+    pub fn doc_url(&self, document_id: &DocumentId) -> String {
+        let document = self.documents.get(document_id).unwrap();
+        document.doc_url()
+    }
+
     async fn notify_of_document_changes(&mut self) {
-        if let Some(sender) = self.state_event_sender.as_mut() {
+        let mut state_event_sender = self.state_event_sender.lock().await;
+        if let Some(sender) = state_event_sender.as_mut() {
             if sender.is_closed() {
-                self.state_event_sender = None;
+                *state_event_sender = None;
             } else {
                 let mut peermerge_patches: Vec<([u8; 32], Vec<Patch>)> = vec![];
                 for mut peermerge in self.documents.iter_mut() {
@@ -209,7 +218,7 @@ impl PeermergeRepository<RandomAccessMemory, FeedMemoryPersistence> {
             name: name.to_string(),
             repository_state: Arc::new(Mutex::new(state)),
             documents: Arc::new(DashMap::new()),
-            state_event_sender: None,
+            state_event_sender: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -247,7 +256,9 @@ impl PeermergeRepository<RandomAccessMemory, FeedMemoryPersistence> {
         // First let's drain any patches that are not yet sent out, and push them out. These can
         // be created by scalar values inserted with peermerge.create_doc_memory() or other
         // mutating calls executed before this call.
-        self.state_event_sender = Some(state_event_sender.clone());
+        {
+            *self.state_event_sender.lock().await = Some(state_event_sender.clone());
+        }
         {
             self.notify_of_document_changes().await;
         }
@@ -335,7 +346,7 @@ impl PeermergeRepository<RandomAccessDisk, FeedDiskPersistence> {
             name: "".to_string(),
             repository_state: Arc::new(Mutex::new(state)),
             documents: Arc::new(DashMap::new()),
-            state_event_sender: None,
+            state_event_sender: Arc::new(Mutex::new(None)),
         }
     }
 }
