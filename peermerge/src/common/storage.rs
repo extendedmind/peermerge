@@ -8,12 +8,12 @@ use std::{fmt::Debug, path::PathBuf};
 
 use crate::{
     automerge::{AutomergeDoc, UnappliedEntries},
-    common::state::{DocState, RepositoryState},
+    common::state::{DocumentState, RepositoryState},
 };
 
 use super::{
     keys::discovery_key_from_public_key,
-    state::{DocContent, DocPeerState},
+    state::{DocumentContent, DocumentPeerState},
 };
 #[derive(Debug)]
 pub(crate) struct RepositoryStateWrapper<T>
@@ -63,7 +63,7 @@ pub(crate) struct DocStateWrapper<T>
 where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send,
 {
-    state: DocState,
+    state: DocumentState,
     unapplied_entries: UnappliedEntries,
     storage: T,
 }
@@ -82,7 +82,7 @@ where
 
     pub fn content_and_unapplied_entries_mut(
         &mut self,
-    ) -> Option<(&mut DocContent, &mut UnappliedEntries)> {
+    ) -> Option<(&mut DocumentContent, &mut UnappliedEntries)> {
         if let Some(content) = self.state.content.as_mut() {
             let unapplied_entries = &mut self.unapplied_entries;
             Some((content, unapplied_entries))
@@ -97,7 +97,7 @@ where
 
     pub async fn set_content_and_new_peer_names(
         &mut self,
-        content: DocContent,
+        content: DocumentContent,
         new_peer_names: Vec<([u8; 32], String)>,
     ) {
         self.state.content = Some(content);
@@ -143,22 +143,22 @@ where
         )
     }
 
-    pub fn state(&self) -> &DocState {
+    pub fn state(&self) -> &DocumentState {
         &self.state
     }
 
-    pub fn doc(&self) -> Option<&AutomergeDoc> {
+    pub fn automerge_doc(&self) -> Option<&AutomergeDoc> {
         self.state
             .content
             .as_ref()
-            .and_then(|content| content.doc.as_ref())
+            .and_then(|content| content.automerge_doc.as_ref())
     }
 
-    pub fn doc_mut(&mut self) -> Option<&mut AutomergeDoc> {
+    pub fn automerge_doc_mut(&mut self) -> Option<&mut AutomergeDoc> {
         self.state
             .content
             .as_mut()
-            .and_then(|content| content.doc.as_mut())
+            .and_then(|content| content.automerge_doc.as_mut())
     }
 
     pub fn watch(&mut self, ids: Vec<ObjId>) {
@@ -194,9 +194,10 @@ impl DocStateWrapper<RandomAccessMemory> {
         proxy: bool,
         write_public_key: Option<[u8; 32]>,
         peer_public_keys: Vec<[u8; 32]>,
-        content: Option<DocContent>,
+        content: Option<DocumentContent>,
     ) -> Self {
-        let mut state = DocState::new(doc_url, peer_name, proxy, vec![], write_public_key, content);
+        let mut state =
+            DocumentState::new(doc_url, peer_name, proxy, vec![], write_public_key, content);
         add_peer_public_keys_to_doc_state(&mut state, peer_public_keys);
         let storage = RandomAccessMemory::default();
         Self {
@@ -215,10 +216,11 @@ impl DocStateWrapper<RandomAccessDisk> {
         proxy: bool,
         write_public_key: Option<[u8; 32]>,
         peer_public_keys: Vec<[u8; 32]>,
-        content: Option<DocContent>,
+        content: Option<DocumentContent>,
         data_root_dir: &PathBuf,
     ) -> Self {
-        let mut state = DocState::new(doc_url, peer_name, proxy, vec![], write_public_key, content);
+        let mut state =
+            DocumentState::new(doc_url, peer_name, proxy, vec![], write_public_key, content);
         add_peer_public_keys_to_doc_state(&mut state, peer_public_keys);
         let state_path = get_state_path(data_root_dir);
         let mut storage = RandomAccessDisk::builder(state_path).build().await.unwrap();
@@ -239,7 +241,7 @@ impl DocStateWrapper<RandomAccessDisk> {
             .await
             .expect("Could not read file content");
         let mut dec_state = State::from_buffer(&buffer);
-        let state: DocState = dec_state.decode(&buffer);
+        let state: DocumentState = dec_state.decode(&buffer);
         Self {
             state,
             storage,
@@ -263,7 +265,10 @@ where
     storage.write(0, &buffer).await.unwrap();
 }
 
-fn add_peer_public_keys_to_doc_state(doc_state: &mut DocState, public_keys: Vec<[u8; 32]>) -> bool {
+fn add_peer_public_keys_to_doc_state(
+    doc_state: &mut DocumentState,
+    public_keys: Vec<[u8; 32]>,
+) -> bool {
     // Need to check if another thread has already added these keys to the state
     let need_to_add = doc_state
         .peers
@@ -272,16 +277,16 @@ fn add_peer_public_keys_to_doc_state(doc_state: &mut DocState, public_keys: Vec<
         .count()
         == 0;
     if need_to_add {
-        let new_peers: Vec<DocPeerState> = public_keys
+        let new_peers: Vec<DocumentPeerState> = public_keys
             .iter()
-            .map(|public_key| DocPeerState::new(public_key.clone(), None))
+            .map(|public_key| DocumentPeerState::new(public_key.clone(), None))
             .collect();
         doc_state.peers.extend(new_peers);
     }
     need_to_add
 }
 
-async fn write_doc_state<T>(doc_state: &DocState, storage: &mut T)
+async fn write_doc_state<T>(doc_state: &DocumentState, storage: &mut T)
 where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send,
 {

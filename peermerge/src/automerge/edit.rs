@@ -1,6 +1,4 @@
-use automerge::{
-    transaction::Transactable, Change, ChangeHash, ObjId, ObjType, Prop, ReadDoc, ScalarValue,
-};
+use automerge::{transaction::Transactable, Change, ChangeHash, ObjId, ObjType, Prop, ScalarValue};
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use super::AutomergeDoc;
@@ -40,7 +38,7 @@ impl UnappliedEntries {
 
     pub fn consolidate(
         &mut self,
-        doc: &mut AutomergeDoc,
+        automerge_doc: &mut AutomergeDoc,
         changes_to_apply: &mut Vec<Change>,
         result: &mut HashMap<[u8; 32], (u64, Option<String>)>,
     ) {
@@ -64,7 +62,7 @@ impl UnappliedEntries {
                             if change.deps().iter().all(|dep| {
                                 if hashes.contains(dep) {
                                     true
-                                } else if doc.get_change_by_hash(dep).is_some() {
+                                } else if automerge_doc.get_change_by_hash(dep).is_some() {
                                     // For the next rounds to be faster, let's push this
                                     // to the hashes array to avoid searching the doc again
                                     hashes.insert(*dep);
@@ -124,7 +122,7 @@ impl UnappliedEntries {
 /// should be persisted. Returns for all of the affected discovery keys that were changed, the length
 /// where the cursor should be moved to and/or peer name change.
 pub(crate) fn apply_entries_autocommit(
-    doc: &mut AutomergeDoc,
+    automerge_doc: &mut AutomergeDoc,
     discovery_key: &[u8; 32],
     contiguous_length: u64,
     entries: Vec<Entry>,
@@ -142,7 +140,7 @@ pub(crate) fn apply_entries_autocommit(
                 if change
                     .deps()
                     .iter()
-                    .all(|dep| doc.get_change_by_hash(dep).is_some())
+                    .all(|dep| automerge_doc.get_change_by_hash(dep).is_some())
                 {
                     changes_to_apply.push(change.clone());
                     if let Some(value) = result.get_mut(discovery_key) {
@@ -170,55 +168,55 @@ pub(crate) fn apply_entries_autocommit(
     }
 
     // Consolidate unapplied entries and add them to changes and result
-    unapplied_entries.consolidate(doc, &mut changes_to_apply, &mut result);
+    unapplied_entries.consolidate(automerge_doc, &mut changes_to_apply, &mut result);
 
     if !changes_to_apply.is_empty() {
-        doc.apply_changes(changes_to_apply)?;
+        automerge_doc.apply_changes(changes_to_apply)?;
     }
     Ok(result)
 }
 
 pub(crate) fn put_object_autocommit<O: AsRef<ObjId>, P: Into<Prop>>(
-    doc: &mut AutomergeDoc,
+    automerge_doc: &mut AutomergeDoc,
     obj: O,
     prop: P,
     object: ObjType,
 ) -> anyhow::Result<(Entry, ObjId)> {
-    let id = doc.put_object(obj, prop, object)?;
-    let change = doc.get_last_local_change().unwrap().clone();
+    let id = automerge_doc.put_object(obj, prop, object)?;
+    let change = automerge_doc.get_last_local_change().unwrap().clone();
     Ok((Entry::new_change(change), id))
 }
 
 pub(crate) fn put_scalar_autocommit<O: AsRef<ObjId>, P: Into<Prop>, V: Into<ScalarValue>>(
-    doc: &mut AutomergeDoc,
+    automerge_doc: &mut AutomergeDoc,
     obj: O,
     prop: P,
     value: V,
 ) -> anyhow::Result<Entry> {
-    doc.put(obj, prop, value)?;
-    let change = doc.get_last_local_change().unwrap().clone();
+    automerge_doc.put(obj, prop, value)?;
+    let change = automerge_doc.get_last_local_change().unwrap().clone();
     Ok(Entry::new_change(change))
 }
 
 pub(crate) fn splice_text<O: AsRef<ObjId>>(
-    doc: &mut AutomergeDoc,
+    automerge_doc: &mut AutomergeDoc,
     obj: O,
     index: usize,
     delete: usize,
     text: &str,
 ) -> anyhow::Result<Entry> {
-    doc.splice_text(obj, index, delete, text)?;
-    let change = doc.get_last_local_change().unwrap().clone();
+    automerge_doc.splice_text(obj, index, delete, text)?;
+    let change = automerge_doc.get_last_local_change().unwrap().clone();
     Ok(Entry::new_change(change))
 }
 
 #[cfg(test)]
 mod tests {
-    use automerge::ROOT;
+    use automerge::{ReadDoc, ROOT};
 
     use super::*;
     use crate::{
-        automerge::{init_doc_from_data, init_doc_with_root_scalars},
+        automerge::{init_automerge_doc_from_data, init_automerge_doc_with_root_scalars},
         common::keys::generate_keys,
     };
 
@@ -236,8 +234,11 @@ mod tests {
         let (_, doc_discovery_key) = generate_keys();
         let (_, peer_1_discovery_key) = generate_keys();
         let (_, peer_2_discovery_key) = generate_keys();
-        let (mut doc, data) =
-            init_doc_with_root_scalars(peer_name, &doc_discovery_key, vec![("version", 1)]);
+        let (mut doc, data) = init_automerge_doc_with_root_scalars(
+            peer_name,
+            &doc_discovery_key,
+            vec![("version", 1)],
+        );
 
         // Let's create a tree of depth 5
         let (entry_1, key_1) =
@@ -274,7 +275,7 @@ mod tests {
         assert_int_value(&doc, &key_5, int_prop, int_value);
 
         // In chunks
-        doc = init_doc_from_data(&peer_name, &doc_discovery_key, &data);
+        doc = init_automerge_doc_from_data(&peer_name, &doc_discovery_key, &data);
         apply_entries_autocommit(
             &mut doc,
             &doc_discovery_key,
@@ -302,7 +303,7 @@ mod tests {
         assert_int_value(&doc, &key_5, int_prop, int_value);
 
         // Missing first, should first result in all going to unapplied entries, then consolidate
-        doc = init_doc_from_data(&peer_name, &doc_discovery_key, &data);
+        doc = init_automerge_doc_from_data(&peer_name, &doc_discovery_key, &data);
         apply_entries_autocommit(
             &mut doc,
             &doc_discovery_key,
@@ -337,7 +338,7 @@ mod tests {
         assert_int_value(&doc, &key_5, int_prop, int_value);
 
         // Mixture of two peers having every other change
-        doc = init_doc_from_data(&peer_name, &doc_discovery_key, &data);
+        doc = init_automerge_doc_from_data(&peer_name, &doc_discovery_key, &data);
         apply_entries_autocommit(
             &mut doc,
             &peer_1_discovery_key,

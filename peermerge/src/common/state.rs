@@ -20,9 +20,9 @@ impl Default for RepositoryState {
     }
 }
 
-/// A DocState stores serialized information about a single document.
+/// DocumentState stores serialized information about a single document.
 #[derive(Debug)]
-pub(crate) struct DocState {
+pub(crate) struct DocumentState {
     pub(crate) version: u8,
     pub(crate) doc_url: String,
     pub(crate) doc_public_key: [u8; 32],
@@ -30,23 +30,23 @@ pub(crate) struct DocState {
     pub(crate) name: String, // This peer's name
     pub(crate) proxy: bool,
     pub(crate) encrypted: bool,
-    pub(crate) peers: Vec<DocPeerState>,
+    pub(crate) peers: Vec<DocumentPeerState>,
     /// Public key of personal writeable hypercore. None means the
     /// document is read-only.
     pub(crate) write_public_key: Option<[u8; 32]>,
     /// Content of the document. None means content hasn't been synced yet.
-    pub(crate) content: Option<DocContent>,
+    pub(crate) content: Option<DocumentContent>,
     /// Transient watch variable
     pub(crate) watched_ids: Vec<ObjId>,
 }
-impl DocState {
+impl DocumentState {
     pub fn new(
         doc_url: &str,
         name: &str,
         proxy: bool,
-        peers: Vec<DocPeerState>,
+        peers: Vec<DocumentPeerState>,
         write_public_key: Option<[u8; 32]>,
-        content: Option<DocContent>,
+        content: Option<DocumentContent>,
     ) -> Self {
         Self::new_with_version(
             1,
@@ -64,9 +64,9 @@ impl DocState {
         doc_url: String,
         name: String,
         proxy: bool,
-        peers: Vec<DocPeerState>,
+        peers: Vec<DocumentPeerState>,
         write_public_key: Option<[u8; 32]>,
-        content: Option<DocContent>,
+        content: Option<DocumentContent>,
     ) -> Self {
         let (doc_public_key, encrypted) = doc_url_to_public_key(&doc_url, &None);
         Self {
@@ -86,12 +86,12 @@ impl DocState {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct DocPeerState {
+pub(crate) struct DocumentPeerState {
     pub(crate) public_key: [u8; 32],
     pub(crate) discovery_key: [u8; 32],
     pub(crate) name: Option<String>,
 }
-impl DocPeerState {
+impl DocumentPeerState {
     pub fn new(public_key: [u8; 32], name: Option<String>) -> Self {
         let discovery_key = discovery_key_from_public_key(&public_key);
         Self {
@@ -103,11 +103,11 @@ impl DocPeerState {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct DocCursor {
+pub(crate) struct DocumentCursor {
     pub(crate) discovery_key: [u8; 32],
     pub(crate) length: u64,
 }
-impl DocCursor {
+impl DocumentCursor {
     pub fn new(discovery_key: [u8; 32], length: u64) -> Self {
         Self {
             discovery_key,
@@ -117,19 +117,19 @@ impl DocCursor {
 }
 
 #[derive(Debug)]
-pub(crate) struct DocContent {
+pub(crate) struct DocumentContent {
     pub(crate) data: Vec<u8>,
-    pub(crate) cursors: Vec<DocCursor>,
+    pub(crate) cursors: Vec<DocumentCursor>,
     /// Transient reflection of the saved state, created from
     /// data the first time it is accessed.
-    pub(crate) doc: Option<AutomergeDoc>,
+    pub(crate) automerge_doc: Option<AutomergeDoc>,
 }
-impl DocContent {
-    pub fn new(data: Vec<u8>, cursors: Vec<DocCursor>, doc: AutomergeDoc) -> Self {
+impl DocumentContent {
+    pub fn new(data: Vec<u8>, cursors: Vec<DocumentCursor>, automerge_doc: AutomergeDoc) -> Self {
         Self {
             data,
             cursors,
-            doc: Some(doc),
+            automerge_doc: Some(automerge_doc),
         }
     }
 
@@ -154,7 +154,7 @@ impl DocContent {
             cursor.length = length;
         } else {
             self.cursors
-                .push(DocCursor::new(discovery_key.clone(), length));
+                .push(DocumentCursor::new(discovery_key.clone(), length));
         }
     }
 }

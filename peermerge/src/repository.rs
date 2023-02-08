@@ -65,37 +65,14 @@ where
     }
 
     #[instrument(skip(self, obj, prop), fields(obj = obj.as_ref().to_string(), peer_name = self.name))]
-    pub async fn get<O: AsRef<ObjId>, P: Into<Prop>>(
+    pub async fn get_id<O: AsRef<ObjId>, P: Into<Prop>>(
         &self,
         document_id: &DocumentId,
         obj: O,
         prop: P,
-    ) -> anyhow::Result<Option<(Value, ObjId)>> {
+    ) -> anyhow::Result<Option<ObjId>> {
         let document = self.documents.get(document_id).unwrap();
-        let doc_state = document.doc_state();
-        let result = {
-            let doc_state = doc_state.lock().await;
-            if let Some(doc) = doc_state.doc() {
-                match doc.get(obj, prop) {
-                    Ok(result) => {
-                        if let Some(result) = result {
-                            let value = result.0.to_owned();
-                            let id = result.1.to_owned();
-                            Some((value, id))
-                        } else {
-                            None
-                        }
-                    }
-                    Err(_err) => {
-                        // TODO: Some errors should probably be errors
-                        None
-                    }
-                }
-            } else {
-                unimplemented!("TODO: No proper error code for trying to get from doc before a document is synced");
-            }
-        };
-        Ok(result)
+        document.get_id(obj, prop).await
     }
 
     #[instrument(skip(self, obj), fields(obj = obj.as_ref().to_string(), peer_name = self.name))]

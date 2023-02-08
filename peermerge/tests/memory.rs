@@ -2,8 +2,7 @@ use automerge::{ObjId, ROOT};
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use futures::stream::StreamExt;
 use peermerge::{
-    DocumentId, FeedMemoryPersistence, Patch, Peermerge, PeermergeRepository, StateEvent,
-    StateEventContent::*,
+    DocumentId, FeedMemoryPersistence, Patch, PeermergeRepository, StateEvent, StateEventContent::*,
 };
 use random_access_memory::RandomAccessMemory;
 use std::collections::HashMap;
@@ -12,15 +11,9 @@ use test_log::test;
 use tracing::{info, instrument};
 
 #[cfg(feature = "async-std")]
-use async_std::{
-    sync::{Condvar, Mutex},
-    task, test as async_test,
-};
+use async_std::{sync::Mutex, task, test as async_test};
 #[cfg(feature = "tokio")]
-use tokio::{
-    sync::{Mutex, Notify},
-    task, test as async_test,
-};
+use tokio::{sync::Mutex, task, test as async_test};
 
 mod common;
 use common::*;
@@ -152,10 +145,9 @@ async fn process_joiner_state_event(
             PeerSynced((Some(name), _, len)) => {
                 if !peer_synced.contains_key("creator") {
                     assert_eq!(name, "creator");
-                    let (_value, local_texts_id) =
-                        peermerge.get(&doc_id, ROOT, "texts").await?.unwrap();
-                    let (_value, local_text_id) = peermerge
-                        .get(&doc_id, &local_texts_id, "text")
+                    let local_texts_id = peermerge.get_id(&doc_id, ROOT, "texts").await?.unwrap();
+                    let local_text_id = peermerge
+                        .get_id(&doc_id, &local_texts_id, "text")
                         .await?
                         .unwrap();
                     assert_text_equals(&peermerge, &doc_id, &local_text_id, "").await;
@@ -438,10 +430,9 @@ async fn process_latecomer_state_event(
                     && peer_synced.contains_key("joiner")
                     && text_id.is_none()
                 {
-                    let (_value, local_texts_id) =
-                        peermerge.get(&doc_id, ROOT, "texts").await?.unwrap();
-                    let (_value, local_text_id) = peermerge
-                        .get(&doc_id, &local_texts_id, "text")
+                    let local_texts_id = peermerge.get_id(&doc_id, ROOT, "texts").await?.unwrap();
+                    let local_text_id = peermerge
+                        .get_id(&doc_id, &local_texts_id, "text")
                         .await?
                         .unwrap();
                     assert_text_equals_either(

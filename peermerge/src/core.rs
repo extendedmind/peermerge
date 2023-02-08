@@ -2,7 +2,6 @@ use automerge::{ObjId, ObjType, Patch, Prop, ReadDoc, ScalarValue, Value};
 use dashmap::DashMap;
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use futures::{AsyncRead, AsyncWrite, StreamExt};
-use hypercore_protocol::hypercore::compact_encoding::{CompactEncoding, State};
 #[cfg(not(target_arch = "wasm32"))]
 use random_access_disk::RandomAccessDisk;
 use random_access_memory::RandomAccessMemory;
@@ -23,10 +22,11 @@ use tokio::{sync::Mutex, task::yield_now};
 use wasm_bindgen_futures::spawn_local;
 
 use crate::automerge::{
-    apply_entries_autocommit, init_doc_from_data, init_doc_from_entries, put_scalar_autocommit,
-    splice_text, AutomergeDoc, UnappliedEntries,
+    apply_entries_autocommit, init_automerge_doc_from_data, init_automerge_doc_from_entries,
+    put_scalar_autocommit, splice_text, AutomergeDoc, UnappliedEntries,
 };
 use crate::common::cipher::{doc_url_to_public_key, keys_to_doc_url};
+use crate::common::encoding::serialize_entry;
 use crate::common::keys::{discovery_key_from_public_key, generate_keys, Keypair};
 use crate::common::{PeerEvent, PeerEventContent, StateEventContent};
 use crate::feed::on_protocol;
@@ -36,10 +36,10 @@ use crate::DocumentId;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::FeedDiskPersistence;
 use crate::{
-    automerge::{init_doc_with_root_scalars, put_object_autocommit},
+    automerge::{init_automerge_doc_with_root_scalars, put_object_autocommit},
     common::{
         entry::Entry,
-        state::{DocContent, DocCursor},
+        state::{DocumentContent, DocumentCursor},
         storage::DocStateWrapper,
     },
     feed::{create_new_read_memory_feed, create_new_write_memory_feed, Feed, Protocol},
@@ -113,10 +113,6 @@ where
         (state.write_public_key, peer_public_keys)
     }
 
-    pub(crate) fn doc_state(&self) -> Arc<Mutex<DocStateWrapper<T>>> {
-        self.doc_state.clone()
-    }
-
     #[instrument(skip(self))]
     pub async fn watch(&mut self, ids: Vec<ObjId>) {
         if self.proxy {
@@ -124,6 +120,39 @@ where
         }
         let mut doc_state = self.doc_state.lock().await;
         doc_state.watch(ids);
+    }
+
+    #[instrument(skip(self, obj, prop), fields(obj = obj.as_ref().to_string(), peer_name = self.name))]
+    pub async fn get_id<O: AsRef<ObjId>, P: Into<Prop>>(
+        &self,
+        obj: O,
+        prop: P,
+    ) -> anyhow::Result<Option<ObjId>> {
+        if self.proxy {
+            panic!("Can not get id on a proxy");
+        }
+        let doc_state = &self.doc_state;
+        let result = {
+            let doc_state = doc_state.lock().await;
+            if let Some(doc) = doc_state.automerge_doc() {
+                match doc.get(obj, prop) {
+                    Ok(result) => {
+                        if let Some(result) = result {
+                            Some(result.1)
+                        } else {
+                            None
+                        }
+                    }
+                    Err(_err) => {
+                        // TODO: Some errors should probably be errors
+                        None
+                    }
+                }
+            } else {
+                unimplemented!("TODO: No proper error code for trying to get id from doc before a document is synced");
+            }
+        };
+        Ok(result)
     }
 
     #[instrument(skip(self, obj, prop), fields(obj = obj.as_ref().to_string(), peer_name = self.name))]
@@ -138,7 +167,7 @@ where
         let doc_state = &self.doc_state;
         let result = {
             let doc_state = doc_state.lock().await;
-            if let Some(doc) = doc_state.doc() {
+            if let Some(doc) = doc_state.automerge_doc() {
                 match doc.get(obj, prop) {
                     Ok(result) => {
                         if let Some(result) = result {
@@ -169,7 +198,7 @@ where
         let doc_state = &self.doc_state;
         let result = {
             let doc_state = doc_state.lock().await;
-            if let Some(doc) = doc_state.doc() {
+            if let Some(doc) = doc_state.automerge_doc() {
                 let length = doc.length(obj.as_ref().clone());
                 let mut chars = Vec::with_capacity(length);
                 for i in 0..length {
@@ -213,7 +242,7 @@ where
         }
         let id = {
             let mut doc_state = self.doc_state.lock().await;
-            let (entry, id) = if let Some(doc) = doc_state.doc_mut() {
+            let (entry, id) = if let Some(doc) = doc_state.automerge_doc_mut() {
                 put_object_autocommit(doc, obj, prop, object).unwrap()
             } else {
                 unimplemented!(
@@ -248,7 +277,7 @@ where
         }
         {
             let mut doc_state = self.doc_state.lock().await;
-            let entry = if let Some(doc) = doc_state.doc_mut() {
+            let entry = if let Some(doc) = doc_state.automerge_doc_mut() {
                 put_scalar_autocommit(doc, obj, prop, value).unwrap()
             } else {
                 unimplemented!(
@@ -283,7 +312,7 @@ where
         }
         {
             let mut doc_state = self.doc_state.lock().await;
-            let entry = if let Some(doc) = doc_state.doc_mut() {
+            let entry = if let Some(doc) = doc_state.automerge_doc_mut() {
                 splice_text(doc, obj, index, delete, text)?
             } else {
                 unimplemented!(
@@ -345,7 +374,7 @@ where
     #[instrument(level = "debug", skip_all, fields(peer_name = self.name))]
     pub(crate) async fn take_patches(&mut self) -> Vec<Patch> {
         let mut doc_state = self.doc_state.lock().await;
-        if let Some(doc) = doc_state.doc_mut() {
+        if let Some(doc) = doc_state.automerge_doc_mut() {
             doc.observer().take_patches()
         } else {
             vec![]
@@ -355,7 +384,7 @@ where
     #[instrument(level = "debug", skip_all, fields(peer_name = self.name))]
     async fn notify_of_document_changes(&mut self) {
         let mut doc_state = self.doc_state.lock().await;
-        if let Some(doc) = doc_state.doc_mut() {
+        if let Some(doc) = doc_state.automerge_doc_mut() {
             let mut state_event_sender = self.state_event_sender.lock().await;
             if let Some(sender) = state_event_sender.as_mut() {
                 if sender.is_closed() {
@@ -510,9 +539,9 @@ impl Peermerge<RandomAccessMemory, FeedMemoryPersistence> {
         )
         .await;
         let doc_url = keys_to_doc_url(&result.doc_public_key, &generated_encryption_key);
-        let content = DocContent::new(
+        let content = DocumentContent::new(
             result.data,
-            vec![DocCursor::new(result.discovery_key.clone(), length)],
+            vec![DocumentCursor::new(result.discovery_key.clone(), length)],
             result.doc,
         );
         Self::new_memory(
@@ -705,7 +734,7 @@ impl Peermerge<RandomAccessMemory, FeedMemoryPersistence> {
     async fn new_memory(
         write_feed: Option<([u8; 32], [u8; 32], Feed<FeedMemoryPersistence>)>,
         peer_feeds: Vec<([u8; 32], [u8; 32], Feed<FeedMemoryPersistence>)>,
-        content: Option<DocContent>,
+        content: Option<DocumentContent>,
         doc_discovery_key: [u8; 32],
         name: &str,
         proxy: bool,
@@ -868,9 +897,9 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
         )
         .await;
         let doc_url = keys_to_doc_url(&result.doc_public_key, &encryption_key);
-        let content = DocContent::new(
+        let content = DocumentContent::new(
             result.data,
-            vec![DocCursor::new(result.discovery_key.clone(), length)],
+            vec![DocumentCursor::new(result.discovery_key.clone(), length)],
             result.doc,
         );
 
@@ -1037,8 +1066,8 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
             if let Some((content, unapplied_entries)) =
                 doc_state_wrapper.content_and_unapplied_entries_mut()
             {
-                let doc = init_doc_from_data(&name, &write_discovery_key, &content.data);
-                content.doc = Some(doc);
+                let doc = init_automerge_doc_from_data(&name, &write_discovery_key, &content.data);
+                content.automerge_doc = Some(doc);
 
                 let (changed, new_peer_names) =
                     update_content(content, feeds.clone(), unapplied_entries)
@@ -1148,7 +1177,7 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
     async fn new_disk(
         write_feed: Option<([u8; 32], [u8; 32], Feed<FeedDiskPersistence>)>,
         peer_feeds: Vec<([u8; 32], [u8; 32], Feed<FeedDiskPersistence>)>,
-        content: Option<DocContent>,
+        content: Option<DocumentContent>,
         doc_discovery_key: [u8; 32],
         name: &str,
         proxy: bool,
@@ -1473,7 +1502,7 @@ async fn prepare_create<P: Into<Prop>, V: Into<ScalarValue>>(
 ) -> PrepareCreateResult {
     // Generate a key pair, its discovery key and the public key string
     let (key_pair, discovery_key) = generate_keys();
-    let (doc, data) = init_doc_with_root_scalars(name, &discovery_key, root_scalars);
+    let (doc, data) = init_automerge_doc_with_root_scalars(name, &discovery_key, root_scalars);
     let doc_public_key = *key_pair.public.as_bytes();
     PrepareCreateResult {
         key_pair,
@@ -1494,7 +1523,7 @@ async fn create_content<T>(
     unapplied_entries: &mut UnappliedEntries,
 ) -> anyhow::Result<
     Option<(
-        DocContent,
+        DocumentContent,
         Vec<Patch>,
         Vec<([u8; 32], String)>,
         Vec<([u8; 32], u64)>,
@@ -1512,19 +1541,19 @@ where
         };
 
         // Create DocContent from the feed
-        let (mut doc, data, result) = init_doc_from_entries(
+        let (mut automerge_doc, data, result) = init_automerge_doc_from_entries(
             writer_name,
             write_discovery_key,
             synced_discovery_key,
             entries,
             unapplied_entries,
         )?;
-        let cursors: Vec<DocCursor> = result
+        let cursors: Vec<DocumentCursor> = result
             .iter()
-            .map(|value| DocCursor::new(value.0.clone(), value.1 .0))
+            .map(|value| DocumentCursor::new(value.0.clone(), value.1 .0))
             .collect();
         let patches = if !cursors.is_empty() {
-            doc.observer().take_patches()
+            automerge_doc.observer().take_patches()
         } else {
             vec![]
         };
@@ -1538,7 +1567,7 @@ where
             .map(|value| (value.0.clone(), value.1 .0))
             .collect();
         Ok(Some((
-            DocContent::new(data, cursors, doc),
+            DocumentContent::new(data, cursors, automerge_doc),
             patches,
             new_names,
             peer_syncs,
@@ -1561,7 +1590,7 @@ where
 }
 
 async fn update_content<T>(
-    content: &mut DocContent,
+    content: &mut DocumentContent,
     feeds: Arc<DashMap<[u8; 32], Arc<Mutex<Feed<T>>>>>,
     unapplied_entries: &mut UnappliedEntries,
 ) -> anyhow::Result<(bool, Vec<([u8; 32], String)>)>
@@ -1595,7 +1624,7 @@ where
 async fn update_synced_content<T>(
     synced_discovery_key: &[u8; 32],
     synced_contiguous_length: u64,
-    content: &mut DocContent,
+    content: &mut DocumentContent,
     feeds: Arc<DashMap<[u8; 32], Arc<Mutex<Feed<T>>>>>,
     unapplied_entries: &mut UnappliedEntries,
 ) -> anyhow::Result<(Vec<Patch>, Vec<([u8; 32], String)>, Vec<([u8; 32], u64)>)>
@@ -1623,7 +1652,7 @@ where
 async fn get_new_entries<T>(
     discovery_key: &[u8; 32],
     known_contiguous_length: Option<u64>,
-    content: &mut DocContent,
+    content: &mut DocumentContent,
     feeds: &Arc<DashMap<[u8; 32], Arc<Mutex<Feed<T>>>>>,
 ) -> anyhow::Result<(u64, Vec<Entry>)>
 where
@@ -1646,13 +1675,13 @@ async fn update_content_with_entries(
     entries: Vec<Entry>,
     synced_discovery_key: &[u8; 32],
     synced_contiguous_length: u64,
-    content: &mut DocContent,
+    content: &mut DocumentContent,
     unapplied_entries: &mut UnappliedEntries,
 ) -> anyhow::Result<(Vec<Patch>, Vec<([u8; 32], String)>, Vec<([u8; 32], u64)>)> {
     let (patches, new_names, peer_syncs) = {
-        let doc = content.doc.as_mut().unwrap();
+        let automerge_doc = content.automerge_doc.as_mut().unwrap();
         let result = apply_entries_autocommit(
-            doc,
+            automerge_doc,
             synced_discovery_key,
             synced_contiguous_length,
             entries,
@@ -1668,7 +1697,7 @@ async fn update_content_with_entries(
             .map(|value| (value.0.clone(), value.1 .0))
             .collect();
         let patches = if !peer_syncs.is_empty() {
-            doc.observer().take_patches()
+            automerge_doc.observer().take_patches()
         } else {
             vec![]
         };
@@ -1680,12 +1709,4 @@ async fn update_content_with_entries(
     }
 
     Ok((patches, new_names, peer_syncs))
-}
-
-fn serialize_entry(entry: &Entry) -> Vec<u8> {
-    let mut enc_state = State::new();
-    enc_state.preencode(entry);
-    let mut buffer = enc_state.create_buffer();
-    enc_state.encode(entry, &mut buffer);
-    buffer.to_vec()
 }
