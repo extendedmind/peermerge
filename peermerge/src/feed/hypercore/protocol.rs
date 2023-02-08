@@ -18,7 +18,8 @@ use tokio::sync::Mutex;
 use super::{messaging::NEW_PEERS_CREATED_LOCAL_SIGNAL_NAME, HypercoreWrapper};
 use crate::common::keys::discovery_key_from_public_key;
 use crate::common::{message::NewPeersCreatedMessage, storage::DocStateWrapper, PeerEvent};
-use crate::{DocumentId, FeedPersistence, Peermerge, IO};
+use crate::document::Peermerge;
+use crate::{DocumentId, FeedPersistence, IO};
 
 #[instrument(
     level = "debug",
