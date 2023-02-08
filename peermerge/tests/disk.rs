@@ -40,6 +40,11 @@ async fn disk_two_peers(encrypted: bool) -> anyhow::Result<()> {
         .tempdir()
         .unwrap()
         .into_path();
+
+    // let debug = format!("target/creator_{}", encrypted);
+    // std::fs::create_dir_all(&debug).unwrap();
+    // let creator_dir = std::path::Path::new(&debug).to_path_buf();
+
     let mut peermerge_creator = PeermergeRepository::create_new_disk("creator", &creator_dir).await;
     let creator_doc_id = peermerge_creator
         .create_new_document_disk(vec![("version", 1)], encrypted)
@@ -57,6 +62,11 @@ async fn disk_two_peers(encrypted: bool) -> anyhow::Result<()> {
         .tempdir()
         .unwrap()
         .into_path();
+
+    // let debug = format!("target/joiner_{}", encrypted);
+    // std::fs::create_dir_all(&debug).unwrap();
+    // let joiner_dir = std::path::Path::new(&debug).to_path_buf();
+
     let mut peermerge_joiner = PeermergeRepository::create_new_disk("joiner", &joiner_dir).await;
     let joiner_doc_id = peermerge_joiner
         .attach_writer_document_disk(&doc_url, &encryption_key)

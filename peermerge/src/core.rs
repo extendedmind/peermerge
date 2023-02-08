@@ -25,7 +25,7 @@ use crate::automerge::{
     apply_entries_autocommit, init_automerge_doc_from_data, init_automerge_doc_from_entries,
     put_scalar_autocommit, splice_text, AutomergeDoc, UnappliedEntries,
 };
-use crate::common::cipher::{doc_url_to_public_key, keys_to_doc_url};
+use crate::common::cipher::{doc_url_to_public_key, encode_document_id, keys_to_doc_url};
 use crate::common::encoding::serialize_entry;
 use crate::common::keys::{discovery_key_from_public_key, generate_keys, Keypair};
 use crate::common::{PeerEvent, PeerEventContent, StateEventContent};
@@ -922,6 +922,8 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
         data_root_dir: &PathBuf,
     ) -> Self {
         let result = prepare_create(name, root_scalars).await;
+        let postfix = encode_document_id(&result.discovery_key);
+        let data_root_dir = data_root_dir.join(postfix);
 
         // Create the disk feed
         let (length, feed, encryption_key) = create_new_write_disk_feed(
@@ -954,7 +956,7 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
             &doc_url,
             encrypted,
             encryption_key,
-            data_root_dir,
+            &data_root_dir,
         )
         .await
     }
@@ -966,13 +968,14 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
         data_root_dir: &PathBuf,
     ) -> Self {
         let proxy = false;
-
         // Process keys from doc URL
         let (doc_public_key, encrypted) = doc_url_to_public_key(doc_url, &encryption_key);
         if encrypted && encryption_key.is_none() {
             panic!("Can not attach a peer to an encrypted peermerge without an encryption key");
         }
         let doc_discovery_key = discovery_key_from_public_key(&doc_public_key);
+        let postfix = encode_document_id(&doc_discovery_key);
+        let data_root_dir = data_root_dir.join(postfix);
 
         // Create/open the doc feed
         let (_, doc_feed) = create_new_read_disk_feed(
@@ -1008,7 +1011,7 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
             doc_url,
             encrypted,
             encryption_key,
-            data_root_dir,
+            &data_root_dir,
         )
         .await
     }
@@ -1019,6 +1022,8 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
         // Process keys from doc URL
         let (doc_public_key, encrypted) = doc_url_to_public_key(doc_url, &None);
         let doc_discovery_key = discovery_key_from_public_key(&doc_public_key);
+        let postfix = encode_document_id(&doc_discovery_key);
+        let data_root_dir = data_root_dir.join(postfix);
 
         // Create/open the doc feed
         let (_, doc_feed) = create_new_read_disk_feed(
@@ -1041,7 +1046,7 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
             doc_url,
             encrypted,
             None,
-            data_root_dir,
+            &data_root_dir,
         )
         .await
     }

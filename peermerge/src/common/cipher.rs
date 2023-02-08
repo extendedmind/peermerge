@@ -5,6 +5,10 @@ use chacha20poly1305::{
 use std::convert::TryInto;
 use std::fmt::Debug;
 
+use crate::DocumentId;
+
+use super::keys::discovery_key_from_public_key;
+
 const DOC_URL_PREFIX: &str = "peermerge:/";
 const DOC_URL_VERSION: u8 = 1;
 const DOC_URL_HYPERCORE: u8 = 1;
@@ -83,6 +87,10 @@ pub(crate) fn doc_url_to_public_key(
         }
     }
     (public_key, encrypted)
+}
+
+pub(crate) fn encode_document_id(document_id: &DocumentId) -> String {
+    data_encoding::BASE32_NOPAD.encode(document_id)
 }
 
 pub fn doc_url_encrypted(doc_url: &str) -> bool {

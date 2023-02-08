@@ -26,11 +26,14 @@ use wasm_bindgen_futures::spawn_local;
 
 #[cfg(not(target_arch = "wasm32"))]
 use crate::feed::FeedDiskPersistence;
-use crate::{common::storage::RepositoryStateWrapper, StateEventContent};
 use crate::{common::PeerEvent, feed::on_protocol_new, DocumentId, IO};
 use crate::{
     common::PeerEventContent,
     feed::{FeedMemoryPersistence, FeedPersistence, Protocol},
+};
+use crate::{
+    common::{cipher::encode_document_id, storage::RepositoryStateWrapper},
+    StateEventContent,
 };
 use crate::{Peermerge, StateEvent};
 
@@ -372,7 +375,9 @@ impl PeermergeRepository<RandomAccessDisk, FeedDiskPersistence> {
             DashMap::new();
         for document_id in &state_wrapper.state.document_ids {
             let encryption_key: Option<Vec<u8>> = encryption_keys.get(document_id).cloned();
-            let document = Peermerge::open_disk(&encryption_key, data_root_dir).await;
+            let postfix = encode_document_id(&document_id);
+            let document_data_root_dir = data_root_dir.join(postfix);
+            let document = Peermerge::open_disk(&encryption_key, &document_data_root_dir).await;
             documents.insert(document_id.clone(), document);
         }
 
