@@ -416,41 +416,6 @@ where
     }
 
     #[instrument(level = "debug", skip_all, fields(peer_name = self.name))]
-    async fn notify_of_document_changes(&mut self) {
-        let mut document_state = self.document_state.lock().await;
-        if let Some(doc) = document_state.automerge_doc_mut() {
-            let mut state_event_sender = self.state_event_sender.lock().await;
-            if let Some(sender) = state_event_sender.as_mut() {
-                if sender.is_closed() {
-                    *state_event_sender = None;
-                } else {
-                    let patches = doc.observer().take_patches();
-                    if patches.len() > 0 {
-                        sender
-                            .unbounded_send(StateEvent::new(
-                                self.doc_discovery_key.clone(),
-                                DocumentChanged(patches),
-                            ))
-                            .unwrap();
-                    }
-                }
-            }
-        }
-    }
-
-    #[instrument(level = "debug", skip_all, fields(peer_name = self.name))]
-    async fn notify_new_peers_created(&mut self, public_keys: Vec<[u8; 32]>) {
-        // Send message to doc feed that new peers have been created to get all open protocols to
-        // open channels to it.
-        let doc_feed = self.feeds.get(&self.doc_discovery_key).unwrap();
-        let mut doc_feed = doc_feed.lock().await;
-        doc_feed
-            .notify_new_peers_created(self.doc_discovery_key.clone(), public_keys)
-            .await
-            .unwrap();
-    }
-
-    #[instrument(level = "debug", skip_all, fields(peer_name = self.name))]
     pub(crate) async fn process_peer_synced(
         &mut self,
         discovery_key: [u8; 32],
@@ -469,15 +434,15 @@ where
             let (mut patches, peer_syncs) = if let Some((content, unapplied_entries)) =
                 document_state.content_and_unapplied_entries_mut()
             {
-                let (patches, new_peer_names, peer_syncs) = update_synced_content(
-                    &discovery_key,
-                    synced_contiguous_length,
-                    content,
-                    self.feeds.clone(),
-                    unapplied_entries,
-                )
-                .await
-                .unwrap();
+                let (patches, new_peer_names, peer_syncs) = self
+                    .update_synced_content(
+                        &discovery_key,
+                        synced_contiguous_length,
+                        content,
+                        unapplied_entries,
+                    )
+                    .await
+                    .unwrap();
                 document_state
                     .persist_content_and_new_peer_names(new_peer_names)
                     .await;
@@ -485,17 +450,15 @@ where
             } else {
                 let write_discovery_key = document_state.write_discovery_key();
                 let unapplied_entries = document_state.unappliend_entries_mut();
-                if let Some((content, patches, new_peer_names, peer_syncs)) = create_content(
-                    &discovery_key,
-                    synced_contiguous_length,
-                    &self.doc_discovery_key,
-                    &self.name,
-                    &write_discovery_key,
-                    self.feeds.clone(),
-                    unapplied_entries,
-                )
-                .await
-                .unwrap()
+                if let Some((content, patches, new_peer_names, peer_syncs)) = self
+                    .create_content(
+                        &discovery_key,
+                        synced_contiguous_length,
+                        &write_discovery_key,
+                        unapplied_entries,
+                    )
+                    .await
+                    .unwrap()
                 {
                     document_state
                         .set_content_and_new_peer_names(content, new_peer_names)
@@ -543,6 +506,137 @@ where
                 .unwrap();
         }
         state_events
+    }
+
+    #[instrument(level = "debug", skip_all, fields(peer_name = self.name))]
+    async fn notify_of_document_changes(&mut self) {
+        let mut document_state = self.document_state.lock().await;
+        if let Some(doc) = document_state.automerge_doc_mut() {
+            let mut state_event_sender = self.state_event_sender.lock().await;
+            if let Some(sender) = state_event_sender.as_mut() {
+                if sender.is_closed() {
+                    *state_event_sender = None;
+                } else {
+                    let patches = doc.observer().take_patches();
+                    if patches.len() > 0 {
+                        sender
+                            .unbounded_send(StateEvent::new(
+                                self.doc_discovery_key.clone(),
+                                DocumentChanged(patches),
+                            ))
+                            .unwrap();
+                    }
+                }
+            }
+        }
+    }
+
+    #[instrument(level = "debug", skip_all, fields(peer_name = self.name))]
+    async fn notify_new_peers_created(&mut self, public_keys: Vec<[u8; 32]>) {
+        // Send message to doc feed that new peers have been created to get all open protocols to
+        // open channels to it.
+        let doc_feed = self.feeds.get(&self.doc_discovery_key).unwrap();
+        let mut doc_feed = doc_feed.lock().await;
+        doc_feed
+            .notify_new_peers_created(self.doc_discovery_key.clone(), public_keys)
+            .await
+            .unwrap();
+    }
+
+    async fn create_content(
+        &self,
+        synced_discovery_key: &[u8; 32],
+        synced_contiguous_length: u64,
+        write_discovery_key: &[u8; 32],
+        unapplied_entries: &mut UnappliedEntries,
+    ) -> anyhow::Result<
+        Option<(
+            DocumentContent,
+            Vec<Patch>,
+            Vec<([u8; 32], String)>,
+            Vec<([u8; 32], u64)>,
+        )>,
+    > {
+        // The document starts from the doc feed, so get that first
+        if synced_discovery_key == &self.doc_discovery_key {
+            let entries = {
+                let doc_feed = self.feeds.get(&self.doc_discovery_key).unwrap();
+                let mut doc_feed = doc_feed.lock().await;
+                doc_feed.entries(0, synced_contiguous_length).await?
+            };
+
+            // Create DocContent from the feed
+            let (mut automerge_doc, data, result) = init_automerge_doc_from_entries(
+                &self.name,
+                write_discovery_key,
+                synced_discovery_key,
+                entries,
+                unapplied_entries,
+            )?;
+            let cursors: Vec<DocumentCursor> = result
+                .iter()
+                .map(|value| DocumentCursor::new(value.0.clone(), value.1 .0))
+                .collect();
+            let patches = if !cursors.is_empty() {
+                automerge_doc.observer().take_patches()
+            } else {
+                vec![]
+            };
+            let new_names: Vec<([u8; 32], String)> = result
+                .iter()
+                .filter(|value| value.1 .1.is_some())
+                .map(|value| (value.0.clone(), value.1 .1.clone().unwrap()))
+                .collect();
+            let peer_syncs: Vec<([u8; 32], u64)> = result
+                .iter()
+                .map(|value| (value.0.clone(), value.1 .0))
+                .collect();
+            Ok(Some((
+                DocumentContent::new(data, cursors, automerge_doc),
+                patches,
+                new_names,
+                peer_syncs,
+            )))
+        } else {
+            // Got first some other peer's data, need to store it to unapplied changes
+            let feed = self.feeds.get(synced_discovery_key).unwrap();
+            let mut feed = feed.lock().await;
+            let start_index = unapplied_entries.current_length(synced_discovery_key);
+            let entries = feed
+                .entries(start_index, synced_contiguous_length - start_index)
+                .await?;
+            let mut index = start_index;
+            for entry in entries {
+                unapplied_entries.add(synced_discovery_key, index, entry);
+                index += 1;
+            }
+            Ok(None)
+        }
+    }
+
+    async fn update_synced_content(
+        &self,
+        synced_discovery_key: &[u8; 32],
+        synced_contiguous_length: u64,
+        content: &mut DocumentContent,
+        unapplied_entries: &mut UnappliedEntries,
+    ) -> anyhow::Result<(Vec<Patch>, Vec<([u8; 32], String)>, Vec<([u8; 32], u64)>)> {
+        let (_, entries) = get_new_entries(
+            synced_discovery_key,
+            Some(synced_contiguous_length),
+            content,
+            &self.feeds,
+        )
+        .await?;
+
+        update_content_with_entries(
+            entries,
+            synced_discovery_key,
+            synced_contiguous_length,
+            content,
+            unapplied_entries,
+        )
+        .await
     }
 }
 
@@ -672,13 +766,8 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
         if changed {
             {
                 // Create and insert all new feeds
-                create_and_insert_read_memory_feeds(
-                    public_keys.clone(),
-                    self.feeds.clone(),
-                    self.proxy,
-                    &self.encryption_key,
-                )
-                .await;
+                self.create_and_insert_read_memory_feeds(public_keys.clone())
+                    .await;
             }
             {
                 self.notify_new_peers_created(public_keys).await;
@@ -733,42 +822,37 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
             encryption_key,
         }
     }
-}
 
-async fn create_and_insert_read_memory_feeds(
-    public_keys: Vec<[u8; 32]>,
-    feeds: Arc<DashMap<[u8; 32], Arc<Mutex<Feed<FeedMemoryPersistence>>>>>,
-    proxy: bool,
-    encryption_key: &Option<Vec<u8>>,
-) {
-    for public_key in public_keys {
-        let discovery_key = discovery_key_from_public_key(&public_key);
-        // Make sure to insert only once even if two protocols notice the same new
-        // feed at the same time using the entry API.
+    async fn create_and_insert_read_memory_feeds(&mut self, public_keys: Vec<[u8; 32]>) {
+        for public_key in public_keys {
+            let discovery_key = discovery_key_from_public_key(&public_key);
+            // Make sure to insert only once even if two protocols notice the same new
+            // feed at the same time using the entry API.
 
-        // There is a deadlock possibility with entry(), so we need to loop and yield
-        let mut entry_found = false;
-        while !entry_found {
-            if let Some(entry) = feeds.try_entry(discovery_key.clone()) {
-                match entry {
-                    dashmap::mapref::entry::Entry::Occupied(_) => {
-                        debug!("Concurrent creating of feeds noticed, continuing.");
+            // There is a deadlock possibility with entry(), so we need to loop and yield
+            let mut entry_found = false;
+            while !entry_found {
+                if let Some(entry) = self.feeds.try_entry(discovery_key.clone()) {
+                    match entry {
+                        dashmap::mapref::entry::Entry::Occupied(_) => {
+                            debug!("Concurrent creating of feeds noticed, continuing.");
+                        }
+                        dashmap::mapref::entry::Entry::Vacant(vacant) => {
+                            let (_, feed) = create_new_read_memory_feed(
+                                &public_key,
+                                self.proxy,
+                                self.encryption_key.is_some(),
+                                &self.encryption_key,
+                            )
+                            .await;
+                            vacant.insert(Arc::new(Mutex::new(feed)));
+                        }
                     }
-                    dashmap::mapref::entry::Entry::Vacant(vacant) => {
-                        let (_, feed) = create_new_read_memory_feed(
-                            &public_key,
-                            proxy,
-                            encryption_key.is_some(),
-                            encryption_key,
-                        )
-                        .await;
-                        vacant.insert(Arc::new(Mutex::new(feed)));
-                    }
+                    entry_found = true;
+                } else {
+                    debug!("Concurrent access to feeds noticed, yielding and retrying.");
+                    yield_now().await;
                 }
-                entry_found = true;
-            } else {
-                debug!("Concurrent access to feeds noticed, yielding and retrying.");
-                yield_now().await;
             }
         }
     }
@@ -983,10 +1067,9 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
                 let doc = init_automerge_doc_from_data(&name, &write_discovery_key, &content.data);
                 content.automerge_doc = Some(doc);
 
-                let (changed, new_peer_names) =
-                    update_content(content, feeds.clone(), unapplied_entries)
-                        .await
-                        .unwrap();
+                let (changed, new_peer_names) = update_content(content, &feeds, unapplied_entries)
+                    .await
+                    .unwrap();
                 if changed {
                     document_state_wrapper
                         .persist_content_and_new_peer_names(new_peer_names)
@@ -1027,14 +1110,8 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
         if changed {
             {
                 // Create and insert all new feeds
-                create_and_insert_read_disk_feeds(
-                    public_keys.clone(),
-                    self.feeds.clone(),
-                    self.proxy,
-                    &self.encryption_key,
-                    &self.prefix,
-                )
-                .await;
+                self.create_and_insert_read_disk_feeds(public_keys.clone())
+                    .await;
             }
             {
                 self.notify_new_peers_created(public_keys).await;
@@ -1091,46 +1168,40 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
             encryption_key,
         }
     }
-}
 
-#[cfg(not(target_arch = "wasm32"))]
-async fn create_and_insert_read_disk_feeds(
-    public_keys: Vec<[u8; 32]>,
-    feeds: Arc<DashMap<[u8; 32], Arc<Mutex<Feed<FeedDiskPersistence>>>>>,
-    proxy: bool,
-    encryption_key: &Option<Vec<u8>>,
-    data_root_dir: &PathBuf,
-) {
-    for public_key in public_keys {
-        let discovery_key = discovery_key_from_public_key(&public_key);
-        // Make sure to insert only once even if two protocols notice the same new
-        // feed at the same timeusing the entry API.
+    #[cfg(not(target_arch = "wasm32"))]
+    async fn create_and_insert_read_disk_feeds(&mut self, public_keys: Vec<[u8; 32]>) {
+        for public_key in public_keys {
+            let discovery_key = discovery_key_from_public_key(&public_key);
+            // Make sure to insert only once even if two protocols notice the same new
+            // feed at the same time using the entry API.
 
-        // There is a deadlock possibility with entry(), so we need to loop and yield
-        let mut entry_found = false;
-        while !entry_found {
-            if let Some(entry) = feeds.try_entry(discovery_key.clone()) {
-                match entry {
-                    dashmap::mapref::entry::Entry::Occupied(_) => {
-                        debug!("Concurrent creating of feeds noticed, continuing.");
+            // There is a deadlock possibility with entry(), so we need to loop and yield
+            let mut entry_found = false;
+            while !entry_found {
+                if let Some(entry) = self.feeds.try_entry(discovery_key.clone()) {
+                    match entry {
+                        dashmap::mapref::entry::Entry::Occupied(_) => {
+                            debug!("Concurrent creating of feeds noticed, continuing.");
+                        }
+                        dashmap::mapref::entry::Entry::Vacant(vacant) => {
+                            let (_, feed) = create_new_read_disk_feed(
+                                &self.prefix,
+                                &public_key,
+                                &discovery_key,
+                                self.proxy,
+                                self.encryption_key.is_some(),
+                                &self.encryption_key,
+                            )
+                            .await;
+                            vacant.insert(Arc::new(Mutex::new(feed)));
+                        }
                     }
-                    dashmap::mapref::entry::Entry::Vacant(vacant) => {
-                        let (_, feed) = create_new_read_disk_feed(
-                            &data_root_dir,
-                            &public_key,
-                            &discovery_key,
-                            proxy,
-                            encryption_key.is_some(),
-                            encryption_key,
-                        )
-                        .await;
-                        vacant.insert(Arc::new(Mutex::new(feed)));
-                    }
+                    entry_found = true;
+                } else {
+                    debug!("Concurrent access to feeds noticed, yielding and retrying.");
+                    yield_now().await;
                 }
-                entry_found = true;
-            } else {
-                debug!("Concurrent access to feeds noticed, yielding and retrying.");
-                yield_now().await;
             }
         }
     }
@@ -1166,85 +1237,9 @@ async fn prepare_create<P: Into<Prop>, V: Into<ScalarValue>>(
     }
 }
 
-async fn create_content<T>(
-    synced_discovery_key: &[u8; 32],
-    synced_contiguous_length: u64,
-    doc_discovery_key: &[u8; 32],
-    writer_name: &str,
-    write_discovery_key: &[u8; 32],
-    feeds: Arc<DashMap<[u8; 32], Arc<Mutex<Feed<T>>>>>,
-    unapplied_entries: &mut UnappliedEntries,
-) -> anyhow::Result<
-    Option<(
-        DocumentContent,
-        Vec<Patch>,
-        Vec<([u8; 32], String)>,
-        Vec<([u8; 32], u64)>,
-    )>,
->
-where
-    T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send + 'static,
-{
-    // The document starts from the doc feed, so get that first
-    if synced_discovery_key == doc_discovery_key {
-        let entries = {
-            let doc_feed = feeds.get(doc_discovery_key).unwrap();
-            let mut doc_feed = doc_feed.lock().await;
-            doc_feed.entries(0, synced_contiguous_length).await?
-        };
-
-        // Create DocContent from the feed
-        let (mut automerge_doc, data, result) = init_automerge_doc_from_entries(
-            writer_name,
-            write_discovery_key,
-            synced_discovery_key,
-            entries,
-            unapplied_entries,
-        )?;
-        let cursors: Vec<DocumentCursor> = result
-            .iter()
-            .map(|value| DocumentCursor::new(value.0.clone(), value.1 .0))
-            .collect();
-        let patches = if !cursors.is_empty() {
-            automerge_doc.observer().take_patches()
-        } else {
-            vec![]
-        };
-        let new_names: Vec<([u8; 32], String)> = result
-            .iter()
-            .filter(|value| value.1 .1.is_some())
-            .map(|value| (value.0.clone(), value.1 .1.clone().unwrap()))
-            .collect();
-        let peer_syncs: Vec<([u8; 32], u64)> = result
-            .iter()
-            .map(|value| (value.0.clone(), value.1 .0))
-            .collect();
-        Ok(Some((
-            DocumentContent::new(data, cursors, automerge_doc),
-            patches,
-            new_names,
-            peer_syncs,
-        )))
-    } else {
-        // Got first some other peer's data, need to store it to unapplied changes
-        let feed = feeds.get(synced_discovery_key).unwrap();
-        let mut feed = feed.lock().await;
-        let start_index = unapplied_entries.current_length(synced_discovery_key);
-        let entries = feed
-            .entries(start_index, synced_contiguous_length - start_index)
-            .await?;
-        let mut index = start_index;
-        for entry in entries {
-            unapplied_entries.add(synced_discovery_key, index, entry);
-            index += 1;
-        }
-        Ok(None)
-    }
-}
-
 async fn update_content<T>(
     content: &mut DocumentContent,
-    feeds: Arc<DashMap<[u8; 32], Arc<Mutex<Feed<T>>>>>,
+    feeds: &Arc<DashMap<[u8; 32], Arc<Mutex<Feed<T>>>>>,
     unapplied_entries: &mut UnappliedEntries,
 ) -> anyhow::Result<(bool, Vec<([u8; 32], String)>)>
 where
@@ -1272,34 +1267,6 @@ where
     }
 
     Ok((changed, new_peer_names))
-}
-
-async fn update_synced_content<T>(
-    synced_discovery_key: &[u8; 32],
-    synced_contiguous_length: u64,
-    content: &mut DocumentContent,
-    feeds: Arc<DashMap<[u8; 32], Arc<Mutex<Feed<T>>>>>,
-    unapplied_entries: &mut UnappliedEntries,
-) -> anyhow::Result<(Vec<Patch>, Vec<([u8; 32], String)>, Vec<([u8; 32], u64)>)>
-where
-    T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send + 'static,
-{
-    let (_, entries) = get_new_entries(
-        synced_discovery_key,
-        Some(synced_contiguous_length),
-        content,
-        &feeds,
-    )
-    .await?;
-
-    update_content_with_entries(
-        entries,
-        synced_discovery_key,
-        synced_contiguous_length,
-        content,
-        unapplied_entries,
-    )
-    .await
 }
 
 async fn get_new_entries<T>(
