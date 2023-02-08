@@ -13,11 +13,15 @@ pub(crate) struct PeermergeState {
     pub(crate) document_ids: Vec<DocumentId>,
 }
 impl PeermergeState {
-    pub fn new(name: &str, document_ids: Vec<DocumentId>) -> Self {
+    pub(crate) fn new(name: &str, document_ids: Vec<DocumentId>) -> Self {
         Self::new_with_version(1, name.to_string(), document_ids)
     }
 
-    pub fn new_with_version(version: u8, name: String, document_ids: Vec<DocumentId>) -> Self {
+    pub(crate) fn new_with_version(
+        version: u8,
+        name: String,
+        document_ids: Vec<DocumentId>,
+    ) -> Self {
         Self {
             version,
             name,
@@ -46,7 +50,7 @@ pub(crate) struct DocumentState {
     pub(crate) watched_ids: Vec<ObjId>,
 }
 impl DocumentState {
-    pub fn new(
+    pub(crate) fn new(
         doc_url: &str,
         name: &str,
         proxy: bool,
@@ -65,7 +69,7 @@ impl DocumentState {
         )
     }
 
-    pub fn new_with_version(
+    pub(crate) fn new_with_version(
         version: u8,
         doc_url: String,
         name: String,
@@ -98,7 +102,7 @@ pub(crate) struct DocumentPeerState {
     pub(crate) name: Option<String>,
 }
 impl DocumentPeerState {
-    pub fn new(public_key: [u8; 32], name: Option<String>) -> Self {
+    pub(crate) fn new(public_key: [u8; 32], name: Option<String>) -> Self {
         let discovery_key = discovery_key_from_public_key(&public_key);
         Self {
             discovery_key,
@@ -114,7 +118,7 @@ pub(crate) struct DocumentCursor {
     pub(crate) length: u64,
 }
 impl DocumentCursor {
-    pub fn new(discovery_key: [u8; 32], length: u64) -> Self {
+    pub(crate) fn new(discovery_key: [u8; 32], length: u64) -> Self {
         Self {
             discovery_key,
             length,
@@ -131,7 +135,11 @@ pub(crate) struct DocumentContent {
     pub(crate) automerge_doc: Option<AutomergeDoc>,
 }
 impl DocumentContent {
-    pub fn new(data: Vec<u8>, cursors: Vec<DocumentCursor>, automerge_doc: AutomergeDoc) -> Self {
+    pub(crate) fn new(
+        data: Vec<u8>,
+        cursors: Vec<DocumentCursor>,
+        automerge_doc: AutomergeDoc,
+    ) -> Self {
         Self {
             data,
             cursors,
@@ -139,7 +147,7 @@ impl DocumentContent {
         }
     }
 
-    pub fn cursor_length(&self, discovery_key: &[u8; 32]) -> u64 {
+    pub(crate) fn cursor_length(&self, discovery_key: &[u8; 32]) -> u64 {
         if let Some(cursor) = self
             .cursors
             .iter()
@@ -151,7 +159,7 @@ impl DocumentContent {
         }
     }
 
-    pub fn set_cursor(&mut self, discovery_key: &[u8; 32], length: u64) {
+    pub(crate) fn set_cursor(&mut self, discovery_key: &[u8; 32], length: u64) {
         if let Some(cursor) = self
             .cursors
             .iter_mut()

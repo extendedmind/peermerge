@@ -10,7 +10,7 @@ use crate::common::entry::{Entry, EntryType};
 use super::{apply_entries_autocommit, AutomergeDoc, UnappliedEntries};
 
 /// Convenience method to initialize an Automerge document with root scalars
-pub fn init_automerge_doc_with_root_scalars<P: Into<Prop>, V: Into<ScalarValue>>(
+pub(crate) fn init_automerge_doc_with_root_scalars<P: Into<Prop>, V: Into<ScalarValue>>(
     peer_name: &str,
     discovery_key: &[u8; 32],
     root_props: Vec<(P, V)>,

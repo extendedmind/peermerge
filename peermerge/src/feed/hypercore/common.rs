@@ -40,7 +40,7 @@ pub(super) struct PeerState {
     pub(super) contiguous_range_sent: u64,
 }
 impl PeerState {
-    pub fn new(
+    pub(crate) fn new(
         is_doc: bool,
         doc_discovery_key: [u8; 32],
         write_public_key: Option<[u8; 32]>,
@@ -67,7 +67,7 @@ impl PeerState {
         }
     }
 
-    pub fn filter_new_peer_public_keys(
+    pub(crate) fn filter_new_peer_public_keys(
         &self,
         remote_write_public_key: &Option<[u8; 32]>,
         remote_peer_public_keys: &Vec<[u8; 32]>,
@@ -92,7 +92,7 @@ impl PeerState {
     }
 
     /// Do the public keys in the PeerState match those given
-    pub fn peer_public_keys_match(
+    pub(crate) fn peer_public_keys_match(
         &self,
         remote_write_public_key: &Option<[u8; 32]>,
         remote_peer_public_keys: &Vec<[u8; 32]>,
@@ -119,7 +119,7 @@ pub(super) struct InflightTracker {
 }
 
 impl InflightTracker {
-    pub fn add(&mut self, request: &mut Request) {
+    pub(crate) fn add(&mut self, request: &mut Request) {
         let id = self.freed_ids.pop().unwrap_or_else(|| {
             self.requests.push(None);
             return self.requests.len() as u64;
@@ -128,7 +128,7 @@ impl InflightTracker {
         self.requests[id as usize - 1] = Some(request.clone());
     }
 
-    pub fn get_highest_upgrade(&self) -> Option<RequestUpgrade> {
+    pub(crate) fn get_highest_upgrade(&self) -> Option<RequestUpgrade> {
         self.requests
             .iter()
             .filter_map(|request| request.as_ref().and_then(|request| request.upgrade.clone()))
@@ -141,7 +141,7 @@ impl InflightTracker {
             })
     }
 
-    pub fn get_highest_block(&self) -> Option<RequestBlock> {
+    pub(crate) fn get_highest_block(&self) -> Option<RequestBlock> {
         self.requests
             .iter()
             .filter_map(|request| request.as_ref().and_then(|request| request.block.clone()))
@@ -154,7 +154,7 @@ impl InflightTracker {
             })
     }
 
-    pub fn remove(&mut self, id: u64) {
+    pub(crate) fn remove(&mut self, id: u64) {
         if id as usize <= self.requests.len() {
             self.requests[id as usize - 1] = None;
             self.freed_ids.push(id);

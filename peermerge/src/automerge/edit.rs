@@ -10,13 +10,13 @@ pub(crate) struct UnappliedEntries {
 }
 
 impl UnappliedEntries {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             data: HashMap::new(),
         }
     }
 
-    pub fn current_length(&self, discovery_key: &[u8; 32]) -> u64 {
+    pub(crate) fn current_length(&self, discovery_key: &[u8; 32]) -> u64 {
         if let Some(value) = self.data.get(discovery_key) {
             value.0
         } else {
@@ -24,7 +24,7 @@ impl UnappliedEntries {
         }
     }
 
-    pub fn add(&mut self, discovery_key: &[u8; 32], index: u64, entry: Entry) {
+    pub(crate) fn add(&mut self, discovery_key: &[u8; 32], index: u64, entry: Entry) {
         if let Some(value) = self.data.get_mut(discovery_key) {
             value.0 = index;
             value.1.push_back(entry);
@@ -36,7 +36,7 @@ impl UnappliedEntries {
         };
     }
 
-    pub fn consolidate(
+    pub(crate) fn consolidate(
         &mut self,
         automerge_doc: &mut AutomergeDoc,
         changes_to_apply: &mut Vec<Change>,

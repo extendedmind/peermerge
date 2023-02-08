@@ -33,11 +33,11 @@ pub(crate) struct Entry {
     pub(crate) change: Option<Change>,
 }
 impl Entry {
-    pub fn new_init_doc(peer_name: &str, data: Vec<u8>) -> Self {
+    pub(crate) fn new_init_doc(peer_name: &str, data: Vec<u8>) -> Self {
         Self::new(1, EntryType::InitDoc, Some(peer_name.to_string()), data)
     }
 
-    pub fn new_init_peer(peer_name: &str, discovery_key: [u8; 32]) -> Self {
+    pub(crate) fn new_init_peer(peer_name: &str, discovery_key: [u8; 32]) -> Self {
         Self::new(
             1,
             EntryType::InitPeer,
@@ -46,7 +46,7 @@ impl Entry {
         )
     }
 
-    pub fn new_change(mut change: Change) -> Self {
+    pub(crate) fn new_change(mut change: Change) -> Self {
         let data = change.bytes().to_vec();
         Self {
             version: 1,
@@ -57,7 +57,7 @@ impl Entry {
         }
     }
 
-    pub fn new(
+    pub(crate) fn new(
         version: u8,
         entry_type: EntryType,
         peer_name: Option<String>,

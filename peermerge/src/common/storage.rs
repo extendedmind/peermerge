@@ -29,18 +29,18 @@ impl<T> PeermergeStateWrapper<T>
 where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send,
 {
-    pub async fn add_document_id_to_state(&mut self, document_id: &DocumentId) {
+    pub(crate) async fn add_document_id_to_state(&mut self, document_id: &DocumentId) {
         self.state.document_ids.push(document_id.clone());
         write_repo_state(&self.state, &mut self.storage).await;
     }
 
-    pub fn state(&self) -> &PeermergeState {
+    pub(crate) fn state(&self) -> &PeermergeState {
         &self.state
     }
 }
 
 impl PeermergeStateWrapper<RandomAccessMemory> {
-    pub async fn new_memory(name: &str) -> Self {
+    pub(crate) async fn new_memory(name: &str) -> Self {
         let state = PeermergeState::new(name, vec![]);
         let mut storage = RandomAccessMemory::default();
         write_repo_state(&state, &mut storage).await;
@@ -50,7 +50,7 @@ impl PeermergeStateWrapper<RandomAccessMemory> {
 
 #[cfg(not(target_arch = "wasm32"))]
 impl PeermergeStateWrapper<RandomAccessDisk> {
-    pub async fn new_disk(name: &str, data_root_dir: &PathBuf) -> Self {
+    pub(crate) async fn new_disk(name: &str, data_root_dir: &PathBuf) -> Self {
         let state = PeermergeState::new(name, vec![]);
         let state_path = get_peermerge_state_path(data_root_dir);
         let mut storage = RandomAccessDisk::builder(state_path).build().await.unwrap();
@@ -58,7 +58,7 @@ impl PeermergeStateWrapper<RandomAccessDisk> {
         Self { state, storage }
     }
 
-    pub async fn open_disk(data_root_dir: &PathBuf) -> Self {
+    pub(crate) async fn open_disk(data_root_dir: &PathBuf) -> Self {
         let state_path = get_peermerge_state_path(data_root_dir);
         let mut storage = RandomAccessDisk::builder(state_path).build().await.unwrap();
         let len = storage.len().await.expect("Could not get file length");
@@ -90,7 +90,10 @@ impl<T> DocStateWrapper<T>
 where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send,
 {
-    pub async fn add_peer_public_keys_to_state(&mut self, public_keys: Vec<[u8; 32]>) -> bool {
+    pub(crate) async fn add_peer_public_keys_to_state(
+        &mut self,
+        public_keys: Vec<[u8; 32]>,
+    ) -> bool {
         let added = add_peer_public_keys_to_document_state(&mut self.state, public_keys);
         if added {
             write_document_state(&self.state, &mut self.storage).await;
@@ -98,7 +101,7 @@ where
         added
     }
 
-    pub fn content_and_unapplied_entries_mut(
+    pub(crate) fn content_and_unapplied_entries_mut(
         &mut self,
     ) -> Option<(&mut DocumentContent, &mut UnappliedEntries)> {
         if let Some(content) = self.state.content.as_mut() {
@@ -109,11 +112,11 @@ where
         }
     }
 
-    pub fn unappliend_entries_mut(&mut self) -> &mut UnappliedEntries {
+    pub(crate) fn unappliend_entries_mut(&mut self) -> &mut UnappliedEntries {
         &mut self.unapplied_entries
     }
 
-    pub async fn set_content_and_new_peer_names(
+    pub(crate) async fn set_content_and_new_peer_names(
         &mut self,
         content: DocumentContent,
         new_peer_names: Vec<([u8; 32], String)>,
@@ -125,7 +128,7 @@ where
         write_document_state(&self.state, &mut self.storage).await;
     }
 
-    pub fn peer_name(&self, discovery_key: &[u8; 32]) -> Option<String> {
+    pub(crate) fn peer_name(&self, discovery_key: &[u8; 32]) -> Option<String> {
         self.state
             .peers
             .iter()
@@ -133,7 +136,7 @@ where
             .and_then(|peer| peer.name.clone())
     }
 
-    pub async fn persist_content_and_new_peer_names(
+    pub(crate) async fn persist_content_and_new_peer_names(
         &mut self,
         new_peer_names: Vec<([u8; 32], String)>,
     ) {
@@ -143,7 +146,7 @@ where
         write_document_state(&self.state, &mut self.storage).await;
     }
 
-    pub async fn set_cursor(&mut self, discovery_key: &[u8; 32], length: u64) {
+    pub(crate) async fn set_cursor(&mut self, discovery_key: &[u8; 32], length: u64) {
         if let Some(content) = self.state.content.as_mut() {
             content.set_cursor(discovery_key, length);
             write_document_state(&self.state, &mut self.storage).await;
@@ -152,7 +155,7 @@ where
         }
     }
 
-    pub fn write_discovery_key(&self) -> [u8; 32] {
+    pub(crate) fn write_discovery_key(&self) -> [u8; 32] {
         discovery_key_from_public_key(
             &self
                 .state
@@ -161,25 +164,25 @@ where
         )
     }
 
-    pub fn state(&self) -> &DocumentState {
+    pub(crate) fn state(&self) -> &DocumentState {
         &self.state
     }
 
-    pub fn automerge_doc(&self) -> Option<&AutomergeDoc> {
+    pub(crate) fn automerge_doc(&self) -> Option<&AutomergeDoc> {
         self.state
             .content
             .as_ref()
             .and_then(|content| content.automerge_doc.as_ref())
     }
 
-    pub fn automerge_doc_mut(&mut self) -> Option<&mut AutomergeDoc> {
+    pub(crate) fn automerge_doc_mut(&mut self) -> Option<&mut AutomergeDoc> {
         self.state
             .content
             .as_mut()
             .and_then(|content| content.automerge_doc.as_mut())
     }
 
-    pub fn watch(&mut self, ids: Vec<ObjId>) {
+    pub(crate) fn watch(&mut self, ids: Vec<ObjId>) {
         self.state.watched_ids = ids;
     }
 
@@ -206,7 +209,7 @@ where
 }
 
 impl DocStateWrapper<RandomAccessMemory> {
-    pub async fn new_memory(
+    pub(crate) async fn new_memory(
         doc_url: &str,
         peer_name: &str,
         proxy: bool,
@@ -228,7 +231,7 @@ impl DocStateWrapper<RandomAccessMemory> {
 
 #[cfg(not(target_arch = "wasm32"))]
 impl DocStateWrapper<RandomAccessDisk> {
-    pub async fn new_disk(
+    pub(crate) async fn new_disk(
         doc_url: &str,
         name: &str,
         proxy: bool,
@@ -249,7 +252,7 @@ impl DocStateWrapper<RandomAccessDisk> {
         }
     }
 
-    pub async fn open_disk(data_root_dir: &PathBuf) -> Self {
+    pub(crate) async fn open_disk(data_root_dir: &PathBuf) -> Self {
         let state_path = get_document_state_path(data_root_dir);
         let mut storage = RandomAccessDisk::builder(state_path).build().await.unwrap();
         let len = storage.len().await.expect("Could not get file length");

@@ -5,7 +5,7 @@ pub(crate) struct BroadcastMessage {
     pub(crate) peer_public_keys: Vec<[u8; 32]>,
 }
 impl BroadcastMessage {
-    pub fn new(public_key: Option<[u8; 32]>, peer_public_keys: Vec<[u8; 32]>) -> Self {
+    pub(crate) fn new(public_key: Option<[u8; 32]>, peer_public_keys: Vec<[u8; 32]>) -> Self {
         Self {
             write_public_key: public_key,
             peer_public_keys,
@@ -21,7 +21,7 @@ pub(crate) struct NewPeersCreatedMessage {
     pub(crate) public_keys: Vec<[u8; 32]>,
 }
 impl NewPeersCreatedMessage {
-    pub fn new(doc_discovery_key: [u8; 32], public_keys: Vec<[u8; 32]>) -> Self {
+    pub(crate) fn new(doc_discovery_key: [u8; 32], public_keys: Vec<[u8; 32]>) -> Self {
         Self {
             doc_discovery_key,
             public_keys,
@@ -36,7 +36,7 @@ pub(crate) struct PeerSyncedMessage {
     pub(crate) contiguous_length: u64,
 }
 impl PeerSyncedMessage {
-    pub fn new(contiguous_length: u64) -> Self {
+    pub(crate) fn new(contiguous_length: u64) -> Self {
         Self { contiguous_length }
     }
 }

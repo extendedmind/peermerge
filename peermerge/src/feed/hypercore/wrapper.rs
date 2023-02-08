@@ -35,7 +35,7 @@ use super::{
 use crate::common::{cipher::EntryCipher, entry::Entry, PeerEvent};
 
 #[derive(Debug)]
-pub struct HypercoreWrapper<T>
+pub(crate) struct HypercoreWrapper<T>
 where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send,
 {
@@ -50,7 +50,7 @@ where
 
 #[cfg(not(target_arch = "wasm32"))]
 impl HypercoreWrapper<RandomAccessDisk> {
-    pub fn from_disk_hypercore(
+    pub(crate) fn from_disk_hypercore(
         hypercore: Hypercore<RandomAccessDisk>,
         proxy: bool,
         encrypted: bool,
@@ -78,7 +78,7 @@ impl HypercoreWrapper<RandomAccessDisk> {
 }
 
 impl HypercoreWrapper<RandomAccessMemory> {
-    pub fn from_memory_hypercore(
+    pub(crate) fn from_memory_hypercore(
         hypercore: Hypercore<RandomAccessMemory>,
         proxy: bool,
         encrypted: bool,
