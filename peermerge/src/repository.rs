@@ -60,6 +60,10 @@ where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send + 'static,
     U: FeedPersistence,
 {
+    pub fn name(&self) -> String {
+        self.name.clone()
+    }
+
     #[instrument(skip(self))]
     pub async fn watch(&mut self, document_id: &DocumentId, ids: Vec<ObjId>) {
         let mut document = self.documents.get_mut(document_id).unwrap();
