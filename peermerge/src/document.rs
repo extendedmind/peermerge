@@ -56,7 +56,7 @@ where
     U: FeedPersistence,
 {
     feeds: Arc<DashMap<[u8; 32], Arc<Mutex<Feed<U>>>>>,
-    doc_state: Arc<Mutex<DocStateWrapper<T>>>,
+    document_state: Arc<Mutex<DocStateWrapper<T>>>,
     state_event_sender: Arc<Mutex<Option<UnboundedSender<StateEvent>>>>,
     prefix: PathBuf,
     name: String,
@@ -103,7 +103,7 @@ where
     }
 
     pub(crate) async fn public_keys(&self) -> (Option<[u8; 32]>, Vec<[u8; 32]>) {
-        let state = self.doc_state.lock().await;
+        let state = self.document_state.lock().await;
         let state = state.state();
         let peer_public_keys: Vec<[u8; 32]> = state
             .peers
@@ -118,8 +118,8 @@ where
         if self.proxy {
             panic!("Can not watch on a proxy");
         }
-        let mut doc_state = self.doc_state.lock().await;
-        doc_state.watch(ids);
+        let mut document_state = self.document_state.lock().await;
+        document_state.watch(ids);
     }
 
     #[instrument(skip(self, obj, prop), fields(obj = obj.as_ref().to_string(), peer_name = self.name))]
@@ -131,10 +131,10 @@ where
         if self.proxy {
             panic!("Can not get id on a proxy");
         }
-        let doc_state = &self.doc_state;
+        let document_state = &self.document_state;
         let result = {
-            let doc_state = doc_state.lock().await;
-            if let Some(doc) = doc_state.automerge_doc() {
+            let document_state = document_state.lock().await;
+            if let Some(doc) = document_state.automerge_doc() {
                 match doc.get(obj, prop) {
                     Ok(result) => {
                         if let Some(result) = result {
@@ -164,10 +164,10 @@ where
         if self.proxy {
             panic!("Can not get id on a proxy");
         }
-        let doc_state = &self.doc_state;
+        let document_state = &self.document_state;
         let result = {
-            let doc_state = doc_state.lock().await;
-            if let Some(doc) = doc_state.automerge_doc() {
+            let document_state = document_state.lock().await;
+            if let Some(doc) = document_state.automerge_doc() {
                 match doc.get(obj, prop) {
                     Ok(result) => {
                         if let Some(result) = result {
@@ -201,10 +201,10 @@ where
         if self.proxy {
             panic!("Can not get document values on a proxy");
         }
-        let doc_state = &self.doc_state;
+        let document_state = &self.document_state;
         let result = {
-            let doc_state = doc_state.lock().await;
-            if let Some(doc) = doc_state.automerge_doc() {
+            let document_state = document_state.lock().await;
+            if let Some(doc) = document_state.automerge_doc() {
                 match doc.get(obj, prop) {
                     Ok(result) => {
                         if let Some(result) = result {
@@ -232,10 +232,10 @@ where
         if self.proxy {
             panic!("Can not realize text on a proxy");
         }
-        let doc_state = &self.doc_state;
+        let document_state = &self.document_state;
         let result = {
-            let doc_state = doc_state.lock().await;
-            if let Some(doc) = doc_state.automerge_doc() {
+            let document_state = document_state.lock().await;
+            if let Some(doc) = document_state.automerge_doc() {
                 let length = doc.length(obj.as_ref().clone());
                 let mut chars = Vec::with_capacity(length);
                 for i in 0..length {
@@ -278,8 +278,8 @@ where
             panic!("Can not put object on a proxy");
         }
         let id = {
-            let mut doc_state = self.doc_state.lock().await;
-            let (entry, id) = if let Some(doc) = doc_state.automerge_doc_mut() {
+            let mut document_state = self.document_state.lock().await;
+            let (entry, id) = if let Some(doc) = document_state.automerge_doc_mut() {
                 put_object_autocommit(doc, obj, prop, object).unwrap()
             } else {
                 unimplemented!(
@@ -287,13 +287,15 @@ where
                 );
             };
 
-            let write_discovery_key = doc_state.write_discovery_key();
+            let write_discovery_key = document_state.write_discovery_key();
             let length = {
                 let write_feed = self.feeds.get_mut(&write_discovery_key).unwrap();
                 let mut write_feed = write_feed.lock().await;
                 write_feed.append(&serialize_entry(&entry)).await?
             };
-            doc_state.set_cursor(&write_discovery_key, length).await;
+            document_state
+                .set_cursor(&write_discovery_key, length)
+                .await;
             id
         };
         {
@@ -313,8 +315,8 @@ where
             panic!("Can not put scalar on a proxy");
         }
         {
-            let mut doc_state = self.doc_state.lock().await;
-            let entry = if let Some(doc) = doc_state.automerge_doc_mut() {
+            let mut document_state = self.document_state.lock().await;
+            let entry = if let Some(doc) = document_state.automerge_doc_mut() {
                 put_scalar_autocommit(doc, obj, prop, value).unwrap()
             } else {
                 unimplemented!(
@@ -322,13 +324,15 @@ where
                 );
             };
 
-            let write_discovery_key = doc_state.write_discovery_key();
+            let write_discovery_key = document_state.write_discovery_key();
             let length = {
                 let write_feed = self.feeds.get_mut(&write_discovery_key).unwrap();
                 let mut write_feed = write_feed.lock().await;
                 write_feed.append(&serialize_entry(&entry)).await?
             };
-            doc_state.set_cursor(&write_discovery_key, length).await;
+            document_state
+                .set_cursor(&write_discovery_key, length)
+                .await;
         };
         {
             self.notify_of_document_changes().await;
@@ -348,21 +352,23 @@ where
             panic!("Can not splice text on a proxy");
         }
         {
-            let mut doc_state = self.doc_state.lock().await;
-            let entry = if let Some(doc) = doc_state.automerge_doc_mut() {
+            let mut document_state = self.document_state.lock().await;
+            let entry = if let Some(doc) = document_state.automerge_doc_mut() {
                 splice_text(doc, obj, index, delete, text)?
             } else {
                 unimplemented!(
                 "TODO: No proper error code for trying to splice text before a document is synced"
             );
             };
-            let write_discovery_key = doc_state.write_discovery_key();
+            let write_discovery_key = document_state.write_discovery_key();
             let length = {
                 let write_feed_wrapper = self.feeds.get_mut(&write_discovery_key).unwrap();
                 let mut write_feed = write_feed_wrapper.lock().await;
                 write_feed.append(&serialize_entry(&entry)).await?
             };
-            doc_state.set_cursor(&write_discovery_key, length).await;
+            document_state
+                .set_cursor(&write_discovery_key, length)
+                .await;
         }
         {
             self.notify_of_document_changes().await;
@@ -375,8 +381,8 @@ where
         if self.proxy {
             panic!("Can not cork a proxy");
         }
-        let doc_state = self.doc_state.lock().await;
-        let write_discovery_key = doc_state.write_discovery_key();
+        let document_state = self.document_state.lock().await;
+        let write_discovery_key = document_state.write_discovery_key();
         let write_feed_wrapper = self.feeds.get_mut(&write_discovery_key).unwrap();
         let mut write_feed = write_feed_wrapper.lock().await;
         write_feed.cork();
@@ -387,8 +393,8 @@ where
         if self.proxy {
             panic!("Can not uncork a proxy");
         }
-        let doc_state = self.doc_state.lock().await;
-        let write_discovery_key = doc_state.write_discovery_key();
+        let document_state = self.document_state.lock().await;
+        let write_discovery_key = document_state.write_discovery_key();
         let write_feed_wrapper = self.feeds.get_mut(&write_discovery_key).unwrap();
         let mut write_feed = write_feed_wrapper.lock().await;
         write_feed.uncork().await?;
@@ -410,8 +416,8 @@ where
 
     #[instrument(level = "debug", skip_all, fields(peer_name = self.name))]
     pub(crate) async fn take_patches(&mut self) -> Vec<Patch> {
-        let mut doc_state = self.doc_state.lock().await;
-        if let Some(doc) = doc_state.automerge_doc_mut() {
+        let mut document_state = self.document_state.lock().await;
+        if let Some(doc) = document_state.automerge_doc_mut() {
             doc.observer().take_patches()
         } else {
             vec![]
@@ -420,8 +426,8 @@ where
 
     #[instrument(level = "debug", skip_all, fields(peer_name = self.name))]
     async fn notify_of_document_changes(&mut self) {
-        let mut doc_state = self.doc_state.lock().await;
-        if let Some(doc) = doc_state.automerge_doc_mut() {
+        let mut document_state = self.document_state.lock().await;
+        if let Some(doc) = document_state.automerge_doc_mut() {
             let mut state_event_sender = self.state_event_sender.lock().await;
             if let Some(sender) = state_event_sender.as_mut() {
                 if sender.is_closed() {
@@ -468,9 +474,9 @@ where
         }
         let (mut state_events, patches): (Vec<StateEvent>, Vec<Patch>) = {
             // Sync doc state exclusively...
-            let mut doc_state = self.doc_state.lock().await;
+            let mut document_state = self.document_state.lock().await;
             let (mut patches, peer_syncs) = if let Some((content, unapplied_entries)) =
-                doc_state.content_and_unapplied_entries_mut()
+                document_state.content_and_unapplied_entries_mut()
             {
                 let (patches, new_peer_names, peer_syncs) = update_synced_content(
                     &discovery_key,
@@ -481,13 +487,13 @@ where
                 )
                 .await
                 .unwrap();
-                doc_state
+                document_state
                     .persist_content_and_new_peer_names(new_peer_names)
                     .await;
                 (patches, peer_syncs)
             } else {
-                let write_discovery_key = doc_state.write_discovery_key();
-                let unapplied_entries = doc_state.unappliend_entries_mut();
+                let write_discovery_key = document_state.write_discovery_key();
+                let unapplied_entries = document_state.unappliend_entries_mut();
                 if let Some((content, patches, new_peer_names, peer_syncs)) = create_content(
                     &discovery_key,
                     synced_contiguous_length,
@@ -500,7 +506,7 @@ where
                 .await
                 .unwrap()
                 {
-                    doc_state
+                    document_state
                         .set_content_and_new_peer_names(content, new_peer_names)
                         .await;
                     (patches, peer_syncs)
@@ -511,7 +517,7 @@ where
             };
 
             // Filter out unwatched patches
-            let watched_ids = &doc_state.state().watched_ids;
+            let watched_ids = &document_state.state().watched_ids;
             patches.retain(|patch| match patch {
                 Patch::Put { obj, .. } => watched_ids.contains(obj),
                 Patch::Insert { obj, .. } => watched_ids.contains(obj),
@@ -524,7 +530,7 @@ where
             let peer_synced_events: Vec<StateEvent> = peer_syncs
                 .iter()
                 .map(|sync| {
-                    let name = doc_state.peer_name(&sync.0).unwrap();
+                    let name = document_state.peer_name(&sync.0).unwrap();
                     StateEvent::new(
                         self.id(),
                         StateEventContent::PeerSynced((Some(name), sync.0.clone(), sync.1)),
@@ -691,7 +697,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
         ) = unbounded();
 
         let state_event_sender_for_task = state_event_sender.clone();
-        let doc_state = self.doc_state.clone();
+        let document_state = self.document_state.clone();
         let discovery_key_for_task = self.doc_discovery_key.clone();
         let feeds_for_task = self.feeds.clone();
         let name_for_task = self.name.clone();
@@ -705,7 +711,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
                 &discovery_key_for_task,
                 peer_event_receiver,
                 state_event_sender_for_task,
-                doc_state,
+                document_state,
                 feeds_for_task,
                 &name_for_task,
                 proxy,
@@ -720,7 +726,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
                 &discovery_key_for_task,
                 peer_event_receiver,
                 state_event_sender_for_task,
-                doc_state,
+                document_state,
                 feeds_for_task,
                 &name_for_task,
                 proxy,
@@ -731,7 +737,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
 
         on_protocol(
             protocol,
-            self.doc_state.clone(),
+            self.document_state.clone(),
             self.feeds.clone(),
             &mut peer_event_sender,
         )
@@ -745,8 +751,8 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
         public_keys: Vec<[u8; 32]>,
     ) -> bool {
         let changed = {
-            let mut doc_state = self.doc_state.lock().await;
-            doc_state
+            let mut document_state = self.document_state.lock().await;
+            document_state
                 .add_peer_public_keys_to_state(public_keys.clone())
                 .await
         };
@@ -792,7 +798,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
             feeds.insert(peer_discovery_key, Arc::new(Mutex::new(peer_feed)));
             peer_public_keys.push(peer_public_key);
         }
-        let doc_state = DocStateWrapper::new_memory(
+        let document_state = DocStateWrapper::new_memory(
             doc_url,
             name,
             proxy,
@@ -803,7 +809,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
         .await;
         Self {
             feeds: Arc::new(feeds),
-            doc_state: Arc::new(Mutex::new(doc_state)),
+            document_state: Arc::new(Mutex::new(document_state)),
             state_event_sender: Arc::new(Mutex::new(None)),
             prefix: PathBuf::new(),
             doc_discovery_key,
@@ -821,7 +827,7 @@ async fn on_peer_event_memory(
     doc_discovery_key: &[u8; 32],
     mut peer_event_receiver: UnboundedReceiver<PeerEvent>,
     mut state_event_sender: UnboundedSender<StateEvent>,
-    mut doc_state: Arc<Mutex<DocStateWrapper<RandomAccessMemory>>>,
+    mut document_state: Arc<Mutex<DocStateWrapper<RandomAccessMemory>>>,
     mut feeds: Arc<DashMap<[u8; 32], Arc<Mutex<Feed<FeedMemoryPersistence>>>>>,
     name: &str,
     proxy: bool,
@@ -832,8 +838,8 @@ async fn on_peer_event_memory(
         match event.content {
             PeerEventContent::NewPeersBroadcasted(public_keys) => {
                 let changed = {
-                    let mut doc_state = doc_state.lock().await;
-                    doc_state
+                    let mut document_state = document_state.lock().await;
+                    document_state
                         .add_peer_public_keys_to_state(public_keys.clone())
                         .await
                 };
@@ -858,7 +864,7 @@ async fn on_peer_event_memory(
                     event,
                     doc_discovery_key,
                     &mut state_event_sender,
-                    &mut doc_state,
+                    &mut document_state,
                     &mut feeds,
                     name,
                     proxy,
@@ -1052,8 +1058,8 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
     }
 
     pub async fn open_disk(encryption_key: &Option<Vec<u8>>, data_root_dir: &PathBuf) -> Self {
-        let mut doc_state_wrapper = DocStateWrapper::open_disk(data_root_dir).await;
-        let state = doc_state_wrapper.state();
+        let mut document_state_wrapper = DocStateWrapper::open_disk(data_root_dir).await;
+        let state = document_state_wrapper.state();
         let encrypted = state.encrypted;
         let proxy = state.proxy;
         let doc_discovery_key = state.doc_discovery_key.clone();
@@ -1106,7 +1112,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
             // Initialize doc, fill unapplied changes and possibly save state if it had been left
             // unsaved
             if let Some((content, unapplied_entries)) =
-                doc_state_wrapper.content_and_unapplied_entries_mut()
+                document_state_wrapper.content_and_unapplied_entries_mut()
             {
                 let doc = init_automerge_doc_from_data(&name, &write_discovery_key, &content.data);
                 content.automerge_doc = Some(doc);
@@ -1116,7 +1122,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
                         .await
                         .unwrap();
                 if changed {
-                    doc_state_wrapper
+                    document_state_wrapper
                         .persist_content_and_new_peer_names(new_peer_names)
                         .await;
                 }
@@ -1129,7 +1135,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
         // Create Peermerge
         Self {
             feeds,
-            doc_state: Arc::new(Mutex::new(doc_state_wrapper)),
+            document_state: Arc::new(Mutex::new(document_state_wrapper)),
             state_event_sender: Arc::new(Mutex::new(None)),
             prefix: data_root_dir.clone(),
             doc_discovery_key,
@@ -1165,7 +1171,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
         ) = unbounded();
 
         let state_event_sender_for_task = state_event_sender.clone();
-        let doc_state = self.doc_state.clone();
+        let document_state = self.document_state.clone();
         let discovery_key_for_task = self.doc_discovery_key.clone();
         let feeds_for_task = self.feeds.clone();
         let name_for_task = self.name.clone();
@@ -1179,7 +1185,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
                 &discovery_key_for_task,
                 peer_event_receiver,
                 state_event_sender_for_task,
-                doc_state,
+                document_state,
                 feeds_for_task,
                 &name_for_task,
                 proxy,
@@ -1191,7 +1197,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
 
         on_protocol(
             protocol,
-            self.doc_state.clone(),
+            self.document_state.clone(),
             self.feeds.clone(),
             &mut peer_event_sender,
         )
@@ -1205,8 +1211,8 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
         public_keys: Vec<[u8; 32]>,
     ) -> bool {
         let changed = {
-            let mut doc_state = self.doc_state.lock().await;
-            doc_state
+            let mut document_state = self.document_state.lock().await;
+            document_state
                 .add_peer_public_keys_to_state(public_keys.clone())
                 .await
         };
@@ -1254,7 +1260,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
             feeds.insert(peer_discovery_key, Arc::new(Mutex::new(peer_feed)));
             peer_public_keys.push(peer_public_key);
         }
-        let doc_state = DocStateWrapper::new_disk(
+        let document_state = DocStateWrapper::new_disk(
             doc_url,
             name,
             proxy,
@@ -1266,7 +1272,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
         .await;
         Self {
             feeds: Arc::new(feeds),
-            doc_state: Arc::new(Mutex::new(doc_state)),
+            document_state: Arc::new(Mutex::new(document_state)),
             state_event_sender: Arc::new(Mutex::new(None)),
             prefix: data_root_dir.clone(),
             doc_discovery_key,
@@ -1285,7 +1291,7 @@ async fn on_peer_event_disk(
     doc_discovery_key: &[u8; 32],
     mut peer_event_receiver: UnboundedReceiver<PeerEvent>,
     mut state_event_sender: UnboundedSender<StateEvent>,
-    mut doc_state: Arc<Mutex<DocStateWrapper<RandomAccessDisk>>>,
+    mut document_state: Arc<Mutex<DocStateWrapper<RandomAccessDisk>>>,
     mut feeds: Arc<DashMap<[u8; 32], Arc<Mutex<Feed<FeedDiskPersistence>>>>>,
     name: &str,
     proxy: bool,
@@ -1297,8 +1303,8 @@ async fn on_peer_event_disk(
         match event.content {
             PeerEventContent::NewPeersBroadcasted(public_keys) => {
                 let changed = {
-                    let mut doc_state = doc_state.lock().await;
-                    doc_state
+                    let mut document_state = document_state.lock().await;
+                    document_state
                         .add_peer_public_keys_to_state(public_keys.clone())
                         .await
                 };
@@ -1324,7 +1330,7 @@ async fn on_peer_event_disk(
                     event,
                     doc_discovery_key,
                     &mut state_event_sender,
-                    &mut doc_state,
+                    &mut document_state,
                     &mut feeds,
                     name,
                     proxy,
@@ -1406,7 +1412,7 @@ async fn process_peer_event<T>(
     event: PeerEvent,
     doc_discovery_key: &[u8; 32],
     state_event_sender: &mut UnboundedSender<StateEvent>,
-    doc_state: &mut Arc<Mutex<DocStateWrapper<T>>>,
+    document_state: &mut Arc<Mutex<DocStateWrapper<T>>>,
     feeds: &mut Arc<DashMap<[u8; 32], Arc<Mutex<Feed<T>>>>>,
     name: &str,
     proxy: bool,
@@ -1451,9 +1457,9 @@ async fn process_peer_event<T>(
             }
             let (peer_sync_events, patches): (Vec<StateEvent>, Vec<Patch>) = {
                 // Sync doc state exclusively...
-                let mut doc_state = doc_state.lock().await;
+                let mut document_state = document_state.lock().await;
                 let (mut patches, peer_syncs) = if let Some((content, unapplied_entries)) =
-                    doc_state.content_and_unapplied_entries_mut()
+                    document_state.content_and_unapplied_entries_mut()
                 {
                     let (patches, new_peer_names, peer_syncs) = update_synced_content(
                         &discovery_key,
@@ -1464,13 +1470,13 @@ async fn process_peer_event<T>(
                     )
                     .await
                     .unwrap();
-                    doc_state
+                    document_state
                         .persist_content_and_new_peer_names(new_peer_names)
                         .await;
                     (patches, peer_syncs)
                 } else {
-                    let write_discovery_key = doc_state.write_discovery_key();
-                    let unapplied_entries = doc_state.unappliend_entries_mut();
+                    let write_discovery_key = document_state.write_discovery_key();
+                    let unapplied_entries = document_state.unappliend_entries_mut();
                     if let Some((content, patches, new_peer_names, peer_syncs)) = create_content(
                         &discovery_key,
                         synced_contiguous_length,
@@ -1483,7 +1489,7 @@ async fn process_peer_event<T>(
                     .await
                     .unwrap()
                     {
-                        doc_state
+                        document_state
                             .set_content_and_new_peer_names(content, new_peer_names)
                             .await;
                         (patches, peer_syncs)
@@ -1494,7 +1500,7 @@ async fn process_peer_event<T>(
                 };
 
                 // Filter out unwatched patches
-                let watched_ids = &doc_state.state().watched_ids;
+                let watched_ids = &document_state.state().watched_ids;
                 patches.retain(|patch| match patch {
                     Patch::Put { obj, .. } => watched_ids.contains(obj),
                     Patch::Insert { obj, .. } => watched_ids.contains(obj),
@@ -1507,7 +1513,7 @@ async fn process_peer_event<T>(
                 let peer_synced_events: Vec<StateEvent> = peer_syncs
                     .iter()
                     .map(|sync| {
-                        let name = doc_state.peer_name(&sync.0).unwrap();
+                        let name = document_state.peer_name(&sync.0).unwrap();
                         StateEvent::new(
                             *doc_discovery_key,
                             StateEventContent::PeerSynced((Some(name), sync.0.clone(), sync.1)),

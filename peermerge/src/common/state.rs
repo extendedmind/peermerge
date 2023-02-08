@@ -5,14 +5,14 @@ use crate::{automerge::AutomergeDoc, DocumentId};
 
 use super::{cipher::doc_url_to_public_key, keys::discovery_key_from_public_key};
 
-/// A RepositoryState stores serialized information about the Repo.
+/// PeermergeState stores serialized information about all of the documents.
 #[derive(Debug)]
-pub(crate) struct RepositoryState {
+pub(crate) struct PeermergeState {
     pub(crate) version: u8,
     pub(crate) name: String, // This peer's name
     pub(crate) document_ids: Vec<DocumentId>,
 }
-impl RepositoryState {
+impl PeermergeState {
     pub fn new(name: &str, document_ids: Vec<DocumentId>) -> Self {
         Self::new_with_version(1, name.to_string(), document_ids)
     }

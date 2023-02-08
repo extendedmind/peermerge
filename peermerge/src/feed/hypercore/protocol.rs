@@ -23,11 +23,11 @@ use crate::{DocumentId, FeedPersistence, IO};
 
 #[instrument(
     level = "debug",
-    skip(protocol, doc_state, hypercores, peer_event_sender)
+    skip(protocol, document_state, hypercores, peer_event_sender)
 )]
 pub(crate) async fn on_protocol<T, IO>(
     protocol: &mut Protocol<IO>,
-    doc_state: Arc<Mutex<DocStateWrapper<T>>>,
+    document_state: Arc<Mutex<DocStateWrapper<T>>>,
     hypercores: Arc<DashMap<[u8; 32], Arc<Mutex<HypercoreWrapper<T>>>>>,
     peer_event_sender: &mut UnboundedSender<PeerEvent>,
 ) -> anyhow::Result<()>
@@ -36,7 +36,14 @@ where
     IO: AsyncWrite + AsyncRead + Send + Unpin + 'static,
 {
     let is_initiator = protocol.is_initiator();
-    let doc_discovery_key = { doc_state.lock().await.state().doc_discovery_key.clone() };
+    let doc_discovery_key = {
+        document_state
+            .lock()
+            .await
+            .state()
+            .doc_discovery_key
+            .clone()
+    };
 
     debug!("Begin listening to protocol events");
     let mut unbound_discovery_keys: Vec<[u8; 32]> = vec![];
@@ -76,7 +83,7 @@ where
                         if let Some(hypercore) = hypercores.get(discovery_key) {
                             let mut hypercore = hypercore.lock().await;
                             let (write_public_key, peer_public_keys) =
-                                public_keys(doc_state.clone()).await;
+                                public_keys(document_state.clone()).await;
                             let is_doc_channel = discovery_key == &doc_discovery_key;
                             let channel_receiver = channel.take_receiver().unwrap();
                             let channel_sender = channel.local_sender();
@@ -342,12 +349,12 @@ where
 }
 
 async fn public_keys<T>(
-    doc_state: Arc<Mutex<DocStateWrapper<T>>>,
+    document_state: Arc<Mutex<DocStateWrapper<T>>>,
 ) -> (Option<[u8; 32]>, Vec<[u8; 32]>)
 where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send + 'static,
 {
-    let state = doc_state.lock().await;
+    let state = document_state.lock().await;
     let state = state.state();
     let peer_public_keys: Vec<[u8; 32]> = state
         .peers

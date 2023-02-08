@@ -4,29 +4,29 @@ use std::convert::TryInto;
 
 pub(crate) use crate::common::entry::Entry;
 pub(crate) use crate::common::message::BroadcastMessage;
-pub(crate) use crate::common::state::{DocumentState, RepositoryState};
+pub(crate) use crate::common::state::{DocumentState, PeermergeState};
 
 use super::message::{NewPeersCreatedMessage, PeerSyncedMessage};
 use super::state::{DocumentContent, DocumentCursor, DocumentPeerState};
 
-impl CompactEncoding<RepositoryState> for State {
-    fn preencode(&mut self, value: &RepositoryState) {
+impl CompactEncoding<PeermergeState> for State {
+    fn preencode(&mut self, value: &PeermergeState) {
         self.preencode(&value.version);
         self.preencode(&value.name);
         preencode_fixed_32_byte_vec(self, &value.document_ids);
     }
 
-    fn encode(&mut self, value: &RepositoryState, buffer: &mut [u8]) {
+    fn encode(&mut self, value: &PeermergeState, buffer: &mut [u8]) {
         self.encode(&value.version, buffer);
         self.encode(&value.name, buffer);
         encode_fixed_32_byte_vec(self, &value.document_ids, buffer);
     }
 
-    fn decode(&mut self, buffer: &[u8]) -> RepositoryState {
+    fn decode(&mut self, buffer: &[u8]) -> PeermergeState {
         let version: u8 = self.decode(buffer);
         let name: String = self.decode(buffer);
         let document_ids = decode_fixed_32_byte_vec(self, buffer);
-        RepositoryState::new_with_version(version, name, document_ids)
+        PeermergeState::new_with_version(version, name, document_ids)
     }
 }
 

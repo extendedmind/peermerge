@@ -32,7 +32,7 @@ use crate::{
     feed::{FeedMemoryPersistence, FeedPersistence, Protocol},
 };
 use crate::{
-    common::{cipher::encode_document_id, storage::RepositoryStateWrapper},
+    common::{cipher::encode_document_id, storage::PeermergeStateWrapper},
     StateEventContent,
 };
 use crate::{document::Document, StateEvent};
@@ -51,7 +51,7 @@ where
     /// Prefix
     prefix: PathBuf,
     /// Current storable state
-    repository_state: Arc<Mutex<RepositoryStateWrapper<T>>>,
+    peermerge_state: Arc<Mutex<PeermergeStateWrapper<T>>>,
     /// Created documents
     documents: Arc<DashMap<DocumentId, Document<T, U>>>,
     /// Sender for events
@@ -210,7 +210,7 @@ where
     }
 
     async fn add_document(&mut self, document: Document<T, U>) -> DocumentId {
-        let mut state = self.repository_state.lock().await;
+        let mut state = self.peermerge_state.lock().await;
         let id = document.id();
         self.documents.insert(id, document);
         state.add_document_id_to_state(&id).await;
@@ -224,11 +224,11 @@ where
 
 impl Peermerge<RandomAccessMemory, FeedMemoryPersistence> {
     pub async fn new_memory(name: &str) -> Self {
-        let state = RepositoryStateWrapper::new_memory(name).await;
+        let state = PeermergeStateWrapper::new_memory(name).await;
         Self {
             name: name.to_string(),
             prefix: PathBuf::new(),
-            repository_state: Arc::new(Mutex::new(state)),
+            peermerge_state: Arc::new(Mutex::new(state)),
             documents: Arc::new(DashMap::new()),
             state_event_sender: Arc::new(Mutex::new(None)),
         }
@@ -281,7 +281,7 @@ impl Peermerge<RandomAccessMemory, FeedMemoryPersistence> {
         ) = unbounded();
 
         let state_event_sender_for_task = state_event_sender.clone();
-        let repository_state = self.repository_state.clone();
+        let peermerge_state = self.peermerge_state.clone();
         let documents_for_task = self.documents.clone();
         let name_for_task = self.name.clone();
         let task_span = tracing::debug_span!("call_on_peer_event_memory").or_current();
@@ -291,7 +291,7 @@ impl Peermerge<RandomAccessMemory, FeedMemoryPersistence> {
             on_peer_event_memory(
                 peer_event_receiver,
                 state_event_sender_for_task,
-                repository_state,
+                peermerge_state,
                 documents_for_task,
                 &name_for_task,
             )
@@ -303,7 +303,7 @@ impl Peermerge<RandomAccessMemory, FeedMemoryPersistence> {
             on_peer_event_memory(
                 peer_event_receiver,
                 state_event_sender_for_task,
-                repository_state,
+                peermerge_state,
                 documents_for_task,
                 &name_for_task,
             )
@@ -319,7 +319,7 @@ impl Peermerge<RandomAccessMemory, FeedMemoryPersistence> {
 async fn on_peer_event_memory(
     mut peer_event_receiver: UnboundedReceiver<PeerEvent>,
     mut state_event_sender: UnboundedSender<StateEvent>,
-    mut repository_state: Arc<Mutex<RepositoryStateWrapper<RandomAccessMemory>>>,
+    mut peermerge_state: Arc<Mutex<PeermergeStateWrapper<RandomAccessMemory>>>,
     mut documents: Arc<DashMap<DocumentId, Document<RandomAccessMemory, FeedMemoryPersistence>>>,
     name: &str,
 ) {
@@ -336,7 +336,7 @@ async fn on_peer_event_memory(
                 process_peer_event(
                     event,
                     &mut state_event_sender,
-                    &mut repository_state,
+                    &mut peermerge_state,
                     &mut documents,
                     name,
                 )
@@ -354,11 +354,11 @@ async fn on_peer_event_memory(
 #[cfg(not(target_arch = "wasm32"))]
 impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
     pub async fn create_new_disk(name: &str, data_root_dir: &PathBuf) -> Self {
-        let state = RepositoryStateWrapper::new_disk(name, data_root_dir).await;
+        let state = PeermergeStateWrapper::new_disk(name, data_root_dir).await;
         Self {
             name: name.to_string(),
             prefix: data_root_dir.clone(),
-            repository_state: Arc::new(Mutex::new(state)),
+            peermerge_state: Arc::new(Mutex::new(state)),
             documents: Arc::new(DashMap::new()),
             state_event_sender: Arc::new(Mutex::new(None)),
         }
@@ -368,7 +368,7 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
         encryption_keys: HashMap<DocumentId, Vec<u8>>,
         data_root_dir: &PathBuf,
     ) -> Self {
-        let state_wrapper = RepositoryStateWrapper::open_disk(data_root_dir).await;
+        let state_wrapper = PeermergeStateWrapper::open_disk(data_root_dir).await;
         let state = state_wrapper.state();
         let name = state.name.clone();
         let documents: DashMap<DocumentId, Document<RandomAccessDisk, FeedDiskPersistence>> =
@@ -384,7 +384,7 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
         Self {
             name,
             prefix: data_root_dir.clone(),
-            repository_state: Arc::new(Mutex::new(state_wrapper)),
+            peermerge_state: Arc::new(Mutex::new(state_wrapper)),
             documents: Arc::new(documents),
             state_event_sender: Arc::new(Mutex::new(None)),
         }
@@ -439,7 +439,7 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
         ) = unbounded();
 
         let state_event_sender_for_task = state_event_sender.clone();
-        let repository_state = self.repository_state.clone();
+        let peermerge_state = self.peermerge_state.clone();
         let documents_for_task = self.documents.clone();
         let name_for_task = self.name.clone();
         let task_span = tracing::debug_span!("call_on_peer_event_disk").or_current();
@@ -448,7 +448,7 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
             on_peer_event_disk(
                 peer_event_receiver,
                 state_event_sender_for_task,
-                repository_state,
+                peermerge_state,
                 documents_for_task,
                 &name_for_task,
             )
@@ -465,7 +465,7 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
 async fn on_peer_event_disk(
     mut peer_event_receiver: UnboundedReceiver<PeerEvent>,
     mut state_event_sender: UnboundedSender<StateEvent>,
-    mut repository_state: Arc<Mutex<RepositoryStateWrapper<RandomAccessDisk>>>,
+    mut peermerge_state: Arc<Mutex<PeermergeStateWrapper<RandomAccessDisk>>>,
     mut documents: Arc<DashMap<DocumentId, Document<RandomAccessDisk, FeedDiskPersistence>>>,
     name: &str,
 ) {
@@ -482,7 +482,7 @@ async fn on_peer_event_disk(
                 process_peer_event(
                     event,
                     &mut state_event_sender,
-                    &mut repository_state,
+                    &mut peermerge_state,
                     &mut documents,
                     name,
                 )
@@ -501,7 +501,7 @@ async fn on_peer_event_disk(
 async fn process_peer_event<T, U>(
     event: PeerEvent,
     state_event_sender: &mut UnboundedSender<StateEvent>,
-    repository_state: &mut Arc<Mutex<RepositoryStateWrapper<T>>>,
+    peermerge_state: &mut Arc<Mutex<PeermergeStateWrapper<T>>>,
     documents: &mut Arc<DashMap<DocumentId, Document<T, U>>>,
     name: &str,
 ) where
