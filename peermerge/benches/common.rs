@@ -3,7 +3,9 @@ use futures::channel::mpsc::{
 };
 use futures::stream::StreamExt;
 use hypercore_protocol::{Duplex, Protocol, ProtocolBuilder};
-use peermerge::{FeedMemoryPersistence, Peermerge, StateEvent, StateEventContent::*, ROOT};
+use peermerge::{
+    DocumentId, FeedMemoryPersistence, PeermergeRepository, StateEvent, StateEventContent::*, ROOT,
+};
 use random_access_memory::RandomAccessMemory;
 
 #[cfg(feature = "async-std")]
@@ -15,16 +17,19 @@ pub async fn setup_peermerge_mesh(
     peers: usize,
     encrypted: bool,
 ) -> (Vec<Sender<u64>>, UnboundedReceiver<StateEvent>) {
-    let mut peermerge_creator: Peermerge<RandomAccessMemory, FeedMemoryPersistence> =
-        Peermerge::create_new_memory("p1", vec![("version", 1)], encrypted).await;
-    let encryption_key = peermerge_creator.encryption_key();
-    peermerge_creator.watch(vec![ROOT]).await;
+    let mut peermerge_creator: PeermergeRepository<RandomAccessMemory, FeedMemoryPersistence> =
+        PeermergeRepository::new_memory("p1").await;
+    let doc_id = peermerge_creator
+        .create_new_document_memory(vec![("version", 1)], encrypted)
+        .await;
+    let encryption_key = peermerge_creator.encryption_key(&doc_id);
+    peermerge_creator.watch(&doc_id, vec![ROOT]).await;
     let (state_event_sender, mut state_event_receiver): (
         UnboundedSender<StateEvent>,
         UnboundedReceiver<StateEvent>,
     ) = unbounded();
     let mut senders = Vec::with_capacity(peers);
-    let doc_url = peermerge_creator.doc_url();
+    let doc_url = peermerge_creator.doc_url(&doc_id);
 
     for i in 1..peers {
         let (proto_responder, proto_initiator) = create_pair_memory().await;
@@ -40,9 +45,11 @@ pub async fn setup_peermerge_mesh(
         });
 
         let peer_name = format!("p{}", i + 1);
-        let mut peermerge_peer =
-            Peermerge::attach_writer_memory(&peer_name, &doc_url, &encryption_key).await;
-        peermerge_peer.watch(vec![ROOT]).await;
+        let mut peermerge_peer = PeermergeRepository::new_memory(&peer_name).await;
+        let doc_id = peermerge_peer
+            .attach_writer_document_memory(&doc_url, &encryption_key)
+            .await;
+        peermerge_peer.watch(&doc_id, vec![ROOT]).await;
 
         let peermerge_peer_for_task = peermerge_peer.clone();
         let state_event_sender_for_task = state_event_sender.clone();
@@ -61,7 +68,7 @@ pub async fn setup_peermerge_mesh(
         let task_span = tracing::debug_span!("call_append_value").or_current();
         task::spawn(async move {
             let _entered = task_span.enter();
-            append_value(&peer_name, peermerge_peer, append_index_receiver).await;
+            append_value(&peer_name, peermerge_peer, doc_id, append_index_receiver).await;
         });
 
         // TODO: Check what these should be for peers > 3
@@ -91,7 +98,7 @@ pub async fn setup_peermerge_mesh(
     let task_span = tracing::debug_span!("call_append_value").or_current();
     task::spawn(async move {
         let _entered = task_span.enter();
-        append_value("p1", peermerge_creator, append_index_receiver).await;
+        append_value("p1", peermerge_creator, doc_id, append_index_receiver).await;
     });
     senders.push(append_index_sender);
 
@@ -111,7 +118,7 @@ async fn create_pair_memory() -> (MemoryProtocol, MemoryProtocol) {
 }
 
 async fn connect(
-    mut peermerge: Peermerge<RandomAccessMemory, FeedMemoryPersistence>,
+    mut peermerge: PeermergeRepository<RandomAccessMemory, FeedMemoryPersistence>,
     mut protocol: MemoryProtocol,
     mut state_event_sender: UnboundedSender<StateEvent>,
 ) {
@@ -123,12 +130,13 @@ async fn connect(
 
 async fn append_value(
     peer_name: &str,
-    mut peermerge: Peermerge<RandomAccessMemory, FeedMemoryPersistence>,
+    mut peermerge: PeermergeRepository<RandomAccessMemory, FeedMemoryPersistence>,
+    doc_id: DocumentId,
     mut append_index_receiver: Receiver<u64>,
 ) {
     while let Some(i) = append_index_receiver.next().await {
         peermerge
-            .put_scalar(ROOT, format!("{}_{}", peer_name, i), i)
+            .put_scalar(&doc_id, ROOT, format!("{}_{}", peer_name, i), i)
             .await
             .unwrap();
     }
