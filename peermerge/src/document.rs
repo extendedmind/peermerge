@@ -1,7 +1,6 @@
 use automerge::{ObjId, ObjType, Patch, Prop, ReadDoc, ScalarValue, Value};
 use dashmap::DashMap;
-use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
-use futures::{AsyncRead, AsyncWrite, StreamExt};
+use futures::channel::mpsc::UnboundedSender;
 #[cfg(not(target_arch = "wasm32"))]
 use random_access_disk::RandomAccessDisk;
 use random_access_memory::RandomAccessMemory;
@@ -10,16 +9,10 @@ use std::sync::Arc;
 use std::{fmt::Debug, path::PathBuf};
 use tracing::{debug, instrument, warn};
 
-#[cfg(all(not(target_arch = "wasm32"), feature = "async-std"))]
-use async_std::task;
 #[cfg(feature = "async-std")]
 use async_std::{sync::Mutex, task::yield_now};
-#[cfg(all(not(target_arch = "wasm32"), feature = "tokio"))]
-use tokio::task;
 #[cfg(feature = "tokio")]
 use tokio::{sync::Mutex, task::yield_now};
-#[cfg(target_arch = "wasm32")]
-use wasm_bindgen_futures::spawn_local;
 
 use crate::automerge::{
     apply_entries_autocommit, init_automerge_doc_from_data, init_automerge_doc_from_entries,
@@ -28,8 +21,7 @@ use crate::automerge::{
 use crate::common::cipher::{doc_url_to_public_key, encode_document_id, keys_to_doc_url};
 use crate::common::encoding::serialize_entry;
 use crate::common::keys::{discovery_key_from_public_key, generate_keys, Keypair};
-use crate::common::{PeerEvent, PeerEventContent, StateEventContent};
-use crate::feed::on_protocol;
+use crate::common::StateEventContent::*;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::feed::{create_new_read_disk_feed, create_new_write_disk_feed, open_disk_feed};
 use crate::DocumentId;
@@ -42,7 +34,7 @@ use crate::{
         state::{DocumentContent, DocumentCursor},
         storage::DocStateWrapper,
     },
-    feed::{create_new_read_memory_feed, create_new_write_memory_feed, Feed, Protocol},
+    feed::{create_new_read_memory_feed, create_new_write_memory_feed, Feed},
     FeedMemoryPersistence, FeedPersistence, StateEvent,
 };
 
@@ -50,7 +42,7 @@ use crate::{
 #[derive(derivative::Derivative)]
 #[derivative(Clone(bound = ""))]
 #[derive(Debug)]
-pub struct Document<T, U>
+pub(crate) struct Document<T, U>
 where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send,
     U: FeedPersistence,
@@ -72,10 +64,6 @@ where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send + 'static,
     U: FeedPersistence,
 {
-    pub fn name(&self) -> String {
-        self.name.clone()
-    }
-
     pub(crate) fn id(&self) -> DocumentId {
         self.doc_discovery_key.clone()
     }
@@ -114,7 +102,7 @@ where
     }
 
     #[instrument(skip(self))]
-    pub async fn watch(&mut self, ids: Vec<ObjId>) {
+    pub(crate) async fn watch(&mut self, ids: Vec<ObjId>) {
         if self.proxy {
             panic!("Can not watch on a proxy");
         }
@@ -123,7 +111,7 @@ where
     }
 
     #[instrument(skip(self, obj, prop), fields(obj = obj.as_ref().to_string(), peer_name = self.name))]
-    pub async fn get_id<O: AsRef<ObjId>, P: Into<Prop>>(
+    pub(crate) async fn get_id<O: AsRef<ObjId>, P: Into<Prop>>(
         &self,
         obj: O,
         prop: P,
@@ -156,7 +144,7 @@ where
     }
 
     #[instrument(skip(self, obj, prop), fields(obj = obj.as_ref().to_string(), peer_name = self.name))]
-    pub async fn get_scalar<O: AsRef<ObjId>, P: Into<Prop>>(
+    pub(crate) async fn get_scalar<O: AsRef<ObjId>, P: Into<Prop>>(
         &self,
         obj: O,
         prop: P,
@@ -193,7 +181,7 @@ where
     }
 
     #[instrument(skip(self, obj, prop), fields(obj = obj.as_ref().to_string(), peer_name = self.name))]
-    pub async fn get<O: AsRef<ObjId>, P: Into<Prop>>(
+    pub(crate) async fn get<O: AsRef<ObjId>, P: Into<Prop>>(
         &self,
         obj: O,
         prop: P,
@@ -228,7 +216,10 @@ where
     }
 
     #[instrument(skip(self, obj), fields(obj = obj.as_ref().to_string(), peer_name = self.name))]
-    pub async fn realize_text<O: AsRef<ObjId>>(&self, obj: O) -> anyhow::Result<Option<String>> {
+    pub(crate) async fn realize_text<O: AsRef<ObjId>>(
+        &self,
+        obj: O,
+    ) -> anyhow::Result<Option<String>> {
         if self.proxy {
             panic!("Can not realize text on a proxy");
         }
@@ -268,7 +259,7 @@ where
     }
 
     #[instrument(skip(self, obj, prop), fields(obj = obj.as_ref().to_string(), peer_name = self.name))]
-    pub async fn put_object<O: AsRef<ObjId>, P: Into<Prop>>(
+    pub(crate) async fn put_object<O: AsRef<ObjId>, P: Into<Prop>>(
         &mut self,
         obj: O,
         prop: P,
@@ -305,7 +296,7 @@ where
     }
 
     #[instrument(skip(self, obj, prop, value), fields(obj = obj.as_ref().to_string(), peer_name = self.name))]
-    pub async fn put_scalar<O: AsRef<ObjId>, P: Into<Prop>, V: Into<ScalarValue>>(
+    pub(crate) async fn put_scalar<O: AsRef<ObjId>, P: Into<Prop>, V: Into<ScalarValue>>(
         &mut self,
         obj: O,
         prop: P,
@@ -341,7 +332,7 @@ where
     }
 
     #[instrument(skip(self, obj), fields(obj = obj.as_ref().to_string(), peer_name = self.name))]
-    pub async fn splice_text<O: AsRef<ObjId>>(
+    pub(crate) async fn splice_text<O: AsRef<ObjId>>(
         &mut self,
         obj: O,
         index: usize,
@@ -377,7 +368,7 @@ where
     }
 
     #[instrument(skip(self))]
-    pub async fn cork(&mut self) {
+    pub(crate) async fn cork(&mut self) {
         if self.proxy {
             panic!("Can not cork a proxy");
         }
@@ -389,7 +380,7 @@ where
     }
 
     #[instrument(skip(self))]
-    pub async fn uncork(&mut self) -> anyhow::Result<()> {
+    pub(crate) async fn uncork(&mut self) -> anyhow::Result<()> {
         if self.proxy {
             panic!("Can not uncork a proxy");
         }
@@ -402,12 +393,12 @@ where
     }
 
     #[instrument(skip(self))]
-    pub fn doc_url(&self) -> String {
+    pub(crate) fn doc_url(&self) -> String {
         self.doc_url.clone()
     }
 
     #[instrument(skip(self))]
-    pub fn encryption_key(&self) -> Option<Vec<u8>> {
+    pub(crate) fn encryption_key(&self) -> Option<Vec<u8>> {
         if self.proxy {
             panic!("A proxy does not store the encryption key");
         }
@@ -438,7 +429,7 @@ where
                         sender
                             .unbounded_send(StateEvent::new(
                                 self.doc_discovery_key.clone(),
-                                StateEventContent::DocumentChanged(patches),
+                                DocumentChanged(patches),
                             ))
                             .unwrap();
                     }
@@ -469,7 +460,7 @@ where
             // Just notify a peer sync forward
             return vec![StateEvent::new(
                 self.id(),
-                StateEventContent::PeerSynced((None, discovery_key, synced_contiguous_length)),
+                PeerSynced((None, discovery_key, synced_contiguous_length)),
             )];
         }
         let (mut state_events, patches): (Vec<StateEvent>, Vec<Patch>) = {
@@ -531,10 +522,7 @@ where
                 .iter()
                 .map(|sync| {
                     let name = document_state.peer_name(&sync.0).unwrap();
-                    StateEvent::new(
-                        self.id(),
-                        StateEventContent::PeerSynced((Some(name), sync.0.clone(), sync.1)),
-                    )
+                    StateEvent::new(self.id(), PeerSynced((Some(name), sync.0.clone(), sync.1)))
                 })
                 .collect();
             (peer_synced_events, patches)
@@ -542,10 +530,7 @@ where
         };
 
         if patches.len() > 0 {
-            state_events.push(StateEvent::new(
-                self.id(),
-                StateEventContent::DocumentChanged(patches),
-            ));
+            state_events.push(StateEvent::new(self.id(), DocumentChanged(patches)));
         }
 
         // Finally, notify about the new sync so that other protocols can get synced as
@@ -566,7 +551,7 @@ where
 // Memory
 
 impl Document<RandomAccessMemory, FeedMemoryPersistence> {
-    pub async fn create_new_memory<P: Into<Prop>, V: Into<ScalarValue>>(
+    pub(crate) async fn create_new_memory<P: Into<Prop>, V: Into<ScalarValue>>(
         name: &str,
         root_scalars: Vec<(P, V)>,
         encrypted: bool,
@@ -605,7 +590,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
         .await
     }
 
-    pub async fn attach_writer_memory(
+    pub(crate) async fn attach_writer_memory(
         name: &str,
         doc_url: &str,
         encryption_key: &Option<Vec<u8>>,
@@ -648,7 +633,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
         .await
     }
 
-    pub async fn attach_proxy_memory(name: &str, doc_url: &str) -> Self {
+    pub(crate) async fn attach_proxy_memory(name: &str, doc_url: &str) -> Self {
         let proxy = true;
 
         // Process keys from doc URL
@@ -671,78 +656,6 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
             None,
         )
         .await
-    }
-
-    #[instrument(skip_all, fields(peer_name = self.name))]
-    pub async fn connect_protocol_memory<IO>(
-        &mut self,
-        protocol: &mut Protocol<IO>,
-        state_event_sender: &mut UnboundedSender<StateEvent>,
-    ) -> anyhow::Result<()>
-    where
-        IO: AsyncWrite + AsyncRead + Send + Unpin + 'static,
-    {
-        // First let's drain any patches that are not yet sent out, and push them out. These can
-        // be created by scalar values inserted with create_doc_memory or other appending calls
-        // executed before this call.
-        {
-            *self.state_event_sender.lock().await = Some(state_event_sender.clone());
-        }
-        {
-            self.notify_of_document_changes().await;
-        }
-        let (mut peer_event_sender, peer_event_receiver): (
-            UnboundedSender<PeerEvent>,
-            UnboundedReceiver<PeerEvent>,
-        ) = unbounded();
-
-        let state_event_sender_for_task = state_event_sender.clone();
-        let document_state = self.document_state.clone();
-        let discovery_key_for_task = self.doc_discovery_key.clone();
-        let feeds_for_task = self.feeds.clone();
-        let name_for_task = self.name.clone();
-        let task_span = tracing::debug_span!("call_on_peer_event_memory").or_current();
-        let encryption_key_for_task = self.encryption_key.clone();
-        let proxy = self.proxy;
-        #[cfg(not(target_arch = "wasm32"))]
-        task::spawn(async move {
-            let _entered = task_span.enter();
-            on_peer_event_memory(
-                &discovery_key_for_task,
-                peer_event_receiver,
-                state_event_sender_for_task,
-                document_state,
-                feeds_for_task,
-                &name_for_task,
-                proxy,
-                &encryption_key_for_task,
-            )
-            .await;
-        });
-        #[cfg(target_arch = "wasm32")]
-        spawn_local(async move {
-            let _entered = task_span.enter();
-            on_peer_event_memory(
-                &discovery_key_for_task,
-                peer_event_receiver,
-                state_event_sender_for_task,
-                document_state,
-                feeds_for_task,
-                &name_for_task,
-                proxy,
-                &encryption_key_for_task,
-            )
-            .await;
-        });
-
-        on_protocol(
-            protocol,
-            self.document_state.clone(),
-            self.feeds.clone(),
-            &mut peer_event_sender,
-        )
-        .await?;
-        Ok(())
     }
 
     #[instrument(level = "debug", skip_all, fields(peer_name = self.name))]
@@ -822,60 +735,6 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
     }
 }
 
-#[instrument(level = "debug", skip_all)]
-async fn on_peer_event_memory(
-    doc_discovery_key: &[u8; 32],
-    mut peer_event_receiver: UnboundedReceiver<PeerEvent>,
-    mut state_event_sender: UnboundedSender<StateEvent>,
-    mut document_state: Arc<Mutex<DocStateWrapper<RandomAccessMemory>>>,
-    mut feeds: Arc<DashMap<[u8; 32], Arc<Mutex<Feed<FeedMemoryPersistence>>>>>,
-    name: &str,
-    proxy: bool,
-    encryption_key: &Option<Vec<u8>>,
-) {
-    while let Some(event) = peer_event_receiver.next().await {
-        debug!("Received event {:?}", event);
-        match event.content {
-            PeerEventContent::NewPeersBroadcasted(public_keys) => {
-                let changed = {
-                    let mut document_state = document_state.lock().await;
-                    document_state
-                        .add_peer_public_keys_to_state(public_keys.clone())
-                        .await
-                };
-                if changed {
-                    {
-                        // Create and insert all new feeds
-                        create_and_insert_read_memory_feeds(
-                            public_keys.clone(),
-                            feeds.clone(),
-                            proxy,
-                            encryption_key,
-                        )
-                        .await;
-                    }
-                    {
-                        notify_new_peers_created(&doc_discovery_key, &mut feeds, public_keys).await;
-                    }
-                }
-            }
-            _ => {
-                process_peer_event(
-                    event,
-                    doc_discovery_key,
-                    &mut state_event_sender,
-                    &mut document_state,
-                    &mut feeds,
-                    name,
-                    proxy,
-                )
-                .await
-            }
-        }
-    }
-    debug!("Exiting");
-}
-
 async fn create_and_insert_read_memory_feeds(
     public_keys: Vec<[u8; 32]>,
     feeds: Arc<DashMap<[u8; 32], Arc<Mutex<Feed<FeedMemoryPersistence>>>>>,
@@ -921,7 +780,7 @@ async fn create_and_insert_read_memory_feeds(
 
 #[cfg(not(target_arch = "wasm32"))]
 impl Document<RandomAccessDisk, FeedDiskPersistence> {
-    pub async fn create_new_disk<P: Into<Prop>, V: Into<ScalarValue>>(
+    pub(crate) async fn create_new_disk<P: Into<Prop>, V: Into<ScalarValue>>(
         name: &str,
         root_scalars: Vec<(P, V)>,
         encrypted: bool,
@@ -967,7 +826,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
         .await
     }
 
-    pub async fn attach_writer_disk(
+    pub(crate) async fn attach_writer_disk(
         name: &str,
         doc_url: &str,
         encryption_key: &Option<Vec<u8>>,
@@ -1022,7 +881,11 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
         .await
     }
 
-    pub async fn attach_proxy_disk(name: &str, doc_url: &str, data_root_dir: &PathBuf) -> Self {
+    pub(crate) async fn attach_proxy_disk(
+        name: &str,
+        doc_url: &str,
+        data_root_dir: &PathBuf,
+    ) -> Self {
         let proxy = true;
 
         // Process keys from doc URL
@@ -1057,7 +920,10 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
         .await
     }
 
-    pub async fn open_disk(encryption_key: &Option<Vec<u8>>, data_root_dir: &PathBuf) -> Self {
+    pub(crate) async fn open_disk(
+        encryption_key: &Option<Vec<u8>>,
+        data_root_dir: &PathBuf,
+    ) -> Self {
         let mut document_state_wrapper = DocStateWrapper::open_disk(data_root_dir).await;
         let state = document_state_wrapper.state();
         let encrypted = state.encrypted;
@@ -1147,64 +1013,6 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
         }
     }
 
-    #[instrument(skip_all, fields(peer_name = self.name))]
-    pub async fn connect_protocol_disk<IO>(
-        &mut self,
-        protocol: &mut Protocol<IO>,
-        state_event_sender: &mut UnboundedSender<StateEvent>,
-    ) -> anyhow::Result<()>
-    where
-        IO: AsyncWrite + AsyncRead + Send + Unpin + 'static,
-    {
-        // First let's drain any patches that are not yet sent out, and push them out. These can
-        // be created by scalar values inserted with create_doc_disk or other appending calls
-        // executed before this call.
-        {
-            *self.state_event_sender.lock().await = Some(state_event_sender.clone());
-        }
-        {
-            self.notify_of_document_changes().await;
-        }
-        let (mut peer_event_sender, peer_event_receiver): (
-            UnboundedSender<PeerEvent>,
-            UnboundedReceiver<PeerEvent>,
-        ) = unbounded();
-
-        let state_event_sender_for_task = state_event_sender.clone();
-        let document_state = self.document_state.clone();
-        let discovery_key_for_task = self.doc_discovery_key.clone();
-        let feeds_for_task = self.feeds.clone();
-        let name_for_task = self.name.clone();
-        let data_root_dir = self.prefix.clone();
-        let task_span = tracing::debug_span!("call_on_peer_event_memory").or_current();
-        let encryption_key_for_task = self.encryption_key.clone();
-        let proxy = self.proxy;
-        task::spawn(async move {
-            let _entered = task_span.enter();
-            on_peer_event_disk(
-                &discovery_key_for_task,
-                peer_event_receiver,
-                state_event_sender_for_task,
-                document_state,
-                feeds_for_task,
-                &name_for_task,
-                proxy,
-                &encryption_key_for_task,
-                &data_root_dir,
-            )
-            .await;
-        });
-
-        on_protocol(
-            protocol,
-            self.document_state.clone(),
-            self.feeds.clone(),
-            &mut peer_event_sender,
-        )
-        .await?;
-        Ok(())
-    }
-
     #[instrument(level = "debug", skip_all, fields(peer_name = self.name))]
     pub(crate) async fn process_new_peers_broadcasted_disk(
         &mut self,
@@ -1286,63 +1094,6 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-#[instrument(level = "debug", skip_all)]
-async fn on_peer_event_disk(
-    doc_discovery_key: &[u8; 32],
-    mut peer_event_receiver: UnboundedReceiver<PeerEvent>,
-    mut state_event_sender: UnboundedSender<StateEvent>,
-    mut document_state: Arc<Mutex<DocStateWrapper<RandomAccessDisk>>>,
-    mut feeds: Arc<DashMap<[u8; 32], Arc<Mutex<Feed<FeedDiskPersistence>>>>>,
-    name: &str,
-    proxy: bool,
-    encryption_key: &Option<Vec<u8>>,
-    data_root_dir: &PathBuf,
-) {
-    while let Some(event) = peer_event_receiver.next().await {
-        debug!("Received event {:?}", event);
-        match event.content {
-            PeerEventContent::NewPeersBroadcasted(public_keys) => {
-                let changed = {
-                    let mut document_state = document_state.lock().await;
-                    document_state
-                        .add_peer_public_keys_to_state(public_keys.clone())
-                        .await
-                };
-                if changed {
-                    {
-                        // Create and insert all new feeds
-                        create_and_insert_read_disk_feeds(
-                            public_keys.clone(),
-                            feeds.clone(),
-                            proxy,
-                            encryption_key,
-                            data_root_dir,
-                        )
-                        .await;
-                    }
-                    {
-                        notify_new_peers_created(&doc_discovery_key, &mut feeds, public_keys).await;
-                    }
-                }
-            }
-            _ => {
-                process_peer_event(
-                    event,
-                    doc_discovery_key,
-                    &mut state_event_sender,
-                    &mut document_state,
-                    &mut feeds,
-                    name,
-                    proxy,
-                )
-                .await
-            }
-        }
-    }
-    debug!("Exiting");
-}
-
-#[cfg(not(target_arch = "wasm32"))]
 async fn create_and_insert_read_disk_feeds(
     public_keys: Vec<[u8; 32]>,
     feeds: Arc<DashMap<[u8; 32], Arc<Mutex<Feed<FeedDiskPersistence>>>>>,
@@ -1388,166 +1139,6 @@ async fn create_and_insert_read_disk_feeds(
 //////////////////////////////////////////////////////
 //
 // Utilities
-
-#[instrument(level = "debug", skip_all)]
-async fn notify_new_peers_created<T>(
-    doc_discovery_key: &[u8; 32],
-    feeds: &mut Arc<DashMap<[u8; 32], Arc<Mutex<Feed<T>>>>>,
-    public_keys: Vec<[u8; 32]>,
-) where
-    T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send + 'static,
-{
-    // Send message to doc feed that new peers have been created to get all open protocols to
-    // open channels to it.
-    let doc_feed = feeds.get(doc_discovery_key).unwrap();
-    let mut doc_feed = doc_feed.lock().await;
-    doc_feed
-        .notify_new_peers_created(doc_discovery_key.clone(), public_keys)
-        .await
-        .unwrap();
-}
-
-#[instrument(level = "debug", skip_all)]
-async fn process_peer_event<T>(
-    event: PeerEvent,
-    doc_discovery_key: &[u8; 32],
-    state_event_sender: &mut UnboundedSender<StateEvent>,
-    document_state: &mut Arc<Mutex<DocStateWrapper<T>>>,
-    feeds: &mut Arc<DashMap<[u8; 32], Arc<Mutex<Feed<T>>>>>,
-    name: &str,
-    proxy: bool,
-) where
-    T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send + 'static,
-{
-    match event.content {
-        PeerEventContent::NewPeersBroadcasted(_) => unreachable!("Implemented by concrete type"),
-        PeerEventContent::PeerDisconnected(_) => {
-            // This is an FYI message, just continue for now
-        }
-        PeerEventContent::RemotePeerSynced((discovery_key, synced_contiguous_length)) => {
-            match state_event_sender.unbounded_send(StateEvent::new(
-                *doc_discovery_key,
-                StateEventContent::RemotePeerSynced((discovery_key, synced_contiguous_length)),
-            )) {
-                Ok(()) => {}
-                Err(err) => warn!(
-                    "{}: could not notify remote peer synced to len {}, err {}",
-                    name.to_string(),
-                    synced_contiguous_length,
-                    err
-                ),
-            }
-        }
-        PeerEventContent::PeerSynced((discovery_key, synced_contiguous_length)) => {
-            if proxy {
-                // Just notify a peer sync forward
-                match state_event_sender.unbounded_send(StateEvent::new(
-                    *doc_discovery_key,
-                    StateEventContent::PeerSynced((None, discovery_key, synced_contiguous_length)),
-                )) {
-                    Ok(()) => {}
-                    Err(err) => warn!(
-                        "{}: could not notify peer synced to len {}, err {}",
-                        name.to_string(),
-                        synced_contiguous_length,
-                        err
-                    ),
-                };
-                return;
-            }
-            let (peer_sync_events, patches): (Vec<StateEvent>, Vec<Patch>) = {
-                // Sync doc state exclusively...
-                let mut document_state = document_state.lock().await;
-                let (mut patches, peer_syncs) = if let Some((content, unapplied_entries)) =
-                    document_state.content_and_unapplied_entries_mut()
-                {
-                    let (patches, new_peer_names, peer_syncs) = update_synced_content(
-                        &discovery_key,
-                        synced_contiguous_length,
-                        content,
-                        feeds.clone(),
-                        unapplied_entries,
-                    )
-                    .await
-                    .unwrap();
-                    document_state
-                        .persist_content_and_new_peer_names(new_peer_names)
-                        .await;
-                    (patches, peer_syncs)
-                } else {
-                    let write_discovery_key = document_state.write_discovery_key();
-                    let unapplied_entries = document_state.unappliend_entries_mut();
-                    if let Some((content, patches, new_peer_names, peer_syncs)) = create_content(
-                        &discovery_key,
-                        synced_contiguous_length,
-                        &doc_discovery_key,
-                        name,
-                        &write_discovery_key,
-                        feeds.clone(),
-                        unapplied_entries,
-                    )
-                    .await
-                    .unwrap()
-                    {
-                        document_state
-                            .set_content_and_new_peer_names(content, new_peer_names)
-                            .await;
-                        (patches, peer_syncs)
-                    } else {
-                        // Could not create content from this peer's data, needs more peers
-                        (vec![], vec![])
-                    }
-                };
-
-                // Filter out unwatched patches
-                let watched_ids = &document_state.state().watched_ids;
-                patches.retain(|patch| match patch {
-                    Patch::Put { obj, .. } => watched_ids.contains(obj),
-                    Patch::Insert { obj, .. } => watched_ids.contains(obj),
-                    Patch::Delete { obj, .. } => watched_ids.contains(obj),
-                    Patch::Increment { obj, .. } => watched_ids.contains(obj),
-                    Patch::Expose { obj, .. } => watched_ids.contains(obj),
-                    Patch::Splice { obj, .. } => watched_ids.contains(obj),
-                });
-
-                let peer_synced_events: Vec<StateEvent> = peer_syncs
-                    .iter()
-                    .map(|sync| {
-                        let name = document_state.peer_name(&sync.0).unwrap();
-                        StateEvent::new(
-                            *doc_discovery_key,
-                            StateEventContent::PeerSynced((Some(name), sync.0.clone(), sync.1)),
-                        )
-                    })
-                    .collect();
-                (peer_synced_events, patches)
-                // ..doc state sync ready, release lock
-            };
-
-            for peer_sync_event in peer_sync_events {
-                state_event_sender.unbounded_send(peer_sync_event).unwrap();
-            }
-            if patches.len() > 0 {
-                state_event_sender
-                    .unbounded_send(StateEvent::new(
-                        *doc_discovery_key,
-                        StateEventContent::DocumentChanged(patches),
-                    ))
-                    .unwrap();
-            }
-
-            // Finally, notify about the new sync so that other protocols can get synced as
-            // well. The message reaches the same feed that sent this, but is disregarded.
-            {
-                let feed = feeds.get_mut(&discovery_key).unwrap();
-                let mut feed = feed.lock().await;
-                feed.notify_peer_synced(synced_contiguous_length)
-                    .await
-                    .unwrap();
-            }
-        }
-    }
-}
 
 struct PrepareCreateResult {
     key_pair: Keypair,

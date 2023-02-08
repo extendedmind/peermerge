@@ -7,8 +7,6 @@ use std::fmt::Debug;
 
 use crate::DocumentId;
 
-use super::keys::discovery_key_from_public_key;
-
 const DOC_URL_PREFIX: &str = "peermerge:/";
 const DOC_URL_VERSION: u8 = 1;
 const DOC_URL_HYPERCORE: u8 = 1;

@@ -13,20 +13,20 @@ use std::sync::Arc;
 use std::{collections::HashMap, fmt::Debug};
 use tracing::{debug, instrument, warn};
 
+#[cfg(feature = "async-std")]
+use async_std::sync::Mutex;
 #[cfg(all(not(target_arch = "wasm32"), feature = "async-std"))]
 use async_std::task;
-#[cfg(feature = "async-std")]
-use async_std::{sync::Mutex, task::yield_now};
+#[cfg(feature = "tokio")]
+use tokio::sync::Mutex;
 #[cfg(all(not(target_arch = "wasm32"), feature = "tokio"))]
 use tokio::task;
-#[cfg(feature = "tokio")]
-use tokio::{sync::Mutex, task::yield_now};
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_futures::spawn_local;
 
 #[cfg(not(target_arch = "wasm32"))]
 use crate::feed::FeedDiskPersistence;
-use crate::{common::PeerEvent, feed::on_protocol_new, DocumentId, IO};
+use crate::{common::PeerEvent, feed::on_protocol, DocumentId, IO};
 use crate::{
     common::PeerEventContent,
     feed::{FeedMemoryPersistence, FeedPersistence, Protocol},
@@ -310,7 +310,7 @@ impl Peermerge<RandomAccessMemory, FeedMemoryPersistence> {
             .await;
         });
 
-        on_protocol_new(protocol, self.documents.clone(), &mut peer_event_sender).await?;
+        on_protocol(protocol, self.documents.clone(), &mut peer_event_sender).await?;
         Ok(())
     }
 }
@@ -455,7 +455,7 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
             .await;
         });
 
-        on_protocol_new(protocol, self.documents.clone(), &mut peer_event_sender).await?;
+        on_protocol(protocol, self.documents.clone(), &mut peer_event_sender).await?;
         Ok(())
     }
 }
@@ -501,7 +501,7 @@ async fn on_peer_event_disk(
 async fn process_peer_event<T, U>(
     event: PeerEvent,
     state_event_sender: &mut UnboundedSender<StateEvent>,
-    peermerge_state: &mut Arc<Mutex<PeermergeStateWrapper<T>>>,
+    _peermerge_state: &mut Arc<Mutex<PeermergeStateWrapper<T>>>,
     documents: &mut Arc<DashMap<DocumentId, Document<T, U>>>,
     name: &str,
 ) where

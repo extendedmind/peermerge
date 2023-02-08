@@ -56,7 +56,7 @@ pub(super) fn create_append_local_signal(length: u64) -> Message {
 }
 
 pub(super) fn create_peer_synced_local_signal(contiguous_length: u64) -> Message {
-    let message = PeerSyncedMessage { contiguous_length };
+    let message = PeerSyncedMessage::new(contiguous_length);
     let mut enc_state = State::new();
     enc_state.preencode(&message);
     let mut buffer = enc_state.create_buffer();

@@ -4,6 +4,7 @@ use std::fmt::Debug;
 mod hypercore;
 
 pub use ::hypercore_protocol::{Protocol, ProtocolBuilder};
+pub(crate) use hypercore::on_protocol;
 pub(crate) use hypercore::HypercoreWrapper as Feed;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use hypercore::{
@@ -15,7 +16,6 @@ pub(crate) use hypercore::{
     create_new_read_memory_hypercore as create_new_read_memory_feed,
     create_new_write_memory_hypercore as create_new_write_memory_feed,
 };
-pub(crate) use hypercore::{on_protocol, on_protocol_new};
 #[cfg(not(target_arch = "wasm32"))]
 pub use random_access_disk::RandomAccessDisk as FeedDiskPersistence;
 pub use random_access_memory::RandomAccessMemory as FeedMemoryPersistence;
