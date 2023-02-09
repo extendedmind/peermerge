@@ -4,8 +4,8 @@ use futures::{
     stream::StreamExt,
 };
 use peermerge::{
-    doc_url_encrypted, DocumentId, FeedDiskPersistence, Patch, Peermerge, StateEvent,
-    StateEventContent::*,
+    get_doc_url_info, DocumentId, FeedDiskPersistence, NameDescription, Patch, Peermerge,
+    StateEvent, StateEventContent::*,
 };
 use random_access_disk::RandomAccessDisk;
 use std::{collections::HashMap, sync::Arc};
@@ -45,13 +45,19 @@ async fn disk_two_peers(encrypted: bool) -> anyhow::Result<()> {
     // std::fs::create_dir_all(&debug).unwrap();
     // let creator_dir = std::path::Path::new(&debug).to_path_buf();
 
-    let mut peermerge_creator = Peermerge::create_new_disk("creator", &creator_dir).await;
+    let mut peermerge_creator =
+        Peermerge::create_new_disk(NameDescription::new("creator"), &creator_dir).await;
+    let document_name = "disk_test";
     let creator_doc_id = peermerge_creator
-        .create_new_document_disk(vec![("version", 1)], encrypted)
+        .create_new_document_disk(
+            NameDescription::new(document_name),
+            vec![("version", 1)],
+            encrypted,
+        )
         .await;
     let doc_url = peermerge_creator.doc_url(&creator_doc_id);
     let encryption_key = peermerge_creator.encryption_key(&creator_doc_id);
-    assert_eq!(doc_url_encrypted(&doc_url), encrypted);
+    assert_eq!(get_doc_url_info(&doc_url).encrypted, Some(encrypted));
     assert_eq!(encryption_key.is_some(), encrypted);
 
     let joiner_dir = Builder::new()
@@ -67,7 +73,8 @@ async fn disk_two_peers(encrypted: bool) -> anyhow::Result<()> {
     // std::fs::create_dir_all(&debug).unwrap();
     // let joiner_dir = std::path::Path::new(&debug).to_path_buf();
 
-    let mut peermerge_joiner = Peermerge::create_new_disk("joiner", &joiner_dir).await;
+    let mut peermerge_joiner =
+        Peermerge::create_new_disk(NameDescription::new("joiner"), &joiner_dir).await;
     let joiner_doc_id = peermerge_joiner
         .attach_writer_document_disk(&doc_url, &encryption_key)
         .await;

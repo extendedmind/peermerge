@@ -1,48 +1,58 @@
 use automerge::ObjId;
 use std::fmt::Debug;
 
-use crate::{automerge::AutomergeDoc, DocumentId};
+use crate::{automerge::AutomergeDoc, DocumentId, NameDescription};
 
-use super::{cipher::doc_url_to_public_key, keys::discovery_key_from_public_key};
+use super::{
+    cipher::{decode_doc_url, encode_doc_url, DecodedDocUrl},
+    keys::discovery_key_from_public_key,
+};
 
-/// PeermergeState stores serialized information about all of the documents.
+/// Stores serialized information about all of the documents.
 #[derive(Debug)]
 pub(crate) struct PeermergeState {
     pub(crate) version: u8,
-    pub(crate) name: String, // This peer's name
+    pub(crate) peer_header: NameDescription,
     pub(crate) document_ids: Vec<DocumentId>,
 }
 impl PeermergeState {
-    pub(crate) fn new(name: &str, document_ids: Vec<DocumentId>) -> Self {
-        Self::new_with_version(1, name.to_string(), document_ids)
+    pub(crate) fn new(peer_header: &NameDescription, document_ids: Vec<DocumentId>) -> Self {
+        Self::new_with_version(1, peer_header.clone(), document_ids)
     }
 
     pub(crate) fn new_with_version(
         version: u8,
-        name: String,
+        peer_header: NameDescription,
         document_ids: Vec<DocumentId>,
     ) -> Self {
         Self {
             version,
-            name,
+            peer_header,
             document_ids,
         }
     }
 }
 
-/// DocumentState stores serialized information about a single document.
+/// Stores serialized information about a single document.
 #[derive(Debug)]
 pub(crate) struct DocumentState {
     pub(crate) version: u8,
-    pub(crate) doc_url: String,
-    pub(crate) doc_public_key: [u8; 32],
-    pub(crate) doc_discovery_key: [u8; 32],
-    pub(crate) name: String, // This peer's name
+    /// Document URL, always plain. Contains many of the other fields.
+    pub(crate) plain_doc_url: String,
+    /// Document's name and description. None if proxy. Derived from doc_url.
+    pub(crate) document_header: Option<NameDescription>,
+    /// Root feed's public key. Derived from doc_url.
+    pub(crate) root_public_key: [u8; 32],
+    /// Root feed's discovery key. Derived from root_public_key.
+    pub(crate) root_discovery_key: [u8; 32],
+    /// Is the document encrypted. If None it is unknown and proxy must be true.
+    /// Derived from doc_url.
+    pub(crate) encrypted: Option<bool>,
+    /// Is this a proxy document.
     pub(crate) proxy: bool,
-    pub(crate) encrypted: bool,
+    /// The state of the other peers.
     pub(crate) peers: Vec<DocumentPeerState>,
-    /// Public key of personal writeable hypercore. None means the
-    /// document is read-only.
+    /// Public key of personal writeable feed. None if proxy.
     pub(crate) write_public_key: Option<[u8; 32]>,
     /// Content of the document. None means content hasn't been synced yet.
     pub(crate) content: Option<DocumentContent>,
@@ -51,17 +61,27 @@ pub(crate) struct DocumentState {
 }
 impl DocumentState {
     pub(crate) fn new(
-        doc_url: &str,
-        name: &str,
+        decoded_doc_url: DecodedDocUrl,
         proxy: bool,
         peers: Vec<DocumentPeerState>,
         write_public_key: Option<[u8; 32]>,
         content: Option<DocumentContent>,
     ) -> Self {
+        Self::new_with_version(1, decoded_doc_url, proxy, peers, write_public_key, content)
+    }
+
+    pub(crate) fn new_from_plain_doc_url(
+        version: u8,
+        plain_doc_url: String,
+        proxy: bool,
+        peers: Vec<DocumentPeerState>,
+        write_public_key: Option<[u8; 32]>,
+        content: Option<DocumentContent>,
+    ) -> Self {
+        let decoded_doc_url = decode_doc_url(&plain_doc_url, &None);
         Self::new_with_version(
-            1,
-            doc_url.to_string(),
-            name.to_string(),
+            version,
+            decoded_doc_url,
             proxy,
             peers,
             write_public_key,
@@ -71,26 +91,32 @@ impl DocumentState {
 
     pub(crate) fn new_with_version(
         version: u8,
-        doc_url: String,
-        name: String,
+        decoded_doc_url: DecodedDocUrl,
         proxy: bool,
         peers: Vec<DocumentPeerState>,
         write_public_key: Option<[u8; 32]>,
         content: Option<DocumentContent>,
     ) -> Self {
-        let (doc_public_key, encrypted) = doc_url_to_public_key(&doc_url, &None);
         Self {
             version,
-            doc_url,
-            doc_public_key,
-            doc_discovery_key: discovery_key_from_public_key(&doc_public_key),
-            name,
+            plain_doc_url: decoded_doc_url.plain_doc_url,
+            document_header: decoded_doc_url.document_header,
+            root_public_key: decoded_doc_url.root_public_key,
+            root_discovery_key: discovery_key_from_public_key(&decoded_doc_url.root_public_key),
+            encrypted: decoded_doc_url.encrypted,
             proxy,
-            encrypted,
             peers,
             write_public_key,
             content,
             watched_ids: vec![],
+        }
+    }
+
+    pub(crate) fn doc_url(&self, encryption_key: &Option<Vec<u8>>) -> String {
+        if let Some(document_header) = &self.document_header {
+            encode_doc_url(&self.root_public_key, &document_header, encryption_key)
+        } else {
+            self.plain_doc_url.clone()
         }
     }
 }
@@ -99,15 +125,15 @@ impl DocumentState {
 pub(crate) struct DocumentPeerState {
     pub(crate) public_key: [u8; 32],
     pub(crate) discovery_key: [u8; 32],
-    pub(crate) name: Option<String>,
+    pub(crate) peer_header: Option<NameDescription>,
 }
 impl DocumentPeerState {
-    pub(crate) fn new(public_key: [u8; 32], name: Option<String>) -> Self {
+    pub(crate) fn new(public_key: [u8; 32], peer_header: Option<NameDescription>) -> Self {
         let discovery_key = discovery_key_from_public_key(&public_key);
         Self {
             discovery_key,
             public_key,
-            name,
+            peer_header,
         }
     }
 }

@@ -2,6 +2,8 @@ use std::convert::TryFrom;
 
 use automerge::Change;
 
+use crate::NameDescription;
+
 /// Type of entry stored to a hypercore.
 #[derive(Copy, Clone, Debug, PartialEq)]
 #[repr(u8)]
@@ -28,21 +30,32 @@ impl TryFrom<u8> for EntryType {
 pub(crate) struct Entry {
     pub(crate) version: u8,
     pub(crate) entry_type: EntryType,
-    pub(crate) peer_name: Option<String>,
+    pub(crate) name: Option<String>,
+    pub(crate) description: Option<String>,
     pub(crate) data: Vec<u8>,
     pub(crate) change: Option<Change>,
 }
 impl Entry {
-    pub(crate) fn new_init_doc(peer_name: &str, data: Vec<u8>) -> Self {
-        Self::new(1, EntryType::InitDoc, Some(peer_name.to_string()), data)
+    pub(crate) fn new_init_doc(document_header: NameDescription, data: Vec<u8>) -> Self {
+        Self::new(
+            1,
+            EntryType::InitDoc,
+            Some(document_header.name),
+            document_header.description,
+            data,
+        )
     }
 
-    pub(crate) fn new_init_peer(peer_name: &str, discovery_key: [u8; 32]) -> Self {
+    pub(crate) fn new_init_peer(
+        peer_header: NameDescription,
+        root_discovery_key: [u8; 32],
+    ) -> Self {
         Self::new(
             1,
             EntryType::InitPeer,
-            Some(peer_name.to_string()),
-            discovery_key.to_vec(),
+            Some(peer_header.name),
+            peer_header.description,
+            root_discovery_key.to_vec(),
         )
     }
 
@@ -51,7 +64,8 @@ impl Entry {
         Self {
             version: 1,
             entry_type: EntryType::Change,
-            peer_name: None,
+            name: None,
+            description: None,
             data,
             change: Some(change),
         }
@@ -60,7 +74,8 @@ impl Entry {
     pub(crate) fn new(
         version: u8,
         entry_type: EntryType,
-        peer_name: Option<String>,
+        name: Option<String>,
+        description: Option<String>,
         data: Vec<u8>,
     ) -> Self {
         let change: Option<Change> = if entry_type == EntryType::Change {
@@ -71,7 +86,8 @@ impl Entry {
         Self {
             version,
             entry_type,
-            peer_name,
+            name,
+            description,
             data,
             change,
         }

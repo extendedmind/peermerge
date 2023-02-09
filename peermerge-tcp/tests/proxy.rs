@@ -30,7 +30,7 @@ async fn tcp_proxy_disk_encrypted() -> anyhow::Result<()> {
     ) = unbounded();
     let mut peermerge_creator = Peermerge::new_memory("creator").await;
     let creator_doc_id = peermerge_creator
-        .create_new_document_memory(vec![("version", 1)], true)
+        .create_new_document_memory("proxy_test", vec![("version", 1)], true)
         .await;
 
     peermerge_creator.watch(&creator_doc_id, vec![ROOT]).await;

@@ -9,7 +9,7 @@ use std::{fmt::Debug, path::PathBuf};
 use crate::{
     automerge::{AutomergeDoc, UnappliedEntries},
     common::state::{DocumentState, PeermergeState},
-    DocumentId,
+    DocumentId, NameDescription,
 };
 
 use super::{
@@ -40,8 +40,8 @@ where
 }
 
 impl PeermergeStateWrapper<RandomAccessMemory> {
-    pub(crate) async fn new_memory(name: &str) -> Self {
-        let state = PeermergeState::new(name, vec![]);
+    pub(crate) async fn new_memory(peer_header: &NameDescription) -> Self {
+        let state = PeermergeState::new(peer_header, vec![]);
         let mut storage = RandomAccessMemory::default();
         write_repo_state(&state, &mut storage).await;
         Self { state, storage }
@@ -50,8 +50,8 @@ impl PeermergeStateWrapper<RandomAccessMemory> {
 
 #[cfg(not(target_arch = "wasm32"))]
 impl PeermergeStateWrapper<RandomAccessDisk> {
-    pub(crate) async fn new_disk(name: &str, data_root_dir: &PathBuf) -> Self {
-        let state = PeermergeState::new(name, vec![]);
+    pub(crate) async fn new_disk(peer_header: &NameDescription, data_root_dir: &PathBuf) -> Self {
+        let state = PeermergeState::new(peer_header, vec![]);
         let state_path = get_peermerge_state_path(data_root_dir);
         let mut storage = RandomAccessDisk::builder(state_path).build().await.unwrap();
         write_repo_state(&state, &mut storage).await;
@@ -116,14 +116,14 @@ where
         &mut self.unapplied_entries
     }
 
-    pub(crate) async fn set_content_and_new_peer_names(
+    pub(crate) async fn set_content_and_new_peer_headers(
         &mut self,
         content: DocumentContent,
-        new_peer_names: Vec<([u8; 32], String)>,
+        new_peer_headers: Vec<([u8; 32], NameDescription)>,
     ) {
         self.state.content = Some(content);
-        for (discovery_key, peer_name) in new_peer_names {
-            self.set_peer_name(&discovery_key, &peer_name);
+        for (discovery_key, peer_header) in new_peer_headers {
+            self.set_peer_header(&discovery_key, peer_header);
         }
         write_document_state(&self.state, &mut self.storage).await;
     }
@@ -133,15 +133,20 @@ where
             .peers
             .iter()
             .find(|peer| &peer.discovery_key == discovery_key)
-            .and_then(|peer| peer.name.clone())
+            .and_then(|peer| {
+                peer.peer_header
+                    .as_ref()
+                    .map(|header| header.name.clone())
+                    .clone()
+            })
     }
 
-    pub(crate) async fn persist_content_and_new_peer_names(
+    pub(crate) async fn persist_content_and_new_peer_headers(
         &mut self,
-        new_peer_names: Vec<([u8; 32], String)>,
+        new_peer_names: Vec<([u8; 32], NameDescription)>,
     ) {
-        for (discovery_key, peer_name) in new_peer_names {
-            self.set_peer_name(&discovery_key, &peer_name);
+        for (discovery_key, peer_header) in new_peer_names {
+            self.set_peer_header(&discovery_key, peer_header);
         }
         write_document_state(&self.state, &mut self.storage).await;
     }
@@ -186,22 +191,22 @@ where
         self.state.watched_ids = ids;
     }
 
-    fn set_peer_name(&mut self, discovery_key: &[u8; 32], name: &str) -> bool {
+    fn set_peer_header(&mut self, discovery_key: &[u8; 32], peer_header: NameDescription) -> bool {
         let changed = if let Some(mut doc_peer_state) = self
             .state
             .peers
             .iter_mut()
             .find(|peer| &peer.discovery_key == discovery_key)
         {
-            let changed = doc_peer_state.name != Some(name.to_string());
+            let changed = doc_peer_state.peer_header.as_ref() != Some(&peer_header);
             if changed {
-                doc_peer_state.name = Some(name.to_string())
+                doc_peer_state.peer_header = Some(peer_header)
             }
             changed
         } else {
             panic!(
-                "Could not find a pre-existing peer with discovery key {:?} to set name {}",
-                discovery_key, name
+                "Could not find a pre-existing peer with discovery key {:?} to set header {:?}",
+                discovery_key, peer_header
             );
         };
         changed
@@ -209,17 +214,7 @@ where
 }
 
 impl DocStateWrapper<RandomAccessMemory> {
-    pub(crate) async fn new_memory(
-        doc_url: &str,
-        peer_name: &str,
-        proxy: bool,
-        write_public_key: Option<[u8; 32]>,
-        peer_public_keys: Vec<[u8; 32]>,
-        content: Option<DocumentContent>,
-    ) -> Self {
-        let mut state =
-            DocumentState::new(doc_url, peer_name, proxy, vec![], write_public_key, content);
-        add_peer_public_keys_to_document_state(&mut state, peer_public_keys);
+    pub(crate) async fn new_memory(state: DocumentState) -> Self {
         let storage = RandomAccessMemory::default();
         Self {
             state,
@@ -231,17 +226,7 @@ impl DocStateWrapper<RandomAccessMemory> {
 
 #[cfg(not(target_arch = "wasm32"))]
 impl DocStateWrapper<RandomAccessDisk> {
-    pub(crate) async fn new_disk(
-        doc_url: &str,
-        name: &str,
-        proxy: bool,
-        write_public_key: Option<[u8; 32]>,
-        peer_public_keys: Vec<[u8; 32]>,
-        content: Option<DocumentContent>,
-        data_root_dir: &PathBuf,
-    ) -> Self {
-        let mut state = DocumentState::new(doc_url, name, proxy, vec![], write_public_key, content);
-        add_peer_public_keys_to_document_state(&mut state, peer_public_keys);
+    pub(crate) async fn new_disk(state: DocumentState, data_root_dir: &PathBuf) -> Self {
         let state_path = get_document_state_path(data_root_dir);
         let mut storage = RandomAccessDisk::builder(state_path).build().await.unwrap();
         write_document_state(&state, &mut storage).await;

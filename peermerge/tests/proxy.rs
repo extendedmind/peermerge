@@ -2,8 +2,8 @@ use automerge::ROOT;
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use futures::stream::StreamExt;
 use peermerge::{
-    doc_url_encrypted, DocumentId, FeedMemoryPersistence, Patch, Peermerge, StateEvent,
-    StateEventContent::*,
+    get_doc_url_info, DocumentId, FeedMemoryPersistence, NameDescription, Patch, Peermerge,
+    StateEvent, StateEventContent::*,
 };
 use random_access_memory::RandomAccessMemory;
 use tempfile::Builder;
@@ -29,14 +29,18 @@ async fn proxy_disk_encrypted() -> anyhow::Result<()> {
         UnboundedSender<StateEvent>,
         UnboundedReceiver<StateEvent>,
     ) = unbounded();
-    let mut peermerge_creator = Peermerge::new_memory("creator").await;
+    let mut peermerge_creator = Peermerge::new_memory(NameDescription::new("creator")).await;
     let creator_doc_id = peermerge_creator
-        .create_new_document_memory(vec![("version", 1)], true)
+        .create_new_document_memory(
+            NameDescription::new("proxy_test"),
+            vec![("version", 1)],
+            true,
+        )
         .await;
     peermerge_creator.watch(&creator_doc_id, vec![ROOT]).await;
     let doc_url = peermerge_creator.doc_url(&creator_doc_id);
     let encryption_key = peermerge_creator.encryption_key(&creator_doc_id);
-    assert_eq!(doc_url_encrypted(&doc_url), true);
+    assert_eq!(get_doc_url_info(&doc_url).encrypted, Some(true));
     assert_eq!(encryption_key.is_some(), true);
 
     let mut peermerge_creator_for_task = peermerge_creator.clone();
@@ -53,7 +57,8 @@ async fn proxy_disk_encrypted() -> anyhow::Result<()> {
         .unwrap()
         .into_path();
 
-    let mut peermerge_proxy = Peermerge::create_new_disk("proxy", &proxy_dir).await;
+    let mut peermerge_proxy =
+        Peermerge::create_new_disk(NameDescription::new("proxy"), &proxy_dir).await;
     let _proxy_doc_id = peermerge_proxy.attach_proxy_document_disk(&doc_url).await;
     let mut peermerge_proxy_for_task = peermerge_proxy.clone();
     task::spawn(async move {

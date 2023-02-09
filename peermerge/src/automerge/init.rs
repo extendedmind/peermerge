@@ -5,7 +5,10 @@ use automerge::{
     ActorId, AutoCommit, Automerge, AutomergeError, Prop, ScalarValue, VecOpObserver, ROOT,
 };
 
-use crate::common::entry::{Entry, EntryType};
+use crate::{
+    common::entry::{Entry, EntryType},
+    NameDescription,
+};
 
 use super::{apply_entries_autocommit, AutomergeDoc, UnappliedEntries};
 
@@ -39,34 +42,25 @@ pub(crate) fn init_automerge_doc_from_entries(
     writer_name: &str,
     write_discovery_key: &[u8; 32],
     synced_discovery_key: &[u8; 32],
-    mut entries: Vec<Entry>,
+    init_entry: Entry,
     unapplied_entries: &mut UnappliedEntries,
 ) -> anyhow::Result<(
     AutomergeDoc,
     Vec<u8>,
-    HashMap<[u8; 32], (u64, Option<String>)>,
+    HashMap<[u8; 32], (u64, Option<NameDescription>)>,
 )> {
-    let contiguous_length = entries.len() as u64;
-    let init_entry = entries.remove(0);
     assert!(init_entry.entry_type == EntryType::InitDoc);
-    let peer_name = init_entry.peer_name.unwrap();
+    let contiguous_length = 1;
     let mut automerge_doc =
         init_automerge_doc_from_data(writer_name, write_discovery_key, &init_entry.data);
     let mut result = apply_entries_autocommit(
         &mut automerge_doc,
         &synced_discovery_key,
         contiguous_length,
-        entries,
+        vec![init_entry],
         unapplied_entries,
     )?;
-    if let Some(value) = result.get_mut(synced_discovery_key) {
-        value.1 = Some(peer_name);
-    } else {
-        result.insert(
-            synced_discovery_key.clone(),
-            (contiguous_length, Some(peer_name)),
-        );
-    }
+    result.insert(synced_discovery_key.clone(), (contiguous_length, None));
     let data = automerge_doc.save();
     Ok((automerge_doc, data, result))
 }

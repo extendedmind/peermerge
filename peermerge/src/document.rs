@@ -18,13 +18,15 @@ use crate::automerge::{
     apply_entries_autocommit, init_automerge_doc_from_data, init_automerge_doc_from_entries,
     put_scalar_autocommit, splice_text, AutomergeDoc, UnappliedEntries,
 };
-use crate::common::cipher::{doc_url_to_public_key, encode_document_id, keys_to_doc_url};
+use crate::common::cipher::{
+    decode_doc_url, encode_doc_url, encode_document_id, encode_proxy_doc_url, DecodedDocUrl,
+};
 use crate::common::encoding::serialize_entry;
 use crate::common::keys::{discovery_key_from_public_key, generate_keys, Keypair};
+use crate::common::state::DocumentState;
 use crate::common::StateEventContent::*;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::feed::{create_new_read_disk_feed, create_new_write_disk_feed, open_disk_feed};
-use crate::DocumentId;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::FeedDiskPersistence;
 use crate::{
@@ -37,6 +39,7 @@ use crate::{
     feed::{create_new_read_memory_feed, create_new_write_memory_feed, Feed},
     FeedMemoryPersistence, FeedPersistence, StateEvent,
 };
+use crate::{DocumentId, NameDescription};
 
 /// Document represents a single Automerge doc shared via feeds.
 #[derive(derivative::Derivative)]
@@ -51,11 +54,15 @@ where
     document_state: Arc<Mutex<DocStateWrapper<T>>>,
     state_event_sender: Arc<Mutex<Option<UnboundedSender<StateEvent>>>>,
     prefix: PathBuf,
-    name: String,
+    peer_header: NameDescription,
+    document_header: NameDescription,
     proxy: bool,
-    doc_discovery_key: [u8; 32],
+    root_discovery_key: [u8; 32],
+    /// Document URL, possibly encrypted.
     doc_url: String,
+    /// Whether or not this document is encrypted.
     encrypted: bool,
+    /// If encrypted is true and not a proxy, the encryption key to use to decrypt feed entries.
     encryption_key: Option<Vec<u8>>,
 }
 
@@ -65,23 +72,23 @@ where
     U: FeedPersistence,
 {
     pub(crate) fn id(&self) -> DocumentId {
-        self.doc_discovery_key.clone()
+        self.root_discovery_key.clone()
     }
 
     pub(crate) fn root_feed(&self) -> Arc<Mutex<Feed<U>>> {
-        self.feeds.get(&self.doc_discovery_key).unwrap().clone()
+        self.feeds.get(&self.root_discovery_key).unwrap().clone()
     }
 
     pub(crate) fn leaf_feeds(&self) -> Vec<Arc<Mutex<Feed<U>>>> {
         self.feeds
             .iter()
-            .filter(|multi| multi.key() != &self.doc_discovery_key)
+            .filter(|multi| multi.key() != &self.root_discovery_key)
             .map(|multi| multi.value().clone())
             .collect()
     }
 
     pub(crate) fn leaf_feed(&self, discovery_key: &[u8; 32]) -> Option<Arc<Mutex<Feed<U>>>> {
-        if discovery_key == &self.doc_discovery_key {
+        if discovery_key == &self.root_discovery_key {
             return None;
         }
         self.feeds
@@ -101,7 +108,7 @@ where
         (state.write_public_key, peer_public_keys)
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip_all, fields(doc_name = self.document_header.name))]
     pub(crate) async fn watch(&mut self, ids: Vec<ObjId>) {
         if self.proxy {
             panic!("Can not watch on a proxy");
@@ -110,7 +117,7 @@ where
         document_state.watch(ids);
     }
 
-    #[instrument(skip(self, obj, prop), fields(obj = obj.as_ref().to_string(), peer_name = self.name))]
+    #[instrument(skip_all, fields(doc_name = self.document_header.name))]
     pub(crate) async fn get_id<O: AsRef<ObjId>, P: Into<Prop>>(
         &self,
         obj: O,
@@ -143,7 +150,7 @@ where
         Ok(result)
     }
 
-    #[instrument(skip(self, obj, prop), fields(obj = obj.as_ref().to_string(), peer_name = self.name))]
+    #[instrument(skip_all, fields(doc_name = self.document_header.name))]
     pub(crate) async fn get_scalar<O: AsRef<ObjId>, P: Into<Prop>>(
         &self,
         obj: O,
@@ -180,7 +187,7 @@ where
         Ok(result)
     }
 
-    #[instrument(skip(self, obj, prop), fields(obj = obj.as_ref().to_string(), peer_name = self.name))]
+    #[instrument(skip_all, fields(doc_name = self.document_header.name))]
     pub(crate) async fn get<O: AsRef<ObjId>, P: Into<Prop>>(
         &self,
         obj: O,
@@ -215,7 +222,7 @@ where
         Ok(result)
     }
 
-    #[instrument(skip(self, obj), fields(obj = obj.as_ref().to_string(), peer_name = self.name))]
+    #[instrument(skip_all, fields(doc_name = self.document_header.name))]
     pub(crate) async fn realize_text<O: AsRef<ObjId>>(
         &self,
         obj: O,
@@ -258,7 +265,7 @@ where
         Ok(result)
     }
 
-    #[instrument(skip(self, obj, prop), fields(obj = obj.as_ref().to_string(), peer_name = self.name))]
+    #[instrument(skip_all, fields(doc_name = self.document_header.name))]
     pub(crate) async fn put_object<O: AsRef<ObjId>, P: Into<Prop>>(
         &mut self,
         obj: O,
@@ -295,7 +302,7 @@ where
         Ok(id)
     }
 
-    #[instrument(skip(self, obj, prop, value), fields(obj = obj.as_ref().to_string(), peer_name = self.name))]
+    #[instrument(skip_all, fields(doc_name = self.document_header.name))]
     pub(crate) async fn put_scalar<O: AsRef<ObjId>, P: Into<Prop>, V: Into<ScalarValue>>(
         &mut self,
         obj: O,
@@ -331,7 +338,7 @@ where
         Ok(())
     }
 
-    #[instrument(skip(self, obj), fields(obj = obj.as_ref().to_string(), peer_name = self.name))]
+    #[instrument(skip_all, fields(doc_name = self.document_header.name))]
     pub(crate) async fn splice_text<O: AsRef<ObjId>>(
         &mut self,
         obj: O,
@@ -367,7 +374,7 @@ where
         Ok(())
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip_all, fields(doc_name = self.document_header.name))]
     pub(crate) async fn cork(&mut self) {
         if self.proxy {
             panic!("Can not cork a proxy");
@@ -379,7 +386,7 @@ where
         write_feed.cork();
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip_all, fields(doc_name = self.document_header.name))]
     pub(crate) async fn uncork(&mut self) -> anyhow::Result<()> {
         if self.proxy {
             panic!("Can not uncork a proxy");
@@ -392,12 +399,17 @@ where
         Ok(())
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip_all, fields(doc_name = self.document_header.name))]
     pub(crate) fn doc_url(&self) -> String {
         self.doc_url.clone()
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip_all, fields(doc_name = self.document_header.name))]
+    pub(crate) fn proxy_doc_url(&self) -> String {
+        encode_proxy_doc_url(&self.doc_url)
+    }
+
+    #[instrument(skip_all, fields(doc_name = self.document_header.name))]
     pub(crate) fn encryption_key(&self) -> Option<Vec<u8>> {
         if self.proxy {
             panic!("A proxy does not store the encryption key");
@@ -405,7 +417,7 @@ where
         self.encryption_key.clone()
     }
 
-    #[instrument(level = "debug", skip_all, fields(peer_name = self.name))]
+    #[instrument(level = "debug", skip_all, fields(doc_name = self.document_header.name))]
     pub(crate) async fn take_patches(&mut self) -> Vec<Patch> {
         let mut document_state = self.document_state.lock().await;
         if let Some(doc) = document_state.automerge_doc_mut() {
@@ -415,7 +427,7 @@ where
         }
     }
 
-    #[instrument(level = "debug", skip_all, fields(peer_name = self.name))]
+    #[instrument(level = "debug", skip_all, fields(doc_name = self.document_header.name))]
     pub(crate) async fn process_peer_synced(
         &mut self,
         discovery_key: [u8; 32],
@@ -434,7 +446,7 @@ where
             let (mut patches, peer_syncs) = if let Some((content, unapplied_entries)) =
                 document_state.content_and_unapplied_entries_mut()
             {
-                let (patches, new_peer_names, peer_syncs) = self
+                let (patches, new_peer_headers, peer_syncs) = self
                     .update_synced_content(
                         &discovery_key,
                         synced_contiguous_length,
@@ -444,13 +456,13 @@ where
                     .await
                     .unwrap();
                 document_state
-                    .persist_content_and_new_peer_names(new_peer_names)
+                    .persist_content_and_new_peer_headers(new_peer_headers)
                     .await;
                 (patches, peer_syncs)
             } else {
                 let write_discovery_key = document_state.write_discovery_key();
                 let unapplied_entries = document_state.unappliend_entries_mut();
-                if let Some((content, patches, new_peer_names, peer_syncs)) = self
+                if let Some((content, patches, new_peer_headers, peer_syncs)) = self
                     .create_content(
                         &discovery_key,
                         synced_contiguous_length,
@@ -461,7 +473,7 @@ where
                     .unwrap()
                 {
                     document_state
-                        .set_content_and_new_peer_names(content, new_peer_names)
+                        .set_content_and_new_peer_headers(content, new_peer_headers)
                         .await;
                     (patches, peer_syncs)
                 } else {
@@ -508,7 +520,7 @@ where
         state_events
     }
 
-    #[instrument(level = "debug", skip_all, fields(peer_name = self.name))]
+    #[instrument(level = "debug", skip_all, fields(doc_name = self.document_header.name))]
     async fn notify_of_document_changes(&mut self) {
         let mut document_state = self.document_state.lock().await;
         if let Some(doc) = document_state.automerge_doc_mut() {
@@ -521,7 +533,7 @@ where
                     if patches.len() > 0 {
                         sender
                             .unbounded_send(StateEvent::new(
-                                self.doc_discovery_key.clone(),
+                                self.root_discovery_key.clone(),
                                 DocumentChanged(patches),
                             ))
                             .unwrap();
@@ -531,14 +543,14 @@ where
         }
     }
 
-    #[instrument(level = "debug", skip_all, fields(peer_name = self.name))]
+    #[instrument(level = "debug", skip_all, fields(doc_name = self.document_header.name))]
     async fn notify_new_peers_created(&mut self, public_keys: Vec<[u8; 32]>) {
         // Send message to doc feed that new peers have been created to get all open protocols to
         // open channels to it.
-        let doc_feed = self.feeds.get(&self.doc_discovery_key).unwrap();
+        let doc_feed = self.feeds.get(&self.root_discovery_key).unwrap();
         let mut doc_feed = doc_feed.lock().await;
         doc_feed
-            .notify_new_peers_created(self.doc_discovery_key.clone(), public_keys)
+            .notify_new_peers_created(self.root_discovery_key.clone(), public_keys)
             .await
             .unwrap();
     }
@@ -553,24 +565,29 @@ where
         Option<(
             DocumentContent,
             Vec<Patch>,
-            Vec<([u8; 32], String)>,
+            Vec<([u8; 32], NameDescription)>,
             Vec<([u8; 32], u64)>,
         )>,
     > {
         // The document starts from the doc feed, so get that first
-        if synced_discovery_key == &self.doc_discovery_key {
-            let entries = {
-                let doc_feed = self.feeds.get(&self.doc_discovery_key).unwrap();
+        if synced_discovery_key == &self.root_discovery_key {
+            assert_eq!(
+                synced_contiguous_length, 1,
+                "There can never be more than one entry in the root feed"
+            );
+            let init_entry: Entry = {
+                let doc_feed = self.feeds.get(&self.root_discovery_key).unwrap();
                 let mut doc_feed = doc_feed.lock().await;
-                doc_feed.entries(0, synced_contiguous_length).await?
+                let mut entries = doc_feed.entries(0, synced_contiguous_length).await?;
+                entries.swap_remove(0)
             };
 
             // Create DocContent from the feed
             let (mut automerge_doc, data, result) = init_automerge_doc_from_entries(
-                &self.name,
+                &self.peer_header.name,
                 write_discovery_key,
                 synced_discovery_key,
-                entries,
+                init_entry,
                 unapplied_entries,
             )?;
             let cursors: Vec<DocumentCursor> = result
@@ -582,7 +599,7 @@ where
             } else {
                 vec![]
             };
-            let new_names: Vec<([u8; 32], String)> = result
+            let new_peer_headers: Vec<([u8; 32], NameDescription)> = result
                 .iter()
                 .filter(|value| value.1 .1.is_some())
                 .map(|value| (value.0.clone(), value.1 .1.clone().unwrap()))
@@ -594,7 +611,7 @@ where
             Ok(Some((
                 DocumentContent::new(data, cursors, automerge_doc),
                 patches,
-                new_names,
+                new_peer_headers,
                 peer_syncs,
             )))
         } else {
@@ -620,7 +637,11 @@ where
         synced_contiguous_length: u64,
         content: &mut DocumentContent,
         unapplied_entries: &mut UnappliedEntries,
-    ) -> anyhow::Result<(Vec<Patch>, Vec<([u8; 32], String)>, Vec<([u8; 32], u64)>)> {
+    ) -> anyhow::Result<(
+        Vec<Patch>,
+        Vec<([u8; 32], NameDescription)>,
+        Vec<([u8; 32], u64)>,
+    )> {
         let (_, entries) = get_new_entries(
             synced_discovery_key,
             Some(synced_contiguous_length),
@@ -646,113 +667,154 @@ where
 
 impl Document<RandomAccessMemory, FeedMemoryPersistence> {
     pub(crate) async fn create_new_memory<P: Into<Prop>, V: Into<ScalarValue>>(
-        name: &str,
-        root_scalars: Vec<(P, V)>,
+        peer_header: &NameDescription,
+        document_header: NameDescription,
+        doc_root_scalars: Vec<(P, V)>,
         encrypted: bool,
     ) -> Self {
-        let result = prepare_create(name, root_scalars).await;
+        let result = prepare_create(peer_header, &document_header, doc_root_scalars).await;
 
-        // Create the memory feed
-        let (length, feed, generated_encryption_key) = create_new_write_memory_feed(
-            result.key_pair,
-            serialize_entry(&Entry::new_init_doc(name, result.data.clone())),
+        // Create the root memory feed
+        let (root_feed_length, root_feed, root_encryption_key) = create_new_write_memory_feed(
+            result.root_key_pair,
+            serialize_entry(&Entry::new_init_doc(
+                document_header.clone(),
+                result.data.clone(),
+            )),
             encrypted,
             &None,
         )
         .await;
-        let doc_url = keys_to_doc_url(&result.doc_public_key, &generated_encryption_key);
+        let doc_url = encode_doc_url(
+            &result.root_public_key,
+            &document_header,
+            &root_encryption_key,
+        );
+
+        // Create a write memory feed
+        let (write_feed_length, write_feed, _) = create_new_write_memory_feed(
+            result.write_key_pair,
+            serialize_entry(&Entry::new_init_peer(
+                peer_header.clone(),
+                result.root_discovery_key,
+            )),
+            encrypted,
+            &root_encryption_key,
+        )
+        .await;
+
+        // Augment state with content
         let content = DocumentContent::new(
             result.data,
-            vec![DocumentCursor::new(result.discovery_key.clone(), length)],
+            vec![
+                DocumentCursor::new(result.root_discovery_key.clone(), root_feed_length),
+                DocumentCursor::new(result.write_discovery_key.clone(), write_feed_length),
+            ],
             result.automerge_doc,
         );
+        let mut state = result.state;
+        state.content = Some(content);
+
         Self::new_memory(
-            Some((
-                result.doc_public_key.clone(),
-                result.discovery_key.clone(),
-                feed,
-            )),
-            vec![],
-            Some(content),
-            result.discovery_key,
-            name,
-            false,
-            &doc_url,
+            (result.root_discovery_key.clone(), root_feed),
+            Some((result.write_discovery_key.clone(), write_feed)),
+            peer_header,
+            state,
             encrypted,
-            generated_encryption_key,
+            &doc_url,
+            root_encryption_key,
         )
         .await
     }
 
     pub(crate) async fn attach_writer_memory(
-        name: &str,
+        peer_header: &NameDescription,
         doc_url: &str,
         encryption_key: &Option<Vec<u8>>,
     ) -> Self {
         let proxy = false;
 
         // Process keys from doc URL
-        let (doc_public_key, encrypted) = doc_url_to_public_key(doc_url, &encryption_key);
-        if encrypted && encryption_key.is_none() {
-            panic!("Can not attach a peer to an encrypted peermerge without an encryption key");
-        }
-        let doc_discovery_key = discovery_key_from_public_key(&doc_public_key);
+        let decoded_doc_url = decode_doc_url(doc_url, &encryption_key);
+        let encrypted = if let Some(encrypted) = decoded_doc_url.encrypted {
+            if encrypted && encryption_key.is_none() {
+                panic!("Can not attach a peer to an encrypted peermerge without an encryption key");
+            }
+            encrypted
+        } else {
+            panic!("Given doc url can only be used for proxying");
+        };
 
-        // Create the doc feed
-        let (_, doc_feed) =
-            create_new_read_memory_feed(&doc_public_key, proxy, encrypted, encryption_key).await;
+        // Create the root feed
+        let root_discovery_key = discovery_key_from_public_key(&decoded_doc_url.root_public_key);
+        let (_, root_feed) = create_new_read_memory_feed(
+            &decoded_doc_url.root_public_key,
+            proxy,
+            encrypted,
+            encryption_key,
+        )
+        .await;
 
         // Create the write feed
         let (write_key_pair, write_discovery_key) = generate_keys();
         let write_public_key = *write_key_pair.public.as_bytes();
         let (_, write_feed, _) = create_new_write_memory_feed(
             write_key_pair,
-            serialize_entry(&Entry::new_init_peer(name, doc_discovery_key)),
+            serialize_entry(&Entry::new_init_peer(
+                peer_header.clone(),
+                root_discovery_key,
+            )),
             encrypted,
             &encryption_key,
         )
         .await;
 
+        // Initialize document state
+        let state =
+            DocumentState::new(decoded_doc_url, proxy, vec![], Some(write_public_key), None);
+
         Self::new_memory(
-            Some((write_public_key, write_discovery_key, write_feed)),
-            vec![(doc_public_key.clone(), doc_discovery_key.clone(), doc_feed)],
-            None,
-            doc_discovery_key,
-            name,
-            proxy,
-            doc_url,
+            (root_discovery_key, root_feed),
+            Some((write_discovery_key, write_feed)),
+            peer_header,
+            state,
             encrypted,
+            doc_url,
             encryption_key.clone(),
         )
         .await
     }
 
-    pub(crate) async fn attach_proxy_memory(name: &str, doc_url: &str) -> Self {
+    pub(crate) async fn attach_proxy_memory(peer_header: &NameDescription, doc_url: &str) -> Self {
         let proxy = true;
+        let doc_url = encode_proxy_doc_url(doc_url);
+        let encrypted = false;
 
         // Process keys from doc URL
-        let (doc_public_key, encrypted) = doc_url_to_public_key(doc_url, &None);
-        let doc_discovery_key = discovery_key_from_public_key(&doc_public_key);
+        let decoded_doc_url = decode_doc_url(&doc_url, &None);
 
-        // Create the doc feed
-        let (_, doc_feed) =
-            create_new_read_memory_feed(&doc_public_key, proxy, encrypted, &None).await;
+        // Create the root feed
+        let root_discovery_key = discovery_key_from_public_key(&decoded_doc_url.root_public_key);
+        let (_, root_feed) =
+            create_new_read_memory_feed(&decoded_doc_url.root_public_key, proxy, encrypted, &None)
+                .await;
+
+        // Initialize document state
+        let state = DocumentState::new(decoded_doc_url, proxy, vec![], None, None);
 
         Self::new_memory(
+            (root_discovery_key, root_feed),
             None,
-            vec![(doc_public_key.clone(), doc_discovery_key.clone(), doc_feed)],
-            None,
-            doc_discovery_key,
-            name,
-            proxy,
-            doc_url,
+            peer_header,
+            state,
             encrypted,
+            &doc_url,
             None,
         )
         .await
     }
 
-    #[instrument(level = "debug", skip_all, fields(peer_name = self.name))]
+    #[instrument(level = "debug", skip_all, fields(doc_name = self.document_header.name))]
     pub(crate) async fn process_new_peers_broadcasted_memory(
         &mut self,
         public_keys: Vec<[u8; 32]>,
@@ -777,47 +839,38 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
     }
 
     async fn new_memory(
-        write_feed: Option<([u8; 32], [u8; 32], Feed<FeedMemoryPersistence>)>,
-        peer_feeds: Vec<([u8; 32], [u8; 32], Feed<FeedMemoryPersistence>)>,
-        content: Option<DocumentContent>,
-        doc_discovery_key: [u8; 32],
-        name: &str,
-        proxy: bool,
-        doc_url: &str,
+        root_feed: ([u8; 32], Feed<FeedMemoryPersistence>),
+        write_feed: Option<([u8; 32], Feed<FeedMemoryPersistence>)>,
+        peer_header: &NameDescription,
+        state: DocumentState,
         encrypted: bool,
+        encrypted_doc_url: &str,
         encryption_key: Option<Vec<u8>>,
     ) -> Self {
         let feeds: DashMap<[u8; 32], Arc<Mutex<Feed<FeedMemoryPersistence>>>> = DashMap::new();
-        let write_public_key =
-            if let Some((write_public_key, write_discovery_key, write_feed)) = write_feed {
-                feeds.insert(write_discovery_key, Arc::new(Mutex::new(write_feed)));
-                Some(write_public_key)
-            } else {
-                None
-            };
-        let mut peer_public_keys = vec![];
-        for (peer_public_key, peer_discovery_key, peer_feed) in peer_feeds {
-            feeds.insert(peer_discovery_key, Arc::new(Mutex::new(peer_feed)));
-            peer_public_keys.push(peer_public_key);
+        let (root_discovery_key, root_feed) = root_feed;
+        feeds.insert(root_discovery_key, Arc::new(Mutex::new(root_feed)));
+
+        if let Some((write_discovery_key, write_feed)) = write_feed {
+            feeds.insert(write_discovery_key, Arc::new(Mutex::new(write_feed)));
         }
-        let document_state = DocStateWrapper::new_memory(
-            doc_url,
-            name,
-            proxy,
-            write_public_key,
-            peer_public_keys,
-            content,
-        )
-        .await;
+        let proxy = state.proxy;
+        let document_header = state.document_header.clone().unwrap_or(NameDescription {
+            // For debuggability it's useful to have a fixed name.
+            name: "unknown".to_string(),
+            description: None,
+        });
+        let document_state = DocStateWrapper::new_memory(state).await;
         Self {
             feeds: Arc::new(feeds),
             document_state: Arc::new(Mutex::new(document_state)),
             state_event_sender: Arc::new(Mutex::new(None)),
             prefix: PathBuf::new(),
-            doc_discovery_key,
-            doc_url: doc_url.to_string(),
-            name: name.to_string(),
+            document_header,
             proxy,
+            root_discovery_key,
+            doc_url: encrypted_doc_url.to_string(),
+            peer_header: peer_header.clone(),
             encrypted,
             encryption_key,
         }
@@ -865,72 +918,101 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
 #[cfg(not(target_arch = "wasm32"))]
 impl Document<RandomAccessDisk, FeedDiskPersistence> {
     pub(crate) async fn create_new_disk<P: Into<Prop>, V: Into<ScalarValue>>(
-        name: &str,
-        root_scalars: Vec<(P, V)>,
+        peer_header: &NameDescription,
+        document_header: NameDescription,
+        doc_root_scalars: Vec<(P, V)>,
         encrypted: bool,
         data_root_dir: &PathBuf,
     ) -> Self {
-        let result = prepare_create(name, root_scalars).await;
-        let postfix = encode_document_id(&result.discovery_key);
+        let result = prepare_create(peer_header, &document_header, doc_root_scalars).await;
+        let postfix = encode_document_id(&result.root_discovery_key);
         let data_root_dir = data_root_dir.join(postfix);
 
-        // Create the disk feed
-        let (length, feed, encryption_key) = create_new_write_disk_feed(
+        // Create the root disk feed
+        let (root_feed_length, root_feed, root_encryption_key) = create_new_write_disk_feed(
             &data_root_dir,
-            result.key_pair,
-            &result.discovery_key,
-            serialize_entry(&Entry::new_init_doc(name, result.data.clone())),
+            result.root_key_pair,
+            &result.root_discovery_key,
+            serialize_entry(&Entry::new_init_doc(
+                document_header.clone(),
+                result.data.clone(),
+            )),
             encrypted,
             &None,
         )
         .await;
-        let doc_url = keys_to_doc_url(&result.doc_public_key, &encryption_key);
-        let content = DocumentContent::new(
-            result.data,
-            vec![DocumentCursor::new(result.discovery_key.clone(), length)],
-            result.automerge_doc,
+        let doc_url = encode_doc_url(
+            &result.root_public_key,
+            &document_header,
+            &root_encryption_key,
         );
 
-        Self::new_disk(
-            Some((
-                result.doc_public_key.clone(),
-                result.discovery_key.clone(),
-                feed,
+        // Create a write disk feed
+        let (write_feed_length, write_feed, _) = create_new_write_disk_feed(
+            &data_root_dir,
+            result.write_key_pair,
+            &result.write_discovery_key,
+            serialize_entry(&Entry::new_init_peer(
+                peer_header.clone(),
+                result.root_discovery_key,
             )),
-            vec![],
-            Some(content),
-            result.discovery_key,
-            name,
-            false,
-            &doc_url,
             encrypted,
-            encryption_key,
+            &root_encryption_key,
+        )
+        .await;
+
+        // Augment state with content
+        let content = DocumentContent::new(
+            result.data,
+            vec![
+                DocumentCursor::new(result.root_discovery_key.clone(), root_feed_length),
+                DocumentCursor::new(result.write_discovery_key.clone(), write_feed_length),
+            ],
+            result.automerge_doc,
+        );
+        let mut state = result.state;
+        state.content = Some(content);
+
+        Self::new_disk(
+            (result.root_discovery_key.clone(), root_feed),
+            Some((result.write_discovery_key.clone(), write_feed)),
+            peer_header,
+            state,
+            encrypted,
+            &doc_url,
+            root_encryption_key,
             &data_root_dir,
         )
         .await
     }
 
     pub(crate) async fn attach_writer_disk(
-        name: &str,
+        peer_header: &NameDescription,
         doc_url: &str,
         encryption_key: &Option<Vec<u8>>,
         data_root_dir: &PathBuf,
     ) -> Self {
         let proxy = false;
-        // Process keys from doc URL
-        let (doc_public_key, encrypted) = doc_url_to_public_key(doc_url, &encryption_key);
-        if encrypted && encryption_key.is_none() {
-            panic!("Can not attach a peer to an encrypted peermerge without an encryption key");
-        }
-        let doc_discovery_key = discovery_key_from_public_key(&doc_public_key);
-        let postfix = encode_document_id(&doc_discovery_key);
-        let data_root_dir = data_root_dir.join(postfix);
 
-        // Create/open the doc feed
-        let (_, doc_feed) = create_new_read_disk_feed(
+        // Process keys from doc URL
+        let decoded_doc_url = decode_doc_url(doc_url, &encryption_key);
+        let encrypted = if let Some(encrypted) = decoded_doc_url.encrypted {
+            if encrypted && encryption_key.is_none() {
+                panic!("Can not attach a peer to an encrypted peermerge without an encryption key");
+            }
+            encrypted
+        } else {
+            panic!("Given doc url can only be used for proxying");
+        };
+
+        // Create the root feed
+        let root_discovery_key = discovery_key_from_public_key(&decoded_doc_url.root_public_key);
+        let postfix = encode_document_id(&root_discovery_key);
+        let data_root_dir = data_root_dir.join(postfix);
+        let (_, root_feed) = create_new_read_disk_feed(
             &data_root_dir,
-            &doc_public_key,
-            &doc_discovery_key,
+            &decoded_doc_url.root_public_key,
+            &root_discovery_key,
             proxy,
             encrypted,
             encryption_key,
@@ -940,64 +1022,72 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
         // Create the write feed
         let (write_key_pair, write_discovery_key) = generate_keys();
         let write_public_key = *write_key_pair.public.as_bytes();
-        let (_, write_feed, encryption_key) = create_new_write_disk_feed(
+        let (_, write_feed, _) = create_new_write_disk_feed(
             &data_root_dir,
             write_key_pair,
             &write_discovery_key,
-            serialize_entry(&Entry::new_init_peer(name, doc_discovery_key)),
+            serialize_entry(&Entry::new_init_peer(
+                peer_header.clone(),
+                root_discovery_key,
+            )),
             encrypted,
-            encryption_key,
+            &encryption_key,
         )
         .await;
 
+        // Initialize document state
+        let state =
+            DocumentState::new(decoded_doc_url, proxy, vec![], Some(write_public_key), None);
+
         Self::new_disk(
-            Some((write_public_key, write_discovery_key, write_feed)),
-            vec![(doc_public_key.clone(), doc_discovery_key.clone(), doc_feed)],
-            None,
-            doc_discovery_key,
-            name,
-            proxy,
-            doc_url,
+            (root_discovery_key, root_feed),
+            Some((write_discovery_key, write_feed)),
+            peer_header,
+            state,
             encrypted,
-            encryption_key,
+            &doc_url,
+            None,
             &data_root_dir,
         )
         .await
     }
 
     pub(crate) async fn attach_proxy_disk(
-        name: &str,
+        peer_header: &NameDescription,
         doc_url: &str,
         data_root_dir: &PathBuf,
     ) -> Self {
         let proxy = true;
+        let doc_url = encode_proxy_doc_url(doc_url);
+        let encrypted = false;
 
         // Process keys from doc URL
-        let (doc_public_key, encrypted) = doc_url_to_public_key(doc_url, &None);
-        let doc_discovery_key = discovery_key_from_public_key(&doc_public_key);
-        let postfix = encode_document_id(&doc_discovery_key);
-        let data_root_dir = data_root_dir.join(postfix);
+        let decoded_doc_url = decode_doc_url(&doc_url, &None);
 
-        // Create/open the doc feed
-        let (_, doc_feed) = create_new_read_disk_feed(
+        // Create the root feed
+        let root_discovery_key = discovery_key_from_public_key(&decoded_doc_url.root_public_key);
+        let postfix = encode_document_id(&root_discovery_key);
+        let data_root_dir = data_root_dir.join(postfix);
+        let (_, root_feed) = create_new_read_disk_feed(
             &data_root_dir,
-            &doc_public_key,
-            &doc_discovery_key,
+            &decoded_doc_url.root_public_key,
+            &root_discovery_key,
             proxy,
             encrypted,
             &None,
         )
         .await;
 
+        // Initialize document state
+        let state = DocumentState::new(decoded_doc_url, proxy, vec![], None, None);
+
         Self::new_disk(
+            (root_discovery_key, root_feed),
             None,
-            vec![(doc_public_key.clone(), doc_discovery_key.clone(), doc_feed)],
-            None,
-            doc_discovery_key,
-            name,
-            proxy,
-            doc_url,
+            peer_header,
+            state,
             encrypted,
+            &doc_url,
             None,
             &data_root_dir,
         )
@@ -1005,29 +1095,39 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
     }
 
     pub(crate) async fn open_disk(
+        peer_header: &NameDescription,
         encryption_key: &Option<Vec<u8>>,
         data_root_dir: &PathBuf,
     ) -> Self {
         let mut document_state_wrapper = DocStateWrapper::open_disk(data_root_dir).await;
         let state = document_state_wrapper.state();
-        let encrypted = state.encrypted;
         let proxy = state.proxy;
-        let doc_discovery_key = state.doc_discovery_key.clone();
-        let doc_url = state.doc_url.clone();
-        let name = state.name.clone();
+        let encrypted = if let Some(encrypted) = state.encrypted {
+            if encrypted && encryption_key.is_none() {
+                panic!("Can not open and encrypted peermerge without an encryption key");
+            }
+            encrypted
+        } else {
+            if !proxy {
+                panic!("Stored document is not a proxy but encryption status is not known");
+            }
+            false
+        };
+        let root_discovery_key = state.root_discovery_key.clone();
+        let doc_url = state.doc_url(encryption_key);
+        let document_header = document_header_or_default(&state.document_header);
 
+        // Open root feed
         let feeds: DashMap<[u8; 32], Arc<Mutex<Feed<FeedDiskPersistence>>>> = DashMap::new();
-
-        // Open doc feed
-        let (_, doc_feed) = open_disk_feed(
+        let (_, root_feed) = open_disk_feed(
             &data_root_dir,
-            &state.doc_discovery_key,
+            &state.root_discovery_key,
             proxy,
             encrypted,
             encryption_key,
         )
         .await;
-        feeds.insert(state.doc_discovery_key, Arc::new(Mutex::new(doc_feed)));
+        feeds.insert(state.root_discovery_key, Arc::new(Mutex::new(root_feed)));
 
         // Open all peer feeds
         for peer in &state.peers {
@@ -1045,7 +1145,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
         // Open write feed, if any
         let feeds = if let Some(write_public_key) = state.write_public_key {
             let write_discovery_key = discovery_key_from_public_key(&write_public_key);
-            if write_public_key != state.doc_public_key {
+            if write_public_key != state.root_public_key {
                 let (_, write_feed) = open_disk_feed(
                     &data_root_dir,
                     &write_discovery_key,
@@ -1064,15 +1164,20 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
             if let Some((content, unapplied_entries)) =
                 document_state_wrapper.content_and_unapplied_entries_mut()
             {
-                let doc = init_automerge_doc_from_data(&name, &write_discovery_key, &content.data);
+                let doc = init_automerge_doc_from_data(
+                    &peer_header.name,
+                    &write_discovery_key,
+                    &content.data,
+                );
                 content.automerge_doc = Some(doc);
 
-                let (changed, new_peer_names) = update_content(content, &feeds, unapplied_entries)
-                    .await
-                    .unwrap();
+                let (changed, new_peer_headers) =
+                    update_content(content, &feeds, unapplied_entries)
+                        .await
+                        .unwrap();
                 if changed {
                     document_state_wrapper
-                        .persist_content_and_new_peer_names(new_peer_names)
+                        .persist_content_and_new_peer_headers(new_peer_headers)
                         .await;
                 }
             }
@@ -1087,16 +1192,17 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
             document_state: Arc::new(Mutex::new(document_state_wrapper)),
             state_event_sender: Arc::new(Mutex::new(None)),
             prefix: data_root_dir.clone(),
-            doc_discovery_key,
+            root_discovery_key,
             doc_url,
-            name,
+            peer_header: peer_header.clone(),
+            document_header,
             proxy,
             encrypted,
             encryption_key: encryption_key.clone(),
         }
     }
 
-    #[instrument(level = "debug", skip_all, fields(peer_name = self.name))]
+    #[instrument(level = "debug", skip_all, fields(doc_name = self.document_header.name))]
     pub(crate) async fn process_new_peers_broadcasted_disk(
         &mut self,
         public_keys: Vec<[u8; 32]>,
@@ -1121,49 +1227,35 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
     }
 
     async fn new_disk(
-        write_feed: Option<([u8; 32], [u8; 32], Feed<FeedDiskPersistence>)>,
-        peer_feeds: Vec<([u8; 32], [u8; 32], Feed<FeedDiskPersistence>)>,
-        content: Option<DocumentContent>,
-        doc_discovery_key: [u8; 32],
-        name: &str,
-        proxy: bool,
-        doc_url: &str,
+        root_feed: ([u8; 32], Feed<FeedDiskPersistence>),
+        write_feed: Option<([u8; 32], Feed<FeedDiskPersistence>)>,
+        peer_header: &NameDescription,
+        state: DocumentState,
         encrypted: bool,
+        encrypted_doc_url: &str,
         encryption_key: Option<Vec<u8>>,
         data_root_dir: &PathBuf,
     ) -> Self {
         let feeds: DashMap<[u8; 32], Arc<Mutex<Feed<FeedDiskPersistence>>>> = DashMap::new();
-        let write_public_key =
-            if let Some((write_public_key, write_discovery_key, write_feed)) = write_feed {
-                feeds.insert(write_discovery_key, Arc::new(Mutex::new(write_feed)));
-                Some(write_public_key)
-            } else {
-                None
-            };
-        let mut peer_public_keys = vec![];
-        for (peer_public_key, peer_discovery_key, peer_feed) in peer_feeds {
-            feeds.insert(peer_discovery_key, Arc::new(Mutex::new(peer_feed)));
-            peer_public_keys.push(peer_public_key);
+        let (doc_discovery_key, doc_feed) = root_feed;
+        feeds.insert(doc_discovery_key, Arc::new(Mutex::new(doc_feed)));
+        if let Some((write_discovery_key, write_feed)) = write_feed {
+            feeds.insert(write_discovery_key, Arc::new(Mutex::new(write_feed)));
         }
-        let document_state = DocStateWrapper::new_disk(
-            doc_url,
-            name,
-            proxy,
-            write_public_key,
-            peer_public_keys,
-            content,
-            &data_root_dir,
-        )
-        .await;
+        let proxy = state.proxy;
+        let document_header = document_header_or_default(&state.document_header);
+        let document_state = DocStateWrapper::new_disk(state, &data_root_dir).await;
+
         Self {
             feeds: Arc::new(feeds),
             document_state: Arc::new(Mutex::new(document_state)),
             state_event_sender: Arc::new(Mutex::new(None)),
-            prefix: data_root_dir.clone(),
-            doc_discovery_key,
-            doc_url: doc_url.to_string(),
-            name: name.to_string(),
+            prefix: PathBuf::new(),
+            document_header,
             proxy,
+            root_discovery_key: doc_discovery_key,
+            doc_url: encrypted_doc_url.to_string(),
+            peer_header: peer_header.clone(),
             encrypted,
             encryption_key,
         }
@@ -1212,28 +1304,50 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
 // Utilities
 
 struct PrepareCreateResult {
-    key_pair: Keypair,
-    discovery_key: [u8; 32],
+    root_key_pair: Keypair,
+    root_discovery_key: [u8; 32],
+    root_public_key: [u8; 32],
+    write_key_pair: Keypair,
+    write_discovery_key: [u8; 32],
     automerge_doc: AutomergeDoc,
-    doc_public_key: [u8; 32],
     data: Vec<u8>,
+    state: DocumentState,
 }
 
 async fn prepare_create<P: Into<Prop>, V: Into<ScalarValue>>(
-    name: &str,
-    root_scalars: Vec<(P, V)>,
+    peer_header: &NameDescription,
+    document_header: &NameDescription,
+    doc_root_scalars: Vec<(P, V)>,
 ) -> PrepareCreateResult {
-    // Generate a key pair, its discovery key and the public key string
-    let (key_pair, discovery_key) = generate_keys();
-    let (automerge_doc, data) =
-        init_automerge_doc_with_root_scalars(name, &discovery_key, root_scalars);
-    let doc_public_key = *key_pair.public.as_bytes();
+    // Generate a root feed key pair, its discovery key and the public key string
+    let (root_key_pair, root_discovery_key) = generate_keys();
+    let root_public_key = *root_key_pair.public.as_bytes();
+
+    // Generate a writeable feed key pair, its discovery key and the public key string
+    let (write_key_pair, write_discovery_key) = generate_keys();
+    let write_public_key = *write_key_pair.public.as_bytes();
+
+    // Initialize the document
+    let (automerge_doc, data) = init_automerge_doc_with_root_scalars(
+        &peer_header.name,
+        &root_discovery_key,
+        doc_root_scalars,
+    );
+
+    // Initialize document state, will be filled later with content
+    let decoded_doc_url =
+        DecodedDocUrl::new_plain(root_public_key.clone(), document_header.clone());
+    let state = DocumentState::new(decoded_doc_url, false, vec![], Some(write_public_key), None);
+
     PrepareCreateResult {
-        key_pair,
-        discovery_key,
+        root_key_pair,
+        root_discovery_key,
+        root_public_key,
+        write_key_pair,
+        write_discovery_key,
         automerge_doc,
-        doc_public_key,
         data,
+        state,
     }
 }
 
@@ -1241,11 +1355,11 @@ async fn update_content<T>(
     content: &mut DocumentContent,
     feeds: &Arc<DashMap<[u8; 32], Arc<Mutex<Feed<T>>>>>,
     unapplied_entries: &mut UnappliedEntries,
-) -> anyhow::Result<(bool, Vec<([u8; 32], String)>)>
+) -> anyhow::Result<(bool, Vec<([u8; 32], NameDescription)>)>
 where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send + 'static,
 {
-    let mut new_peer_names: Vec<([u8; 32], String)> = vec![];
+    let mut new_peer_headers: Vec<([u8; 32], NameDescription)> = vec![];
     let mut changed = false;
     for multi in feeds.iter() {
         let discovery_key = multi.key();
@@ -1263,10 +1377,10 @@ where
         if !result.0.is_empty() {
             changed = true;
         }
-        new_peer_names.extend(result.1);
+        new_peer_headers.extend(result.1);
     }
 
-    Ok((changed, new_peer_names))
+    Ok((changed, new_peer_headers))
 }
 
 async fn get_new_entries<T>(
@@ -1297,8 +1411,12 @@ async fn update_content_with_entries(
     synced_contiguous_length: u64,
     content: &mut DocumentContent,
     unapplied_entries: &mut UnappliedEntries,
-) -> anyhow::Result<(Vec<Patch>, Vec<([u8; 32], String)>, Vec<([u8; 32], u64)>)> {
-    let (patches, new_names, peer_syncs) = {
+) -> anyhow::Result<(
+    Vec<Patch>,
+    Vec<([u8; 32], NameDescription)>,
+    Vec<([u8; 32], u64)>,
+)> {
+    let (patches, new_headers, peer_syncs) = {
         let automerge_doc = content.automerge_doc.as_mut().unwrap();
         let result = apply_entries_autocommit(
             automerge_doc,
@@ -1307,7 +1425,7 @@ async fn update_content_with_entries(
             entries,
             unapplied_entries,
         )?;
-        let new_names: Vec<([u8; 32], String)> = result
+        let new_peer_headers: Vec<([u8; 32], NameDescription)> = result
             .iter()
             .filter(|value| value.1 .1.is_some())
             .map(|value| (value.0.clone(), value.1 .1.clone().unwrap()))
@@ -1321,12 +1439,20 @@ async fn update_content_with_entries(
         } else {
             vec![]
         };
-        (patches, new_names, peer_syncs)
+        (patches, new_peer_headers, peer_syncs)
     };
 
     for (discovery_key, length) in &peer_syncs[..] {
         content.set_cursor(&discovery_key, *length);
     }
 
-    Ok((patches, new_names, peer_syncs))
+    Ok((patches, new_headers, peer_syncs))
+}
+
+fn document_header_or_default(document_header: &Option<NameDescription>) -> NameDescription {
+    document_header.clone().unwrap_or(NameDescription {
+        // For debuggability it's useful to have a fixed name.
+        name: "unknown".to_string(),
+        description: None,
+    })
 }

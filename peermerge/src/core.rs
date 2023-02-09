@@ -26,7 +26,7 @@ use wasm_bindgen_futures::spawn_local;
 
 #[cfg(not(target_arch = "wasm32"))]
 use crate::feed::FeedDiskPersistence;
-use crate::{common::PeerEvent, feed::on_protocol, DocumentId, IO};
+use crate::{common::PeerEvent, feed::on_protocol, DocumentId, NameDescription, IO};
 use crate::{
     common::PeerEventContent,
     feed::{FeedMemoryPersistence, FeedPersistence, Protocol},
@@ -46,8 +46,8 @@ where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send,
     U: FeedPersistence,
 {
-    /// Name of the repository
-    name: String,
+    /// Name and description of this peer
+    peer_header: NameDescription,
     /// Prefix
     prefix: PathBuf,
     /// Current storable state
@@ -63,8 +63,8 @@ where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send + 'static,
     U: FeedPersistence,
 {
-    pub fn name(&self) -> String {
-        self.name.clone()
+    pub fn peer_name(&self) -> String {
+        self.peer_header.name.clone()
     }
 
     #[instrument(skip(self))]
@@ -73,7 +73,7 @@ where
         document.watch(ids).await;
     }
 
-    #[instrument(skip(self, obj, prop), fields(obj = obj.as_ref().to_string(), peer_name = self.name))]
+    #[instrument(skip(self, obj, prop), fields(obj = obj.as_ref().to_string(), peer_name = self.peer_header.name))]
     pub async fn get_id<O: AsRef<ObjId>, P: Into<Prop>>(
         &self,
         document_id: &DocumentId,
@@ -84,7 +84,7 @@ where
         document.get_id(obj, prop).await
     }
 
-    #[instrument(skip(self, obj, prop), fields(obj = obj.as_ref().to_string(), peer_name = self.name))]
+    #[instrument(skip(self, obj, prop), fields(obj = obj.as_ref().to_string(), peer_name = self.peer_header.name))]
     pub async fn get_scalar<O: AsRef<ObjId>, P: Into<Prop>>(
         &self,
         document_id: &DocumentId,
@@ -95,7 +95,7 @@ where
         document.get_scalar(obj, prop).await
     }
 
-    #[instrument(skip(self, obj), fields(obj = obj.as_ref().to_string(), peer_name = self.name))]
+    #[instrument(skip(self, obj), fields(obj = obj.as_ref().to_string(), peer_name = self.peer_header.name))]
     pub async fn realize_text<O: AsRef<ObjId>>(
         &self,
         document_id: &DocumentId,
@@ -105,7 +105,7 @@ where
         document.realize_text(obj).await
     }
 
-    #[instrument(skip(self, obj, prop), fields(obj = obj.as_ref().to_string(), peer_name = self.name))]
+    #[instrument(skip(self, obj, prop), fields(obj = obj.as_ref().to_string(), peer_name = self.peer_header.name))]
     pub async fn put_object<O: AsRef<ObjId>, P: Into<Prop>>(
         &mut self,
         document_id: &DocumentId,
@@ -123,7 +123,7 @@ where
         Ok(result)
     }
 
-    #[instrument(skip(self, obj, prop, value), fields(obj = obj.as_ref().to_string(), peer_name = self.name))]
+    #[instrument(skip(self, obj, prop, value), fields(obj = obj.as_ref().to_string(), peer_name = self.peer_header.name))]
     pub async fn put_scalar<O: AsRef<ObjId>, P: Into<Prop>, V: Into<ScalarValue>>(
         &mut self,
         document_id: &DocumentId,
@@ -141,7 +141,7 @@ where
         Ok(result)
     }
 
-    #[instrument(skip(self, obj), fields(obj = obj.as_ref().to_string(), peer_name = self.name))]
+    #[instrument(skip(self, obj), fields(obj = obj.as_ref().to_string(), peer_name = self.peer_header.name))]
     pub async fn splice_text<O: AsRef<ObjId>>(
         &mut self,
         document_id: &DocumentId,
@@ -160,25 +160,31 @@ where
         Ok(result)
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip(self), fields(peer_name = self.peer_header.name))]
     pub async fn cork(&mut self, document_id: &DocumentId) {
         let mut document = self.documents.get_mut(document_id).unwrap();
         document.cork().await
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip(self), fields(peer_name = self.peer_header.name))]
     pub async fn uncork(&mut self, document_id: &DocumentId) -> anyhow::Result<()> {
         let mut document = self.documents.get_mut(document_id).unwrap();
         document.uncork().await
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip(self), fields(peer_name = self.peer_header.name))]
     pub fn doc_url(&self, document_id: &DocumentId) -> String {
         let document = self.documents.get(document_id).unwrap();
         document.doc_url()
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip(self), fields(peer_name = self.peer_header.name))]
+    pub(crate) fn proxy_doc_url(&self, document_id: &DocumentId) -> String {
+        let document = self.documents.get(document_id).unwrap();
+        document.proxy_doc_url()
+    }
+
+    #[instrument(skip(self), fields(peer_name = self.peer_header.name))]
     pub fn encryption_key(&self, document_id: &DocumentId) -> Option<Vec<u8>> {
         let document = self.documents.get(document_id).unwrap();
         document.encryption_key()
@@ -223,10 +229,10 @@ where
 // Memory
 
 impl Peermerge<RandomAccessMemory, FeedMemoryPersistence> {
-    pub async fn new_memory(name: &str) -> Self {
-        let state = PeermergeStateWrapper::new_memory(name).await;
+    pub async fn new_memory(peer_header: NameDescription) -> Self {
+        let state = PeermergeStateWrapper::new_memory(&peer_header).await;
         Self {
-            name: name.to_string(),
+            peer_header,
             prefix: PathBuf::new(),
             peermerge_state: Arc::new(Mutex::new(state)),
             documents: Arc::new(DashMap::new()),
@@ -236,10 +242,17 @@ impl Peermerge<RandomAccessMemory, FeedMemoryPersistence> {
 
     pub async fn create_new_document_memory<P: Into<Prop>, V: Into<ScalarValue>>(
         &mut self,
-        root_scalars: Vec<(P, V)>,
+        document_header: NameDescription,
+        doc_root_scalars: Vec<(P, V)>,
         encrypted: bool,
     ) -> DocumentId {
-        let document = Document::create_new_memory(&self.name, root_scalars, encrypted).await;
+        let document = Document::create_new_memory(
+            &self.peer_header,
+            document_header,
+            doc_root_scalars,
+            encrypted,
+        )
+        .await;
         self.add_document(document).await
     }
 
@@ -248,16 +261,17 @@ impl Peermerge<RandomAccessMemory, FeedMemoryPersistence> {
         doc_url: &str,
         encryption_key: &Option<Vec<u8>>,
     ) -> DocumentId {
-        let document = Document::attach_writer_memory(&self.name, doc_url, encryption_key).await;
+        let document =
+            Document::attach_writer_memory(&self.peer_header, doc_url, encryption_key).await;
         self.add_document(document).await
     }
 
     pub async fn attach_proxy_document_memory(&mut self, doc_url: &str) -> DocumentId {
-        let document = Document::attach_proxy_memory(&self.name, doc_url).await;
+        let document = Document::attach_proxy_memory(&self.peer_header, doc_url).await;
         self.add_document(document).await
     }
 
-    #[instrument(skip_all, fields(name = self.name))]
+    #[instrument(skip_all, fields(peer_name = self.peer_header.name))]
     pub async fn connect_protocol_memory<T>(
         &mut self,
         protocol: &mut Protocol<T>,
@@ -283,7 +297,7 @@ impl Peermerge<RandomAccessMemory, FeedMemoryPersistence> {
         let state_event_sender_for_task = state_event_sender.clone();
         let peermerge_state = self.peermerge_state.clone();
         let documents_for_task = self.documents.clone();
-        let name_for_task = self.name.clone();
+        let peer_name_for_task = self.peer_header.name.clone();
         let task_span = tracing::debug_span!("call_on_peer_event_memory").or_current();
         #[cfg(not(target_arch = "wasm32"))]
         task::spawn(async move {
@@ -293,7 +307,7 @@ impl Peermerge<RandomAccessMemory, FeedMemoryPersistence> {
                 state_event_sender_for_task,
                 peermerge_state,
                 documents_for_task,
-                &name_for_task,
+                &peer_name_for_task,
             )
             .await;
         });
@@ -321,7 +335,7 @@ async fn on_peer_event_memory(
     mut state_event_sender: UnboundedSender<StateEvent>,
     mut peermerge_state: Arc<Mutex<PeermergeStateWrapper<RandomAccessMemory>>>,
     mut documents: Arc<DashMap<DocumentId, Document<RandomAccessMemory, FeedMemoryPersistence>>>,
-    name: &str,
+    peer_name: &str,
 ) {
     while let Some(event) = peer_event_receiver.next().await {
         debug!("Received event {:?}", event);
@@ -338,7 +352,7 @@ async fn on_peer_event_memory(
                     &mut state_event_sender,
                     &mut peermerge_state,
                     &mut documents,
-                    name,
+                    peer_name,
                 )
                 .await
             }
@@ -353,10 +367,10 @@ async fn on_peer_event_memory(
 
 #[cfg(not(target_arch = "wasm32"))]
 impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
-    pub async fn create_new_disk(name: &str, data_root_dir: &PathBuf) -> Self {
-        let state = PeermergeStateWrapper::new_disk(name, data_root_dir).await;
+    pub async fn create_new_disk(peer_header: NameDescription, data_root_dir: &PathBuf) -> Self {
+        let state = PeermergeStateWrapper::new_disk(&peer_header, data_root_dir).await;
         Self {
-            name: name.to_string(),
+            peer_header,
             prefix: data_root_dir.clone(),
             peermerge_state: Arc::new(Mutex::new(state)),
             documents: Arc::new(DashMap::new()),
@@ -370,19 +384,20 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
     ) -> Self {
         let state_wrapper = PeermergeStateWrapper::open_disk(data_root_dir).await;
         let state = state_wrapper.state();
-        let name = state.name.clone();
+        let peer_header = state.peer_header.clone();
         let documents: DashMap<DocumentId, Document<RandomAccessDisk, FeedDiskPersistence>> =
             DashMap::new();
         for document_id in &state_wrapper.state.document_ids {
             let encryption_key: Option<Vec<u8>> = encryption_keys.get(document_id).cloned();
             let postfix = encode_document_id(&document_id);
             let document_data_root_dir = data_root_dir.join(postfix);
-            let document = Document::open_disk(&encryption_key, &document_data_root_dir).await;
+            let document =
+                Document::open_disk(&peer_header, &encryption_key, &document_data_root_dir).await;
             documents.insert(document_id.clone(), document);
         }
 
         Self {
-            name,
+            peer_header,
             prefix: data_root_dir.clone(),
             peermerge_state: Arc::new(Mutex::new(state_wrapper)),
             documents: Arc::new(documents),
@@ -392,11 +407,18 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
 
     pub async fn create_new_document_disk<P: Into<Prop>, V: Into<ScalarValue>>(
         &mut self,
-        root_scalars: Vec<(P, V)>,
+        document_header: NameDescription,
+        doc_root_scalars: Vec<(P, V)>,
         encrypted: bool,
     ) -> DocumentId {
-        let document =
-            Document::create_new_disk(&self.name, root_scalars, encrypted, &self.prefix).await;
+        let document = Document::create_new_disk(
+            &self.peer_header,
+            document_header,
+            doc_root_scalars,
+            encrypted,
+            &self.prefix,
+        )
+        .await;
         self.add_document(document).await
     }
 
@@ -406,16 +428,17 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
         encryption_key: &Option<Vec<u8>>,
     ) -> DocumentId {
         let document =
-            Document::attach_writer_disk(&self.name, doc_url, encryption_key, &self.prefix).await;
+            Document::attach_writer_disk(&self.peer_header, doc_url, encryption_key, &self.prefix)
+                .await;
         self.add_document(document).await
     }
 
     pub async fn attach_proxy_document_disk(&mut self, doc_url: &str) -> DocumentId {
-        let document = Document::attach_proxy_disk(&self.name, doc_url, &self.prefix).await;
+        let document = Document::attach_proxy_disk(&self.peer_header, doc_url, &self.prefix).await;
         self.add_document(document).await
     }
 
-    #[instrument(skip_all, fields(name = self.name))]
+    #[instrument(skip_all, fields(name = self.peer_header.name))]
     pub async fn connect_protocol_disk<T>(
         &mut self,
         protocol: &mut Protocol<T>,
@@ -441,7 +464,7 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
         let state_event_sender_for_task = state_event_sender.clone();
         let peermerge_state = self.peermerge_state.clone();
         let documents_for_task = self.documents.clone();
-        let name_for_task = self.name.clone();
+        let peer_name_for_task = self.peer_header.name.clone();
         let task_span = tracing::debug_span!("call_on_peer_event_disk").or_current();
         task::spawn(async move {
             let _entered = task_span.enter();
@@ -450,7 +473,7 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
                 state_event_sender_for_task,
                 peermerge_state,
                 documents_for_task,
-                &name_for_task,
+                &peer_name_for_task,
             )
             .await;
         });
@@ -467,7 +490,7 @@ async fn on_peer_event_disk(
     mut state_event_sender: UnboundedSender<StateEvent>,
     mut peermerge_state: Arc<Mutex<PeermergeStateWrapper<RandomAccessDisk>>>,
     mut documents: Arc<DashMap<DocumentId, Document<RandomAccessDisk, FeedDiskPersistence>>>,
-    name: &str,
+    peer_name: &str,
 ) {
     while let Some(event) = peer_event_receiver.next().await {
         debug!("Received event {:?}", event);
@@ -484,7 +507,7 @@ async fn on_peer_event_disk(
                     &mut state_event_sender,
                     &mut peermerge_state,
                     &mut documents,
-                    name,
+                    peer_name,
                 )
                 .await
             }
@@ -503,7 +526,7 @@ async fn process_peer_event<T, U>(
     state_event_sender: &mut UnboundedSender<StateEvent>,
     _peermerge_state: &mut Arc<Mutex<PeermergeStateWrapper<T>>>,
     documents: &mut Arc<DashMap<DocumentId, Document<T, U>>>,
-    name: &str,
+    peer_name: &str,
 ) where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send + 'static,
     U: FeedPersistence,
@@ -521,7 +544,7 @@ async fn process_peer_event<T, U>(
                 Ok(()) => {}
                 Err(err) => warn!(
                     "{}: could not notify remote peer synced to len {}, err {}",
-                    name.to_string(),
+                    peer_name.to_string(),
                     synced_contiguous_length,
                     err
                 ),

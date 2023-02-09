@@ -2,7 +2,8 @@ use automerge::{ObjId, ROOT};
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use futures::stream::StreamExt;
 use peermerge::{
-    DocumentId, FeedMemoryPersistence, Patch, Peermerge, StateEvent, StateEventContent::*,
+    DocumentId, FeedMemoryPersistence, NameDescription, Patch, Peermerge, StateEvent,
+    StateEventContent::*,
 };
 use random_access_memory::RandomAccessMemory;
 use std::collections::HashMap;
@@ -41,9 +42,13 @@ async fn memory_three_writers() -> anyhow::Result<()> {
         UnboundedSender<StateEvent>,
         UnboundedReceiver<StateEvent>,
     ) = unbounded();
-    let mut peermerge_creator = Peermerge::new_memory("creator").await;
+    let mut peermerge_creator = Peermerge::new_memory(NameDescription::new("creator")).await;
     let creator_doc_id = peermerge_creator
-        .create_new_document_memory(vec![("version", 1)], false)
+        .create_new_document_memory(
+            NameDescription::new("memory_test"),
+            vec![("version", 1)],
+            false,
+        )
         .await;
 
     // Insert a map with a text field to the document
@@ -73,7 +78,7 @@ async fn memory_three_writers() -> anyhow::Result<()> {
         .unwrap();
     });
 
-    let mut peermerge_joiner = Peermerge::new_memory("joiner").await;
+    let mut peermerge_joiner = Peermerge::new_memory(NameDescription::new("joiner")).await;
     let joiner_doc_id = peermerge_joiner
         .attach_writer_document_memory(&peermerge_creator.doc_url(&creator_doc_id), &None)
         .await;
@@ -342,7 +347,8 @@ async fn process_creator_state_events(
                         UnboundedSender<StateEvent>,
                         UnboundedReceiver<StateEvent>,
                     ) = unbounded();
-                    let mut peermerge_latecomer = Peermerge::new_memory("latecomer").await;
+                    let mut peermerge_latecomer =
+                        Peermerge::new_memory(NameDescription::new("latecomer")).await;
                     let latecomer_doc_id = peermerge_latecomer
                         .attach_writer_document_memory(&peermerge.doc_url(&doc_id), &None)
                         .await;

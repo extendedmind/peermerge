@@ -20,7 +20,7 @@ pub async fn setup_peermerge_mesh(
     let mut peermerge_creator: Peermerge<RandomAccessMemory, FeedMemoryPersistence> =
         Peermerge::new_memory("p1").await;
     let doc_id = peermerge_creator
-        .create_new_document_memory(vec![("version", 1)], encrypted)
+        .create_new_document_memory("bench", vec![("version", 1)], encrypted)
         .await;
     let encryption_key = peermerge_creator.encryption_key(&doc_id);
     peermerge_creator.watch(&doc_id, vec![ROOT]).await;

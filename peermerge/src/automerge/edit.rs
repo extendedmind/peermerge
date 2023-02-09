@@ -2,7 +2,10 @@ use automerge::{transaction::Transactable, Change, ChangeHash, ObjId, ObjType, P
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use super::AutomergeDoc;
-use crate::common::entry::{Entry, EntryType};
+use crate::{
+    common::entry::{Entry, EntryType},
+    NameDescription,
+};
 
 #[derive(Debug)]
 pub(crate) struct UnappliedEntries {
@@ -40,7 +43,7 @@ impl UnappliedEntries {
         &mut self,
         automerge_doc: &mut AutomergeDoc,
         changes_to_apply: &mut Vec<Change>,
-        result: &mut HashMap<[u8; 32], (u64, Option<String>)>,
+        result: &mut HashMap<[u8; 32], (u64, Option<NameDescription>)>,
     ) {
         let mut hashes: HashSet<ChangeHash> = changes_to_apply
             .iter()
@@ -87,15 +90,16 @@ impl UnappliedEntries {
                             }
                         }
                         EntryType::InitPeer => {
-                            let peer_name = entry.peer_name.as_ref().unwrap();
+                            let peer_header = NameDescription {
+                                name: entry.name.as_ref().unwrap().to_string(),
+                                description: entry.description.clone(),
+                            };
                             if let Some(value) = result.get_mut(discovery_key) {
                                 value.0 = new_length;
-                                value.1 = Some(peer_name.to_string());
+                                value.1 = Some(peer_header);
                             } else {
-                                result.insert(
-                                    discovery_key.clone(),
-                                    (new_length, Some(peer_name.to_string())),
-                                );
+                                result
+                                    .insert(discovery_key.clone(), (new_length, Some(peer_header)));
                             }
                             changed = true;
                             new_length += 1;
@@ -127,8 +131,8 @@ pub(crate) fn apply_entries_autocommit(
     contiguous_length: u64,
     entries: Vec<Entry>,
     unapplied_entries: &mut UnappliedEntries,
-) -> anyhow::Result<HashMap<[u8; 32], (u64, Option<String>)>> {
-    let mut result: HashMap<[u8; 32], (u64, Option<String>)> = HashMap::new();
+) -> anyhow::Result<HashMap<[u8; 32], (u64, Option<NameDescription>)>> {
+    let mut result: HashMap<[u8; 32], (u64, Option<NameDescription>)> = HashMap::new();
     let mut changes_to_apply: Vec<Change> = vec![];
     let len = entries.len() as u64;
     let mut length = contiguous_length - len;
@@ -155,12 +159,15 @@ pub(crate) fn apply_entries_autocommit(
                 };
             }
             EntryType::InitPeer => {
-                let peer_name = entry.peer_name.unwrap();
+                let peer_header = NameDescription {
+                    name: entry.name.unwrap(),
+                    description: entry.description,
+                };
                 if let Some(value) = result.get_mut(discovery_key) {
                     value.0 = length;
-                    value.1 = Some(peer_name);
+                    value.1 = Some(peer_header);
                 } else {
-                    result.insert(discovery_key.clone(), (length, Some(peer_name)));
+                    result.insert(discovery_key.clone(), (length, Some(peer_header)));
                 }
             }
             _ => panic!("Unexpected entry {:?}", entry),
