@@ -1251,7 +1251,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
             feeds: Arc::new(feeds),
             document_state: Arc::new(Mutex::new(document_state)),
             state_event_sender: Arc::new(Mutex::new(None)),
-            prefix: PathBuf::new(),
+            prefix: data_root_dir.clone(),
             document_header,
             proxy,
             root_discovery_key: doc_discovery_key,
