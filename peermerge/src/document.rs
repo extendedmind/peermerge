@@ -606,6 +606,7 @@ where
                 .collect();
             let peer_syncs: Vec<([u8; 32], u64)> = result
                 .iter()
+                .filter(|value| value.0 != &self.root_discovery_key)
                 .map(|value| (value.0.clone(), value.1 .0))
                 .collect();
             Ok(Some((

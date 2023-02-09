@@ -57,7 +57,7 @@ pub(crate) fn init_automerge_doc_from_entries(
         &mut automerge_doc,
         &synced_discovery_key,
         contiguous_length,
-        vec![init_entry],
+        vec![],
         unapplied_entries,
     )?;
     result.insert(synced_discovery_key.clone(), (contiguous_length, None));
