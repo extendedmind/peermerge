@@ -146,6 +146,7 @@ async fn process_joiner_state_event(
             event,
             document_changes.len()
         );
+
         match event.content {
             PeerSynced((Some(name), _, len)) => {
                 if !peer_synced.contains_key("creator") {
@@ -167,6 +168,9 @@ async fn process_joiner_state_event(
             }
             RemotePeerSynced((discovery_key, len)) => {
                 remote_peer_synced.insert(discovery_key, len);
+            }
+            DocumentInitialized() => {
+                // Skip
             }
             DocumentChanged(patches) => {
                 if document_changes.len() == 0 {
@@ -265,6 +269,7 @@ async fn process_creator_state_events(
             event,
             document_changes.len()
         );
+
         let text_id = text_id.clone();
         match event.content {
             PeerSynced((Some(name), _, len)) => {
@@ -461,6 +466,9 @@ async fn process_latecomer_state_event(
             RemotePeerSynced((discovery_key, len)) => {
                 remote_peer_synced.insert(discovery_key, len);
             }
+            DocumentInitialized() => {
+                // Ignore, this happens with the root hypercore
+            }
             DocumentChanged(patches) => {
                 if document_changes.len() == 0 {
                     assert_eq!(patches.len(), 1); // Two local additions as one Splice
@@ -473,17 +481,18 @@ async fn process_latecomer_state_event(
                     )
                     .await;
                     document_changes.push(patches);
-
-                    // Let's wait for this to end up, via the creator, to the joiner
-                    wait_for_condvar(append_sync).await;
-                    break;
                 }
+
+                // Let's wait for this to end up, via the creator, to the joiner
+                wait_for_condvar(append_sync).await;
+                break;
             }
             _ => {
                 panic!("Unkown event {:?}", event);
             }
         }
     }
+
     Ok(())
 }
 

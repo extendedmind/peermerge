@@ -26,7 +26,7 @@ use tokio::{
 // Memory
 
 #[cfg(feature = "async-std")]
-#[instrument(skip_all, fields(peer_name = peermerge.name(), host = host, port = port))]
+#[instrument(skip_all, fields(peer_name = peermerge.peer_name(), host = host, port = port))]
 pub async fn connect_tcp_server_memory(
     peermerge: Peermerge<RandomAccessMemory, FeedMemoryPersistence>,
     host: &str,
@@ -50,7 +50,7 @@ pub async fn connect_tcp_server_memory(
 }
 
 #[cfg(feature = "tokio")]
-#[instrument(skip_all, fields(peer_name = peermerge.name(), host = host, port = port))]
+#[instrument(skip_all, fields(peer_name = peermerge.peer_name(), host = host, port = port))]
 pub async fn connect_tcp_server_memory(
     peermerge: Peermerge<RandomAccessMemory, FeedMemoryPersistence>,
     host: &str,
@@ -74,7 +74,7 @@ pub async fn connect_tcp_server_memory(
 }
 
 #[cfg(feature = "async-std")]
-#[instrument(skip_all, fields(peer_name = peermerge.name(), host = host, port = port))]
+#[instrument(skip_all, fields(peer_name = peermerge.peer_name(), host = host, port = port))]
 pub async fn connect_tcp_client_memory(
     mut peermerge: Peermerge<RandomAccessMemory, FeedMemoryPersistence>,
     host: &str,
@@ -91,7 +91,7 @@ pub async fn connect_tcp_client_memory(
 }
 
 #[cfg(feature = "tokio")]
-#[instrument(skip_all, fields(peer_name = peermerge.name(), host = host, port = port))]
+#[instrument(skip_all, fields(peer_name = peermerge.peer_name(), host = host, port = port))]
 pub async fn connect_tcp_client_memory(
     mut peermerge: Peermerge<RandomAccessMemory, FeedMemoryPersistence>,
     host: &str,
@@ -112,7 +112,7 @@ pub async fn connect_tcp_client_memory(
 // Disk
 
 #[cfg(feature = "async-std")]
-#[instrument(skip_all, fields(peer_name = peermerge.name(), host = host, port = port))]
+#[instrument(skip_all, fields(peer_name = peermerge.peer_name(), host = host, port = port))]
 pub async fn connect_tcp_server_disk(
     peermerge: Peermerge<RandomAccessDisk, FeedDiskPersistence>,
     host: &str,
@@ -136,7 +136,7 @@ pub async fn connect_tcp_server_disk(
 }
 
 #[cfg(feature = "tokio")]
-#[instrument(skip_all, fields(peer_name = peermerge.name(), host = host, port = port))]
+#[instrument(skip_all, fields(peer_name = peermerge.peer_name(), host = host, port = port))]
 pub async fn connect_tcp_server_disk(
     peermerge: Peermerge<RandomAccessDisk, FeedDiskPersistence>,
     host: &str,
@@ -160,7 +160,7 @@ pub async fn connect_tcp_server_disk(
 }
 
 #[cfg(feature = "async-std")]
-#[instrument(skip_all, fields(peer_name = peermerge.name(), host = host, port = port))]
+#[instrument(skip_all, fields(peer_name = peermerge.peer_name(), host = host, port = port))]
 pub async fn connect_tcp_client_disk(
     mut peermerge: Peermerge<RandomAccessDisk, FeedDiskPersistence>,
     host: &str,
@@ -177,7 +177,7 @@ pub async fn connect_tcp_client_disk(
 }
 
 #[cfg(feature = "tokio")]
-#[instrument(skip_all, fields(peer_name = peermerge.name(), host = host, port = port))]
+#[instrument(skip_all, fields(peer_name = peermerge.peer_name(), host = host, port = port))]
 pub async fn connect_tcp_client_disk(
     mut peermerge: Peermerge<RandomAccessDisk, FeedDiskPersistence>,
     host: &str,

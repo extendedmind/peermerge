@@ -202,6 +202,9 @@ async fn process_joiner_state_event(
                 break;
             }
             RemotePeerSynced(_) => {}
+            DocumentInitialized() => {
+                // Just ignore for now
+            }
             DocumentChanged(patches) => {
                 document_changes.push(patches);
             }

@@ -106,7 +106,6 @@ impl UnappliedEntries {
                             }) {
                                 changes_to_apply.push(change.clone());
                                 hashes.insert(change.hash());
-                                new_length += 1;
                                 if let Some(result_value) = result.get_mut(discovery_key) {
                                     result_value.set_length(new_length);
                                 } else {
@@ -115,6 +114,7 @@ impl UnappliedEntries {
                                         ApplyEntriesFeedChange::new(new_length),
                                     );
                                 }
+                                new_length += 1;
                                 changed = true;
                             } else {
                                 // Only try to insert in order per hypercore, don't apply in between changes, as they

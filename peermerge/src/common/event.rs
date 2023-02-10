@@ -1,16 +1,17 @@
 use automerge::Patch;
 
+use crate::DocumentId;
+
 #[derive(Clone, Debug)]
 pub struct StateEvent {
-    // FIXME: Rename to document_id: DocumentId
-    pub doc_discovery_key: [u8; 32],
+    pub document_id: DocumentId,
     pub content: StateEventContent,
 }
 
 impl StateEvent {
-    pub fn new(doc_discovery_key: [u8; 32], content: StateEventContent) -> Self {
+    pub fn new(document_id: [u8; 32], content: StateEventContent) -> Self {
         Self {
-            doc_discovery_key,
+            document_id,
             content,
         }
     }
@@ -20,6 +21,7 @@ impl StateEvent {
 pub enum StateEventContent {
     PeerSynced((Option<String>, [u8; 32], u64)),
     RemotePeerSynced(([u8; 32], u64)),
+    DocumentInitialized(),
     DocumentChanged(Vec<Patch>),
 }
 

@@ -149,6 +149,9 @@ async fn process_creator_state_events(
             DocumentChanged(patches) => {
                 document_changes.push(patches);
             }
+            DocumentInitialized() => {
+                panic!("Should not get document initialized event for creator");
+            }
         }
     }
     Ok(())
