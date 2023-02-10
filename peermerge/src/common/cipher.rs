@@ -99,12 +99,16 @@ pub(crate) struct DecodedDocUrl {
 }
 
 impl DecodedDocUrl {
-    pub(crate) fn new_plain(root_public_key: [u8; 32], document_header: NameDescription) -> Self {
+    pub(crate) fn new(
+        root_public_key: [u8; 32],
+        document_header: NameDescription,
+        encrypted: bool,
+    ) -> Self {
         let plain_doc_url = encode_doc_url(&root_public_key, &document_header, &None);
         Self {
             root_public_key,
             document_header: Some(document_header),
-            encrypted: Some(false),
+            encrypted: Some(encrypted),
             plain_doc_url,
         }
     }

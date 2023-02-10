@@ -74,19 +74,25 @@ impl DocumentState {
         version: u8,
         plain_doc_url: String,
         proxy: bool,
+        encrypted: Option<bool>,
         peers: Vec<DocumentPeerState>,
         write_public_key: Option<[u8; 32]>,
         content: Option<DocumentContent>,
     ) -> Self {
         let decoded_doc_url = decode_doc_url(&plain_doc_url, &None);
-        Self::new_with_version(
+        Self {
             version,
-            decoded_doc_url,
+            plain_doc_url: decoded_doc_url.plain_doc_url,
+            document_header: decoded_doc_url.document_header,
+            root_public_key: decoded_doc_url.root_public_key,
+            root_discovery_key: discovery_key_from_public_key(&decoded_doc_url.root_public_key),
+            encrypted,
             proxy,
             peers,
             write_public_key,
             content,
-        )
+            watched_ids: vec![],
+        }
     }
 
     pub(crate) fn new_with_version(

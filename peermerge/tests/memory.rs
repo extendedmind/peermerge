@@ -80,7 +80,7 @@ async fn memory_three_writers() -> anyhow::Result<()> {
 
     let mut peermerge_joiner = Peermerge::new_memory(NameDescription::new("joiner")).await;
     let joiner_doc_id = peermerge_joiner
-        .attach_writer_document_memory(&peermerge_creator.doc_url(&creator_doc_id), &None)
+        .attach_writer_document_memory(&peermerge_creator.doc_url(&creator_doc_id).await, &None)
         .await;
     let peermerge_joiner_for_task = peermerge_joiner.clone();
     task::spawn(async move {
@@ -350,7 +350,7 @@ async fn process_creator_state_events(
                     let mut peermerge_latecomer =
                         Peermerge::new_memory(NameDescription::new("latecomer")).await;
                     let latecomer_doc_id = peermerge_latecomer
-                        .attach_writer_document_memory(&peermerge.doc_url(&doc_id), &None)
+                        .attach_writer_document_memory(&peermerge.doc_url(&doc_id).await, &None)
                         .await;
                     let peermerge_latecomer_for_task = peermerge_latecomer.clone();
                     let peermerge_creator_for_task = peermerge.clone();

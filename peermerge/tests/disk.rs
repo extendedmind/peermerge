@@ -55,8 +55,8 @@ async fn disk_two_peers(encrypted: bool) -> anyhow::Result<()> {
             encrypted,
         )
         .await;
-    let doc_url = peermerge_creator.doc_url(&creator_doc_id);
-    let encryption_key = peermerge_creator.encryption_key(&creator_doc_id);
+    let doc_url = peermerge_creator.doc_url(&creator_doc_id).await;
+    let encryption_key = peermerge_creator.encryption_key(&creator_doc_id).await;
     assert_eq!(get_doc_url_info(&doc_url).encrypted, Some(encrypted));
     assert_eq!(encryption_key.is_some(), encrypted);
 
@@ -237,8 +237,8 @@ async fn process_creator_state_events(
                 wait_for_condvar(assert_sync).await;
                 break;
             }
-            RemotePeerSynced((_, len)) => {
-                if expected_scalars.len() > 1 {
+            RemotePeerSynced((discovery_key, len)) => {
+                if expected_scalars.len() > 1 && discovery_key != doc_id {
                     assert_eq!(len, expected_scalars.len() as u64);
                     for (field, expected) in &expected_scalars {
                         let value = peermerge.get_scalar(&doc_id, ROOT, field).await?.unwrap();

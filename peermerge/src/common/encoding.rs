@@ -60,20 +60,23 @@ impl CompactEncoding<DocumentState> for State {
         if value.proxy {
             flags = flags | 1;
         }
+        if value.encrypted.unwrap_or(false) {
+            flags = flags | 2;
+        }
         let len = value.peers.len();
         if len > 0 {
-            flags = flags | 2;
+            flags = flags | 4;
             self.encode(&len, buffer);
             for peer in &value.peers {
                 self.encode(peer, buffer);
             }
         }
         if let Some(write_public_key) = &value.write_public_key {
-            flags = flags | 4;
+            flags = flags | 8;
             self.encode_fixed_32(write_public_key, buffer);
         }
         if let Some(content) = &value.content {
-            flags = flags | 8;
+            flags = flags | 16;
             self.encode(content, buffer);
         }
 
@@ -85,7 +88,8 @@ impl CompactEncoding<DocumentState> for State {
         let plain_doc_url: String = self.decode(buffer);
         let flags: u8 = self.decode(buffer);
         let proxy = flags & 1 != 0;
-        let peers: Vec<DocumentPeerState> = if flags & 2 != 0 {
+        let encrypted: Option<bool> = if !proxy { Some(flags & 2 != 0) } else { None };
+        let peers: Vec<DocumentPeerState> = if flags & 4 != 0 {
             let len: usize = self.decode(buffer);
             let mut peers: Vec<DocumentPeerState> = Vec::with_capacity(len);
             for _ in 0..len {
@@ -97,13 +101,13 @@ impl CompactEncoding<DocumentState> for State {
             vec![]
         };
 
-        let write_public_key: Option<[u8; 32]> = if flags & 4 != 0 {
+        let write_public_key: Option<[u8; 32]> = if flags & 8 != 0 {
             Some(self.decode_fixed_32(buffer).to_vec().try_into().unwrap())
         } else {
             None
         };
 
-        let content: Option<DocumentContent> = if flags & 8 != 0 {
+        let content: Option<DocumentContent> = if flags & 16 != 0 {
             Some(self.decode(buffer))
         } else {
             None
@@ -112,6 +116,7 @@ impl CompactEncoding<DocumentState> for State {
             version,
             plain_doc_url,
             proxy,
+            encrypted,
             peers,
             write_public_key,
             content,
@@ -122,6 +127,7 @@ impl CompactEncoding<DocumentState> for State {
 impl CompactEncoding<DocumentPeerState> for State {
     fn preencode(&mut self, value: &DocumentPeerState) {
         self.end += 32;
+        self.end += 1; // flags
         if let Some(peer_header) = &value.peer_header {
             self.preencode(peer_header);
         }
@@ -129,14 +135,20 @@ impl CompactEncoding<DocumentPeerState> for State {
 
     fn encode(&mut self, value: &DocumentPeerState, buffer: &mut [u8]) {
         self.encode_fixed_32(&value.public_key, buffer);
+        let flags_index = self.start;
+        let mut flags: u8 = 0;
+        self.start += 1;
         if let Some(peer_header) = &value.peer_header {
+            flags = flags | 1;
             self.encode(peer_header, buffer);
         }
+        buffer[flags_index] = flags;
     }
 
     fn decode(&mut self, buffer: &[u8]) -> DocumentPeerState {
         let public_key: [u8; 32] = self.decode_fixed_32(buffer).to_vec().try_into().unwrap();
-        let peer_header: Option<NameDescription> = if self.start < self.end {
+        let flags: u8 = self.decode(buffer);
+        let peer_header: Option<NameDescription> = if flags & 1 != 0 {
             Some(self.decode(buffer))
         } else {
             None
@@ -353,6 +365,8 @@ impl CompactEncoding<NameDescription> for State {
         self.preencode(&value.name);
         if let Some(description) = &value.description {
             self.preencode(description);
+        } else {
+            self.preencode(&"".to_string());
         }
     }
 
@@ -360,15 +374,18 @@ impl CompactEncoding<NameDescription> for State {
         self.encode(&value.name, buffer);
         if let Some(description) = &value.description {
             self.encode(description, buffer);
+        } else {
+            self.encode(&"".to_string(), buffer);
         }
     }
 
     fn decode(&mut self, buffer: &[u8]) -> NameDescription {
         let name: String = self.decode(buffer);
-        let description: Option<String> = if self.start < self.end {
-            Some(self.decode(buffer))
-        } else {
+        let description: String = self.decode(buffer);
+        let description: Option<String> = if description.is_empty() {
             None
+        } else {
+            Some(description)
         };
         NameDescription { name, description }
     }

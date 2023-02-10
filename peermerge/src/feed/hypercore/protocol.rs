@@ -17,7 +17,7 @@ use tokio::sync::Mutex;
 use super::{messaging::NEW_PEERS_CREATED_LOCAL_SIGNAL_NAME, HypercoreWrapper};
 use crate::common::keys::discovery_key_from_public_key;
 use crate::common::{message::NewPeersCreatedMessage, PeerEvent};
-use crate::document::Document;
+use crate::document::{get_document, get_document_ids, Document};
 use crate::{DocumentId, FeedPersistence, IO};
 
 #[instrument(level = "debug", skip_all, fields(is_initiator = protocol.is_initiator()))]
@@ -52,8 +52,10 @@ where
                         if is_initiator {
                             // On handshake, we can only open the root hypercores, because
                             // it is not known which of our documents the other side knowns about.
-                            for document in documents.iter() {
-                                let root_hypercore = document.root_feed();
+                            for document_id in get_document_ids(&documents).await {
+                                let document =
+                                    get_document(&documents, &document_id).await.unwrap();
+                                let root_hypercore = document.root_feed().await;
                                 let root_hypercore = root_hypercore.lock().await;
                                 debug!("Event:Handshake: opening root channel");
                                 protocol.open(root_hypercore.public_key().clone()).await?;
@@ -65,7 +67,9 @@ where
                             &discovery_key,
                             &documents,
                             &opened_documents,
-                        ) {
+                        )
+                        .await
+                        {
                             unbound_discovery_keys.retain(|key| key != &discovery_key);
                             let hypercore = hypercore.lock().await;
                             protocol.open(hypercore.public_key().clone()).await?;
@@ -82,13 +86,15 @@ where
                                 &documents,
                                 &opened_documents,
                             )
+                            .await
                         {
                             if is_root {
                                 opened_documents.push(discovery_key.clone());
-                                let document = documents.get(discovery_key).unwrap();
+                                let document =
+                                    get_document(&documents, discovery_key).await.unwrap();
                                 if is_initiator {
                                     // Now that the root channel is open, we can open channels for the leaf feeds
-                                    let leaf_feeds = document.leaf_feeds();
+                                    let leaf_feeds = document.leaf_feeds().await;
                                     for leaf_feed in leaf_feeds {
                                         let leaf_feed = leaf_feed.lock().await;
                                         debug!("Event:Handshake: opening leaf channel");
@@ -144,9 +150,11 @@ where
                                     }
                                 })
                                 .collect();
-                            let document = documents.get(&message.doc_discovery_key).unwrap();
+                            let document = get_document(&documents, &message.doc_discovery_key)
+                                .await
+                                .unwrap();
                             for discovery_key in discovery_keys_to_open {
-                                if let Some(hypercore) = document.leaf_feed(&discovery_key) {
+                                if let Some(hypercore) = document.leaf_feed(&discovery_key).await {
                                     let hypercore = hypercore.lock().await;
                                     protocol.open(hypercore.public_key().clone()).await?;
                                 } else {
@@ -168,7 +176,7 @@ where
     Ok(())
 }
 
-fn get_openeable_hypercore_for_discovery_key<T, U>(
+async fn get_openeable_hypercore_for_discovery_key<T, U>(
     discovery_key: &[u8; 32],
     documents: &Arc<DashMap<DocumentId, Document<T, U>>>,
     opened_documents: &Vec<DocumentId>,
@@ -177,12 +185,12 @@ where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send + 'static,
     U: FeedPersistence,
 {
-    if let Some(document) = documents.get(discovery_key) {
-        Some(document.root_feed())
+    if let Some(document) = get_document(documents, discovery_key).await {
+        Some(document.root_feed().await)
     } else {
         for opened_document_id in opened_documents {
-            let document = documents.get(opened_document_id).unwrap();
-            let leaf_feed = document.leaf_feed(discovery_key);
+            let document = get_document(documents, opened_document_id).await.unwrap();
+            let leaf_feed = document.leaf_feed(discovery_key).await;
             if leaf_feed.is_some() {
                 return leaf_feed;
             }
@@ -191,7 +199,7 @@ where
     }
 }
 
-fn get_document_and_openeable_hypercore_for_discovery_key<T, U>(
+async fn get_document_and_openeable_hypercore_for_discovery_key<T, U>(
     discovery_key: &[u8; 32],
     documents: &Arc<DashMap<DocumentId, Document<T, U>>>,
     opened_documents: &Vec<DocumentId>,
@@ -200,12 +208,13 @@ where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send + 'static,
     U: FeedPersistence,
 {
-    if let Some(multi) = documents.get(discovery_key) {
-        Some((multi.value().clone(), multi.value().root_feed(), true))
+    if let Some(document) = get_document(documents, discovery_key).await {
+        let root_feed = document.root_feed().await;
+        Some((document, root_feed, true))
     } else {
         for opened_document_id in opened_documents {
-            let document = documents.get(opened_document_id).unwrap();
-            let leaf_feed = document.leaf_feed(discovery_key);
+            let document = get_document(documents, opened_document_id).await.unwrap();
+            let leaf_feed = document.leaf_feed(discovery_key).await;
             if leaf_feed.is_some() {
                 return leaf_feed.map(|feed| (document.clone(), feed, false));
             }

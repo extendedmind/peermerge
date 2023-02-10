@@ -26,7 +26,12 @@ use wasm_bindgen_futures::spawn_local;
 
 #[cfg(not(target_arch = "wasm32"))]
 use crate::feed::FeedDiskPersistence;
-use crate::{common::PeerEvent, feed::on_protocol, DocumentId, NameDescription, IO};
+use crate::{
+    common::PeerEvent,
+    document::{get_document, get_document_ids},
+    feed::on_protocol,
+    DocumentId, NameDescription, IO,
+};
 use crate::{
     common::PeerEventContent,
     feed::{FeedMemoryPersistence, FeedPersistence, Protocol},
@@ -69,7 +74,7 @@ where
 
     #[instrument(skip(self))]
     pub async fn watch(&mut self, document_id: &DocumentId, ids: Vec<ObjId>) {
-        let mut document = self.documents.get_mut(document_id).unwrap();
+        let mut document = get_document(&self.documents, document_id).await.unwrap();
         document.watch(ids).await;
     }
 
@@ -80,7 +85,7 @@ where
         obj: O,
         prop: P,
     ) -> anyhow::Result<Option<ObjId>> {
-        let document = self.documents.get(document_id).unwrap();
+        let document = get_document(&self.documents, document_id).await.unwrap();
         document.get_id(obj, prop).await
     }
 
@@ -91,7 +96,7 @@ where
         obj: O,
         prop: P,
     ) -> anyhow::Result<Option<ScalarValue>> {
-        let document = self.documents.get(document_id).unwrap();
+        let document = get_document(&self.documents, document_id).await.unwrap();
         document.get_scalar(obj, prop).await
     }
 
@@ -101,7 +106,7 @@ where
         document_id: &DocumentId,
         obj: O,
     ) -> anyhow::Result<Option<String>> {
-        let document = self.documents.get(document_id).unwrap();
+        let document = get_document(&self.documents, document_id).await.unwrap();
         document.realize_text(obj).await
     }
 
@@ -114,7 +119,7 @@ where
         object: ObjType,
     ) -> anyhow::Result<ObjId> {
         let result = {
-            let mut document = self.documents.get_mut(document_id).unwrap();
+            let mut document = get_document(&self.documents, document_id).await.unwrap();
             document.put_object(obj, prop, object).await?
         };
         {
@@ -132,7 +137,7 @@ where
         value: V,
     ) -> anyhow::Result<()> {
         let result = {
-            let mut document = self.documents.get_mut(document_id).unwrap();
+            let mut document = get_document(&self.documents, document_id).await.unwrap();
             document.put_scalar(obj, prop, value).await?
         };
         {
@@ -151,7 +156,7 @@ where
         text: &str,
     ) -> anyhow::Result<()> {
         let result = {
-            let mut document = self.documents.get_mut(document_id).unwrap();
+            let mut document = get_document(&self.documents, document_id).await.unwrap();
             document.splice_text(obj, index, delete, text).await?
         };
         {
@@ -162,31 +167,31 @@ where
 
     #[instrument(skip(self), fields(peer_name = self.peer_header.name))]
     pub async fn cork(&mut self, document_id: &DocumentId) {
-        let mut document = self.documents.get_mut(document_id).unwrap();
+        let mut document = get_document(&self.documents, document_id).await.unwrap();
         document.cork().await
     }
 
     #[instrument(skip(self), fields(peer_name = self.peer_header.name))]
     pub async fn uncork(&mut self, document_id: &DocumentId) -> anyhow::Result<()> {
-        let mut document = self.documents.get_mut(document_id).unwrap();
+        let mut document = get_document(&self.documents, document_id).await.unwrap();
         document.uncork().await
     }
 
     #[instrument(skip(self), fields(peer_name = self.peer_header.name))]
-    pub fn doc_url(&self, document_id: &DocumentId) -> String {
-        let document = self.documents.get(document_id).unwrap();
+    pub async fn doc_url(&self, document_id: &DocumentId) -> String {
+        let document = get_document(&self.documents, document_id).await.unwrap();
         document.doc_url()
     }
 
     #[instrument(skip(self), fields(peer_name = self.peer_header.name))]
-    pub(crate) fn proxy_doc_url(&self, document_id: &DocumentId) -> String {
-        let document = self.documents.get(document_id).unwrap();
+    pub(crate) async fn proxy_doc_url(&self, document_id: &DocumentId) -> String {
+        let document = get_document(&self.documents, document_id).await.unwrap();
         document.proxy_doc_url()
     }
 
     #[instrument(skip(self), fields(peer_name = self.peer_header.name))]
-    pub fn encryption_key(&self, document_id: &DocumentId) -> Option<Vec<u8>> {
-        let document = self.documents.get(document_id).unwrap();
+    pub async fn encryption_key(&self, document_id: &DocumentId) -> Option<Vec<u8>> {
+        let document = get_document(&self.documents, document_id).await.unwrap();
         document.encryption_key()
     }
 
@@ -196,14 +201,15 @@ where
             if sender.is_closed() {
                 *state_event_sender = None;
             } else {
-                let mut peermerge_patches: Vec<([u8; 32], Vec<Patch>)> = vec![];
-                for mut peermerge in self.documents.iter_mut() {
-                    let new_patches = peermerge.take_patches().await;
+                let mut document_patches: Vec<([u8; 32], Vec<Patch>)> = vec![];
+                for document_id in get_document_ids(&self.documents).await {
+                    let mut document = get_document(&self.documents, &document_id).await.unwrap();
+                    let new_patches = document.take_patches().await;
                     if new_patches.len() > 0 {
-                        peermerge_patches.push((peermerge.id(), new_patches))
+                        document_patches.push((document.id(), new_patches))
                     }
                 }
-                for (doc_discovery_key, patches) in peermerge_patches {
+                for (doc_discovery_key, patches) in document_patches {
                     sender
                         .unbounded_send(StateEvent::new(
                             doc_discovery_key,
@@ -341,7 +347,9 @@ async fn on_peer_event_memory(
         debug!("Received event {:?}", event);
         match event.content {
             PeerEventContent::NewPeersBroadcasted(public_keys) => {
-                let mut document = documents.get_mut(&event.doc_discovery_key).unwrap();
+                let mut document = get_document(&documents, &event.doc_discovery_key)
+                    .await
+                    .unwrap();
                 document
                     .process_new_peers_broadcasted_memory(public_keys)
                     .await;
@@ -496,7 +504,9 @@ async fn on_peer_event_disk(
         debug!("Received event {:?}", event);
         match event.content {
             PeerEventContent::NewPeersBroadcasted(public_keys) => {
-                let mut document = documents.get_mut(&event.doc_discovery_key).unwrap();
+                let mut document = get_document(&documents, &event.doc_discovery_key)
+                    .await
+                    .unwrap();
                 document
                     .process_new_peers_broadcasted_disk(public_keys)
                     .await;
@@ -551,7 +561,9 @@ async fn process_peer_event<T, U>(
             }
         }
         PeerEventContent::PeerSynced((discovery_key, synced_contiguous_length)) => {
-            let mut document = documents.get_mut(&event.doc_discovery_key).unwrap();
+            let mut document = get_document(&documents, &event.doc_discovery_key)
+                .await
+                .unwrap();
             let state_events = document
                 .process_peer_synced(discovery_key, synced_contiguous_length)
                 .await;

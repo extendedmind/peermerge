@@ -38,8 +38,8 @@ async fn proxy_disk_encrypted() -> anyhow::Result<()> {
         )
         .await;
     peermerge_creator.watch(&creator_doc_id, vec![ROOT]).await;
-    let doc_url = peermerge_creator.doc_url(&creator_doc_id);
-    let encryption_key = peermerge_creator.encryption_key(&creator_doc_id);
+    let doc_url = peermerge_creator.doc_url(&creator_doc_id).await;
+    let encryption_key = peermerge_creator.encryption_key(&creator_doc_id).await;
     assert_eq!(get_doc_url_info(&doc_url).encrypted, Some(true));
     assert_eq!(encryption_key.is_some(), true);
 
@@ -133,15 +133,17 @@ async fn process_creator_state_events(
             PeerSynced(_) => {
                 panic!("Should not get remote peer synced events {:?}", event);
             }
-            RemotePeerSynced((_, len)) => {
-                remote_peer_syncs += 1;
-                if remote_peer_syncs == 1 {
-                    assert_eq!(len, 1);
-                    peermerge.put_scalar(&doc_id, ROOT, "test", "value").await?;
-                } else if remote_peer_syncs == 2 {
-                    assert_eq!(len, 2);
-                    assert_eq!(document_changes.len(), 1);
-                    break;
+            RemotePeerSynced((discovery_key, len)) => {
+                if discovery_key != doc_id {
+                    remote_peer_syncs += 1;
+                    if remote_peer_syncs == 1 {
+                        assert_eq!(len, 1);
+                        peermerge.put_scalar(&doc_id, ROOT, "test", "value").await?;
+                    } else if remote_peer_syncs == 2 {
+                        assert_eq!(len, 2);
+                        assert_eq!(document_changes.len(), 1);
+                        break;
+                    }
                 }
             }
             DocumentChanged(patches) => {

@@ -5,12 +5,9 @@ use automerge::{
     ActorId, AutoCommit, Automerge, AutomergeError, Prop, ScalarValue, VecOpObserver, ROOT,
 };
 
-use crate::{
-    common::entry::{Entry, EntryType},
-    NameDescription,
-};
+use crate::common::entry::{Entry, EntryType};
 
-use super::{apply_entries_autocommit, AutomergeDoc, UnappliedEntries};
+use super::{apply_entries_autocommit, ApplyEntriesFeedChange, AutomergeDoc, UnappliedEntries};
 
 /// Convenience method to initialize an Automerge document with root scalars
 pub(crate) fn init_automerge_doc_with_root_scalars<P: Into<Prop>, V: Into<ScalarValue>>(
@@ -47,7 +44,7 @@ pub(crate) fn init_automerge_doc_from_entries(
 ) -> anyhow::Result<(
     AutomergeDoc,
     Vec<u8>,
-    HashMap<[u8; 32], (u64, Option<NameDescription>)>,
+    HashMap<[u8; 32], ApplyEntriesFeedChange>,
 )> {
     assert!(init_entry.entry_type == EntryType::InitDoc);
     let contiguous_length = 1;
@@ -60,7 +57,10 @@ pub(crate) fn init_automerge_doc_from_entries(
         vec![],
         unapplied_entries,
     )?;
-    result.insert(synced_discovery_key.clone(), (contiguous_length, None));
+    result.insert(
+        synced_discovery_key.clone(),
+        ApplyEntriesFeedChange::new(contiguous_length),
+    );
     let data = automerge_doc.save();
     Ok((automerge_doc, data, result))
 }

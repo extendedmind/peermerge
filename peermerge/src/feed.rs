@@ -1,7 +1,10 @@
 use random_access_storage::RandomAccess;
 use std::fmt::Debug;
 
+mod common;
 mod hypercore;
+
+pub(crate) use common::{get_feed, get_feed_discovery_keys};
 
 pub use ::hypercore_protocol::{Protocol, ProtocolBuilder};
 pub(crate) use hypercore::on_protocol;

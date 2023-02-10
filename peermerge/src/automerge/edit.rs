@@ -8,6 +8,36 @@ use crate::{
 };
 
 #[derive(Debug)]
+pub(crate) struct ApplyEntriesFeedChange {
+    pub(crate) length: u64,
+    pub(crate) peer_header: Option<NameDescription>,
+}
+
+impl ApplyEntriesFeedChange {
+    pub(crate) fn new(length: u64) -> Self {
+        Self {
+            length,
+            peer_header: None,
+        }
+    }
+
+    pub(crate) fn new_with_peer_header(length: u64, peer_header: NameDescription) -> Self {
+        Self {
+            length,
+            peer_header: Some(peer_header),
+        }
+    }
+
+    pub(crate) fn set_length(&mut self, length: u64) {
+        self.length = length;
+    }
+
+    pub(crate) fn set_peer_header(&mut self, peer_header: NameDescription) {
+        self.peer_header = Some(peer_header);
+    }
+}
+
+#[derive(Debug)]
 pub(crate) struct UnappliedEntries {
     data: HashMap<[u8; 32], (u64, VecDeque<Entry>)>,
 }
@@ -43,7 +73,7 @@ impl UnappliedEntries {
         &mut self,
         automerge_doc: &mut AutomergeDoc,
         changes_to_apply: &mut Vec<Change>,
-        result: &mut HashMap<[u8; 32], (u64, Option<NameDescription>)>,
+        result: &mut HashMap<[u8; 32], ApplyEntriesFeedChange>,
     ) {
         let mut hashes: HashSet<ChangeHash> = changes_to_apply
             .iter()
@@ -76,13 +106,16 @@ impl UnappliedEntries {
                             }) {
                                 changes_to_apply.push(change.clone());
                                 hashes.insert(change.hash());
+                                new_length += 1;
                                 if let Some(result_value) = result.get_mut(discovery_key) {
-                                    result_value.0 = new_length;
+                                    result_value.set_length(new_length);
                                 } else {
-                                    result.insert(discovery_key.clone(), (new_length, None));
+                                    result.insert(
+                                        discovery_key.clone(),
+                                        ApplyEntriesFeedChange::new(new_length),
+                                    );
                                 }
                                 changed = true;
-                                new_length += 1;
                             } else {
                                 // Only try to insert in order per hypercore, don't apply in between changes, as they
                                 // will eventually be insertable.
@@ -94,15 +127,20 @@ impl UnappliedEntries {
                                 name: entry.name.as_ref().unwrap().to_string(),
                                 description: entry.description.clone(),
                             };
-                            if let Some(value) = result.get_mut(discovery_key) {
-                                value.0 = new_length;
-                                value.1 = Some(peer_header);
+                            new_length += 1;
+                            if let Some(result_value) = result.get_mut(discovery_key) {
+                                result_value.set_length(new_length);
+                                result_value.set_peer_header(peer_header);
                             } else {
-                                result
-                                    .insert(discovery_key.clone(), (new_length, Some(peer_header)));
+                                result.insert(
+                                    discovery_key.clone(),
+                                    ApplyEntriesFeedChange::new_with_peer_header(
+                                        new_length,
+                                        peer_header,
+                                    ),
+                                );
                             }
                             changed = true;
-                            new_length += 1;
                         }
                         _ => panic!("Unexpected entry {:?}", entry),
                     }
@@ -131,8 +169,8 @@ pub(crate) fn apply_entries_autocommit(
     contiguous_length: u64,
     entries: Vec<Entry>,
     unapplied_entries: &mut UnappliedEntries,
-) -> anyhow::Result<HashMap<[u8; 32], (u64, Option<NameDescription>)>> {
-    let mut result: HashMap<[u8; 32], (u64, Option<NameDescription>)> = HashMap::new();
+) -> anyhow::Result<HashMap<[u8; 32], ApplyEntriesFeedChange>> {
+    let mut result: HashMap<[u8; 32], ApplyEntriesFeedChange> = HashMap::new();
     let mut changes_to_apply: Vec<Change> = vec![];
     let len = entries.len() as u64;
     let mut length = contiguous_length - len;
@@ -147,10 +185,10 @@ pub(crate) fn apply_entries_autocommit(
                     .all(|dep| automerge_doc.get_change_by_hash(dep).is_some())
                 {
                     changes_to_apply.push(change.clone());
-                    if let Some(value) = result.get_mut(discovery_key) {
-                        value.0 = length;
+                    if let Some(result_value) = result.get_mut(discovery_key) {
+                        result_value.set_length(length);
                     } else {
-                        result.insert(discovery_key.clone(), (length, None));
+                        result.insert(discovery_key.clone(), ApplyEntriesFeedChange::new(length));
                     }
                 } else {
                     // All of the deps of this change are not in the doc, add to unapplied
@@ -163,11 +201,14 @@ pub(crate) fn apply_entries_autocommit(
                     name: entry.name.unwrap(),
                     description: entry.description,
                 };
-                if let Some(value) = result.get_mut(discovery_key) {
-                    value.0 = length;
-                    value.1 = Some(peer_header);
+                if let Some(result_value) = result.get_mut(discovery_key) {
+                    result_value.set_length(length);
+                    result_value.set_peer_header(peer_header);
                 } else {
-                    result.insert(discovery_key.clone(), (length, Some(peer_header)));
+                    result.insert(
+                        discovery_key.clone(),
+                        ApplyEntriesFeedChange::new_with_peer_header(length, peer_header),
+                    );
                 }
             }
             _ => panic!("Unexpected entry {:?}", entry),
