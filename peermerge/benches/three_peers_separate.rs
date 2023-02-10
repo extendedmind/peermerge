@@ -60,6 +60,9 @@ async fn append_three(
                     break;
                 }
             }
+            DocumentInitialized() => {
+                panic!("Should not get document initialized");
+            }
         }
         if sync_remaining < 0 && remote_sync_remaining < 0 && patches_remaining < 0 {
             panic!(

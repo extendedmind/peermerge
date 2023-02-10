@@ -4,7 +4,8 @@ use futures::channel::mpsc::{
 use futures::stream::StreamExt;
 use hypercore_protocol::{Duplex, Protocol, ProtocolBuilder};
 use peermerge::{
-    DocumentId, FeedMemoryPersistence, Peermerge, StateEvent, StateEventContent::*, ROOT,
+    DocumentId, FeedMemoryPersistence, NameDescription, Peermerge, StateEvent,
+    StateEventContent::*, ROOT,
 };
 use random_access_memory::RandomAccessMemory;
 
@@ -18,18 +19,22 @@ pub async fn setup_peermerge_mesh(
     encrypted: bool,
 ) -> (Vec<Sender<u64>>, UnboundedReceiver<StateEvent>) {
     let mut peermerge_creator: Peermerge<RandomAccessMemory, FeedMemoryPersistence> =
-        Peermerge::new_memory("p1").await;
+        Peermerge::new_memory(NameDescription::new("p1")).await;
     let doc_id = peermerge_creator
-        .create_new_document_memory("bench", vec![("version", 1)], encrypted)
+        .create_new_document_memory(
+            NameDescription::new("bench"),
+            vec![("version", 1)],
+            encrypted,
+        )
         .await;
-    let encryption_key = peermerge_creator.encryption_key(&doc_id);
+    let encryption_key = peermerge_creator.encryption_key(&doc_id).await;
     peermerge_creator.watch(&doc_id, vec![ROOT]).await;
     let (state_event_sender, mut state_event_receiver): (
         UnboundedSender<StateEvent>,
         UnboundedReceiver<StateEvent>,
     ) = unbounded();
     let mut senders = Vec::with_capacity(peers);
-    let doc_url = peermerge_creator.doc_url(&doc_id);
+    let doc_url = peermerge_creator.doc_url(&doc_id).await;
 
     for i in 1..peers {
         let (proto_responder, proto_initiator) = create_pair_memory().await;
@@ -45,7 +50,7 @@ pub async fn setup_peermerge_mesh(
         });
 
         let peer_name = format!("p{}", i + 1);
-        let mut peermerge_peer = Peermerge::new_memory(&peer_name).await;
+        let mut peermerge_peer = Peermerge::new_memory(NameDescription::new(&peer_name)).await;
         let doc_id = peermerge_peer
             .attach_writer_document_memory(&doc_url, &encryption_key)
             .await;
@@ -73,7 +78,8 @@ pub async fn setup_peermerge_mesh(
 
         // TODO: Check what these should be for peers > 3
         let mut sync_remaining = i * 2;
-        let mut remote_sync_remaining = i * 2;
+        let mut remote_sync_remaining = if i == 1 { 3 } else { 5 };
+        let mut document_initialized_remaining = 1;
 
         while let Some(event) = state_event_receiver.next().await {
             match event.content {
@@ -86,8 +92,15 @@ pub async fn setup_peermerge_mesh(
                 DocumentChanged(..) => {
                     // Ignore
                 }
+                DocumentInitialized(..) => {
+                    document_initialized_remaining -= 1;
+                }
             }
-            if sync_remaining == 0 && remote_sync_remaining == 0 {
+
+            if sync_remaining == 0
+                && remote_sync_remaining == 0
+                && document_initialized_remaining == 0
+            {
                 break;
             }
         }
