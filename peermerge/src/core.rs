@@ -27,18 +27,18 @@ use wasm_bindgen_futures::spawn_local;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::feed::FeedDiskPersistence;
 use crate::{
-    common::PeerEvent,
-    document::{get_document, get_document_ids},
-    feed::on_protocol,
-    DocumentId, NameDescription, IO,
-};
-use crate::{
     common::PeerEventContent,
     feed::{FeedMemoryPersistence, FeedPersistence, Protocol},
 };
 use crate::{
     common::{cipher::encode_document_id, storage::PeermergeStateWrapper},
     StateEventContent,
+};
+use crate::{
+    common::{DocumentInfo, PeerEvent},
+    document::{get_document, get_document_ids},
+    feed::on_protocol,
+    DocumentId, NameDescription, IO,
 };
 use crate::{document::Document, StateEvent};
 
@@ -384,6 +384,17 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
             documents: Arc::new(DashMap::new()),
             state_event_sender: Arc::new(Mutex::new(None)),
         }
+    }
+
+    pub async fn document_infos_disk(data_root_dir: &PathBuf) -> Vec<DocumentInfo> {
+        let state_wrapper = PeermergeStateWrapper::open_disk(data_root_dir).await;
+        let mut document_infos: Vec<DocumentInfo> = vec![];
+        for document_id in &state_wrapper.state.document_ids {
+            let postfix = encode_document_id(&document_id);
+            let document_data_root_dir = data_root_dir.join(postfix);
+            document_infos.push(Document::info_disk(&document_data_root_dir).await);
+        }
+        document_infos
     }
 
     pub async fn open_disk(

@@ -1,7 +1,7 @@
 use automerge::ObjId;
 use std::fmt::Debug;
 
-use crate::{automerge::AutomergeDoc, DocumentId, NameDescription};
+use crate::{automerge::AutomergeDoc, DocUrlInfo, DocumentId, NameDescription};
 
 use super::{
     cipher::{decode_doc_url, encode_doc_url, DecodedDocUrl},
@@ -123,6 +123,18 @@ impl DocumentState {
             encode_doc_url(&self.root_public_key, &document_header, encryption_key)
         } else {
             self.plain_doc_url.clone()
+        }
+    }
+
+    pub(crate) fn doc_url_info(&self) -> DocUrlInfo {
+        if self.proxy {
+            DocUrlInfo::new_proxy_only(self.version, crate::FeedType::Hypercore)
+        } else {
+            DocUrlInfo::new(
+                self.version,
+                crate::FeedType::Hypercore,
+                self.encrypted.unwrap(),
+            )
         }
     }
 }

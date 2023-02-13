@@ -24,7 +24,7 @@ use crate::common::cipher::{
 use crate::common::encoding::serialize_entry;
 use crate::common::keys::{discovery_key_from_public_key, generate_keys, Keypair};
 use crate::common::state::DocumentState;
-use crate::common::StateEventContent::*;
+use crate::common::{DocumentInfo, StateEventContent::*};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::feed::{create_new_read_disk_feed, create_new_write_disk_feed, open_disk_feed};
 #[cfg(not(target_arch = "wasm32"))]
@@ -1120,6 +1120,16 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
             &data_root_dir,
         )
         .await
+    }
+
+    pub(crate) async fn info_disk(data_root_dir: &PathBuf) -> DocumentInfo {
+        let document_state_wrapper = DocStateWrapper::open_disk(data_root_dir).await;
+        let state = document_state_wrapper.state();
+        DocumentInfo {
+            document_id: state.root_discovery_key,
+            doc_url_info: state.doc_url_info(),
+            document_header: state.document_header.clone(),
+        }
     }
 
     pub(crate) async fn open_disk(

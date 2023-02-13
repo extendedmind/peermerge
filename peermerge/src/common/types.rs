@@ -1,3 +1,5 @@
+use crate::DocumentId;
+
 /// Type of feed.
 #[derive(Copy, Clone, Debug, PartialEq)]
 #[repr(u8)]
@@ -46,6 +48,13 @@ impl DocUrlInfo {
             compatible: feed_type == FeedType::Hypercore && version == 1,
         }
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct DocumentInfo {
+    pub document_id: DocumentId,
+    pub doc_url_info: DocUrlInfo,
+    pub document_header: Option<NameDescription>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
