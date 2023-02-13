@@ -647,14 +647,14 @@ where
             // Got first some other peer's data, need to store it to unapplied changes
             let feed = get_feed(&self.feeds, synced_discovery_key).await.unwrap();
             let mut feed = feed.lock().await;
-            let start_index = unapplied_entries.current_length(synced_discovery_key);
+            let current_length = unapplied_entries.current_length(synced_discovery_key);
             let entries = feed
-                .entries(start_index, synced_contiguous_length - start_index)
+                .entries(current_length, synced_contiguous_length - current_length)
                 .await?;
-            let mut index = start_index;
+            let mut new_length = current_length + 1;
             for entry in entries {
-                unapplied_entries.add(synced_discovery_key, index, entry);
-                index += 1;
+                unapplied_entries.add(synced_discovery_key, new_length, entry);
+                new_length += 1;
             }
             Ok(None)
         }

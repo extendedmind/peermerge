@@ -1,13 +1,11 @@
-use std::collections::HashMap;
-
 use automerge::{
     transaction::{CommitOptions, Transactable},
     ActorId, AutoCommit, Automerge, AutomergeError, Prop, ScalarValue, VecOpObserver, ROOT,
 };
-
-use crate::common::entry::{Entry, EntryType};
+use std::collections::HashMap;
 
 use super::{apply_entries_autocommit, ApplyEntriesFeedChange, AutomergeDoc, UnappliedEntries};
+use crate::common::entry::{Entry, EntryType};
 
 /// Convenience method to initialize an Automerge document with root scalars
 pub(crate) fn init_automerge_doc_with_root_scalars<P: Into<Prop>, V: Into<ScalarValue>>(

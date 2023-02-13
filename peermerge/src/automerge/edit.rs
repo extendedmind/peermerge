@@ -57,14 +57,14 @@ impl UnappliedEntries {
         }
     }
 
-    pub(crate) fn add(&mut self, discovery_key: &[u8; 32], index: u64, entry: Entry) {
+    pub(crate) fn add(&mut self, discovery_key: &[u8; 32], length: u64, entry: Entry) {
         if let Some(value) = self.data.get_mut(discovery_key) {
-            value.0 = index;
+            value.0 = length;
             value.1.push_back(entry);
             value.1.len() - 1
         } else {
             self.data
-                .insert(discovery_key.clone(), (index, VecDeque::from([entry])));
+                .insert(discovery_key.clone(), (length, VecDeque::from([entry])));
             0
         };
     }
@@ -127,7 +127,6 @@ impl UnappliedEntries {
                                 name: entry.name.as_ref().unwrap().to_string(),
                                 description: entry.description.clone(),
                             };
-                            new_length += 1;
                             if let Some(result_value) = result.get_mut(discovery_key) {
                                 result_value.set_length(new_length);
                                 result_value.set_peer_header(peer_header);
@@ -140,6 +139,7 @@ impl UnappliedEntries {
                                     ),
                                 );
                             }
+                            new_length += 1;
                             changed = true;
                         }
                         _ => panic!("Unexpected entry {:?}", entry),
