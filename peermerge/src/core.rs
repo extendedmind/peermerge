@@ -386,22 +386,27 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
         }
     }
 
-    pub async fn document_infos_disk(data_root_dir: &PathBuf) -> Vec<DocumentInfo> {
-        let state_wrapper = PeermergeStateWrapper::open_disk(data_root_dir).await;
-        let mut document_infos: Vec<DocumentInfo> = vec![];
-        for document_id in &state_wrapper.state.document_ids {
-            let postfix = encode_document_id(&document_id);
-            let document_data_root_dir = data_root_dir.join(postfix);
-            document_infos.push(Document::info_disk(&document_data_root_dir).await);
+    pub async fn document_infos_disk(data_root_dir: &PathBuf) -> Option<Vec<DocumentInfo>> {
+        if let Some(state_wrapper) = PeermergeStateWrapper::open_disk(data_root_dir).await {
+            let mut document_infos: Vec<DocumentInfo> = vec![];
+            for document_id in &state_wrapper.state.document_ids {
+                let postfix = encode_document_id(&document_id);
+                let document_data_root_dir = data_root_dir.join(postfix);
+                document_infos.push(Document::info_disk(&document_data_root_dir).await);
+            }
+            Some(document_infos)
+        } else {
+            None
         }
-        document_infos
     }
 
     pub async fn open_disk(
         encryption_keys: HashMap<DocumentId, Vec<u8>>,
         data_root_dir: &PathBuf,
     ) -> Self {
-        let state_wrapper = PeermergeStateWrapper::open_disk(data_root_dir).await;
+        let state_wrapper = PeermergeStateWrapper::open_disk(data_root_dir)
+            .await
+            .expect("Not a valid peermerge directory");
         let state = state_wrapper.state();
         let peer_header = state.peer_header.clone();
         let documents: DashMap<DocumentId, Document<RandomAccessDisk, FeedDiskPersistence>> =

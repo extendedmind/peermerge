@@ -41,6 +41,9 @@ async fn disk_two_peers(encrypted: bool) -> anyhow::Result<()> {
         .unwrap()
         .into_path();
 
+    let creator_document_infos = Peermerge::document_infos_disk(&creator_dir).await;
+    assert!(creator_document_infos.is_none());
+
     // let debug = format!("target/creator_{}", encrypted);
     // std::fs::create_dir_all(&debug).unwrap();
     // let creator_dir = std::path::Path::new(&debug).to_path_buf();
@@ -89,7 +92,7 @@ async fn disk_two_peers(encrypted: bool) -> anyhow::Result<()> {
     .await?;
 
     // Reopen the disk peermerges from disk, assert that opening works with new scalar
-    let creator_document_infos = Peermerge::document_infos_disk(&creator_dir).await;
+    let creator_document_infos = Peermerge::document_infos_disk(&creator_dir).await.unwrap();
     assert_eq!(creator_document_infos.len(), 1);
     assert_eq!(
         creator_document_infos[0].doc_url_info.encrypted,
@@ -114,7 +117,7 @@ async fn disk_two_peers(encrypted: bool) -> anyhow::Result<()> {
         .put_scalar(&creator_doc_id, ROOT, "open", 2)
         .await?;
 
-    let joiner_document_infos = Peermerge::document_infos_disk(&creator_dir).await;
+    let joiner_document_infos = Peermerge::document_infos_disk(&creator_dir).await.unwrap();
     assert_eq!(joiner_document_infos.len(), 1);
     assert_eq!(
         joiner_document_infos[0].doc_url_info.encrypted,

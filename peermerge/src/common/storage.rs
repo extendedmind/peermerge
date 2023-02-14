@@ -58,17 +58,21 @@ impl PeermergeStateWrapper<RandomAccessDisk> {
         Self { state, storage }
     }
 
-    pub(crate) async fn open_disk(data_root_dir: &PathBuf) -> Self {
+    pub(crate) async fn open_disk(data_root_dir: &PathBuf) -> Option<Self> {
         let state_path = get_peermerge_state_path(data_root_dir);
-        let mut storage = RandomAccessDisk::builder(state_path).build().await.unwrap();
-        let len = storage.len().await.expect("Could not get file length");
-        let buffer = storage
-            .read(0, len)
-            .await
-            .expect("Could not read file content");
-        let mut dec_state = State::from_buffer(&buffer);
-        let state: PeermergeState = dec_state.decode(&buffer);
-        Self { state, storage }
+        if state_path.exists() {
+            let mut storage = RandomAccessDisk::builder(state_path).build().await.unwrap();
+            let len = storage.len().await.expect("Could not get file length");
+            let buffer = storage
+                .read(0, len)
+                .await
+                .expect("Could not read file content");
+            let mut dec_state = State::from_buffer(&buffer);
+            let state: PeermergeState = dec_state.decode(&buffer);
+            Some(Self { state, storage })
+        } else {
+            None
+        }
     }
 }
 
