@@ -30,7 +30,7 @@ use tokio::{
 pub async fn connect_tcp_server_memory(
     peermerge: Peermerge<RandomAccessMemory, FeedMemoryPersistence>,
     host: &str,
-    port: u32,
+    port: u16,
     state_event_sender: &mut UnboundedSender<StateEvent>,
 ) -> anyhow::Result<()> {
     let listener = TcpListener::bind(&format!("{}:{}", host, port)).await?;
@@ -54,7 +54,7 @@ pub async fn connect_tcp_server_memory(
 pub async fn connect_tcp_server_memory(
     peermerge: Peermerge<RandomAccessMemory, FeedMemoryPersistence>,
     host: &str,
-    port: u32,
+    port: u16,
     state_event_sender: &mut UnboundedSender<StateEvent>,
 ) -> anyhow::Result<()> {
     let listener = TcpListener::bind(&format!("{}:{}", host, port)).await?;
@@ -78,7 +78,7 @@ pub async fn connect_tcp_server_memory(
 pub async fn connect_tcp_client_memory(
     mut peermerge: Peermerge<RandomAccessMemory, FeedMemoryPersistence>,
     host: &str,
-    port: u32,
+    port: u16,
     state_event_sender: &mut UnboundedSender<StateEvent>,
 ) -> anyhow::Result<()> {
     let stream = TcpStream::connect(&format!("{}:{}", host, port)).await?;
@@ -95,7 +95,7 @@ pub async fn connect_tcp_client_memory(
 pub async fn connect_tcp_client_memory(
     mut peermerge: Peermerge<RandomAccessMemory, FeedMemoryPersistence>,
     host: &str,
-    port: u32,
+    port: u16,
     state_event_sender: &mut UnboundedSender<StateEvent>,
 ) -> anyhow::Result<()> {
     let stream = TcpStream::connect(&format!("{}:{}", host, port)).await?;
@@ -116,7 +116,7 @@ pub async fn connect_tcp_client_memory(
 pub async fn connect_tcp_server_disk(
     peermerge: Peermerge<RandomAccessDisk, FeedDiskPersistence>,
     host: &str,
-    port: u32,
+    port: u16,
     state_event_sender: &mut UnboundedSender<StateEvent>,
 ) -> anyhow::Result<()> {
     let listener = TcpListener::bind(&format!("{}:{}", host, port)).await?;
@@ -140,7 +140,7 @@ pub async fn connect_tcp_server_disk(
 pub async fn connect_tcp_server_disk(
     peermerge: Peermerge<RandomAccessDisk, FeedDiskPersistence>,
     host: &str,
-    port: u32,
+    port: u16,
     state_event_sender: &mut UnboundedSender<StateEvent>,
 ) -> anyhow::Result<()> {
     let listener = TcpListener::bind(&format!("{}:{}", host, port)).await?;
@@ -164,7 +164,7 @@ pub async fn connect_tcp_server_disk(
 pub async fn connect_tcp_client_disk(
     mut peermerge: Peermerge<RandomAccessDisk, FeedDiskPersistence>,
     host: &str,
-    port: u32,
+    port: u16,
     state_event_sender: &mut UnboundedSender<StateEvent>,
 ) -> anyhow::Result<()> {
     let stream = TcpStream::connect(&format!("{}:{}", host, port)).await?;
@@ -181,7 +181,7 @@ pub async fn connect_tcp_client_disk(
 pub async fn connect_tcp_client_disk(
     mut peermerge: Peermerge<RandomAccessDisk, FeedDiskPersistence>,
     host: &str,
-    port: u32,
+    port: u16,
     state_event_sender: &mut UnboundedSender<StateEvent>,
 ) -> anyhow::Result<()> {
     let stream = TcpStream::connect(&format!("{}:{}", host, port)).await?;

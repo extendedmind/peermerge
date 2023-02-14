@@ -19,7 +19,7 @@ use tokio::{task, test as async_test};
 #[test(async_test)]
 async fn tcp_proxy_disk_encrypted() -> anyhow::Result<()> {
     let host = "localhost";
-    let port: u32 = 8101;
+    let port: u16 = 8101;
     let (mut creator_state_event_sender, creator_state_event_receiver): (
         UnboundedSender<StateEvent>,
         UnboundedReceiver<StateEvent>,
@@ -150,6 +150,7 @@ async fn process_creator_state_events(
                     assert_eq!(len, 1);
                     peermerge.put_scalar(&doc_id, ROOT, "test", "value").await?;
                 } else if remote_peer_syncs == 2 {
+                    // TODO: This is flaky, sometimes gives 1
                     assert_eq!(len, 2);
                     assert_eq!(document_changes.len(), 1);
                     break;
