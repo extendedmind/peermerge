@@ -173,6 +173,29 @@ pub(crate) fn encode_document_id(document_id: &DocumentId) -> String {
     data_encoding::BASE32_NOPAD.encode(document_id)
 }
 
+pub(crate) fn encode_encryption_key(encryption_key: &[u8]) -> String {
+    data_encoding::BASE32_NOPAD.encode(encryption_key)
+}
+
+pub(crate) fn decode_encryption_key(encryption_key: &Option<String>) -> Option<Vec<u8>> {
+    if let Some(encryption_key) = encryption_key {
+        let encryption_key_base32 = encryption_key.as_bytes();
+        let mut encryption_key = vec![
+            0;
+            data_encoding::BASE32_NOPAD
+                .decode_len(encryption_key_base32.len())
+                .unwrap()
+        ];
+        let decoded_len = data_encoding::BASE32_NOPAD
+            .decode_mut(encryption_key_base32, &mut encryption_key)
+            .unwrap();
+        assert_eq!(decoded_len, 32);
+        Some(encryption_key)
+    } else {
+        None
+    }
+}
+
 fn encode_domain(root_public_key: &[u8; 32]) -> String {
     let mut domain: Vec<u8> = Vec::with_capacity(32 + 2);
     domain.push(DOC_URL_VERSION);

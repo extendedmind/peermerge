@@ -27,11 +27,14 @@ use wasm_bindgen_futures::spawn_local;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::feed::FeedDiskPersistence;
 use crate::{
-    common::PeerEventContent,
+    common::{cipher::encode_encryption_key, PeerEventContent},
     feed::{FeedMemoryPersistence, FeedPersistence, Protocol},
 };
 use crate::{
-    common::{cipher::encode_document_id, storage::PeermergeStateWrapper},
+    common::{
+        cipher::{decode_encryption_key, encode_document_id},
+        storage::PeermergeStateWrapper,
+    },
     StateEventContent,
 };
 use crate::{
@@ -190,9 +193,11 @@ where
     }
 
     #[instrument(skip(self), fields(peer_name = self.peer_header.name))]
-    pub async fn encryption_key(&self, document_id: &DocumentId) -> Option<Vec<u8>> {
+    pub async fn encryption_key(&self, document_id: &DocumentId) -> Option<String> {
         let document = get_document(&self.documents, document_id).await.unwrap();
-        document.encryption_key()
+        document
+            .encryption_key()
+            .map(|encryption_key| encode_encryption_key(&encryption_key))
     }
 
     async fn notify_of_document_changes(&mut self) {
@@ -265,10 +270,14 @@ impl Peermerge<RandomAccessMemory, FeedMemoryPersistence> {
     pub async fn attach_writer_document_memory(
         &mut self,
         doc_url: &str,
-        encryption_key: &Option<Vec<u8>>,
+        encryption_key: &Option<String>,
     ) -> DocumentId {
-        let document =
-            Document::attach_writer_memory(&self.peer_header, doc_url, encryption_key).await;
+        let document = Document::attach_writer_memory(
+            &self.peer_header,
+            doc_url,
+            &decode_encryption_key(encryption_key),
+        )
+        .await;
         self.add_document(document).await
     }
 
@@ -401,7 +410,7 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
     }
 
     pub async fn open_disk(
-        encryption_keys: HashMap<DocumentId, Vec<u8>>,
+        encryption_keys: HashMap<DocumentId, String>,
         data_root_dir: &PathBuf,
     ) -> Self {
         let state_wrapper = PeermergeStateWrapper::open_disk(data_root_dir)
@@ -412,7 +421,8 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
         let documents: DashMap<DocumentId, Document<RandomAccessDisk, FeedDiskPersistence>> =
             DashMap::new();
         for document_id in &state_wrapper.state.document_ids {
-            let encryption_key: Option<Vec<u8>> = encryption_keys.get(document_id).cloned();
+            let encryption_key: Option<Vec<u8>> =
+                decode_encryption_key(&encryption_keys.get(document_id).cloned());
             let postfix = encode_document_id(&document_id);
             let document_data_root_dir = data_root_dir.join(postfix);
             let document =
@@ -449,11 +459,15 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
     pub async fn attach_writer_document_disk(
         &mut self,
         doc_url: &str,
-        encryption_key: &Option<Vec<u8>>,
+        encryption_key: &Option<String>,
     ) -> DocumentId {
-        let document =
-            Document::attach_writer_disk(&self.peer_header, doc_url, encryption_key, &self.prefix)
-                .await;
+        let document = Document::attach_writer_disk(
+            &self.peer_header,
+            doc_url,
+            &decode_encryption_key(encryption_key),
+            &self.prefix,
+        )
+        .await;
         self.add_document(document).await
     }
 
