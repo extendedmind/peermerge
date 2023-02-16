@@ -184,7 +184,7 @@ where
     }
 
     #[instrument(skip(self), fields(peer_name = self.peer_header.name))]
-    pub(crate) async fn proxy_doc_url(&self, document_id: &DocumentId) -> String {
+    pub async fn proxy_doc_url(&self, document_id: &DocumentId) -> String {
         let document = get_document(&self.documents, document_id).await.unwrap();
         document.proxy_doc_url()
     }
