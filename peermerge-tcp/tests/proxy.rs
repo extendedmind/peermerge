@@ -144,16 +144,17 @@ async fn process_creator_state_events(
             DocumentInitialized() => {
                 // Skip
             }
-            RemotePeerSynced((_, len)) => {
-                remote_peer_syncs += 1;
-                if remote_peer_syncs == 1 {
-                    assert_eq!(len, 1);
-                    peermerge.put_scalar(&doc_id, ROOT, "test", "value").await?;
-                } else if remote_peer_syncs == 2 {
-                    // TODO: This is flaky, sometimes gives 1
-                    assert_eq!(len, 2);
-                    assert_eq!(document_changes.len(), 1);
-                    break;
+            RemotePeerSynced((discovery_key, len)) => {
+                if discovery_key != doc_id {
+                    remote_peer_syncs += 1;
+                    if remote_peer_syncs == 1 {
+                        assert_eq!(len, 1);
+                        peermerge.put_scalar(&doc_id, ROOT, "test", "value").await?;
+                    } else if remote_peer_syncs == 2 {
+                        assert_eq!(len, 2);
+                        assert_eq!(document_changes.len(), 1);
+                        break;
+                    }
                 }
             }
             DocumentChanged(patches) => {
