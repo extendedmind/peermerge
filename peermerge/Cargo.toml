@@ -43,6 +43,7 @@ wasm-bindgen = [
   "wasm-bindgen-futures", 
   "hypercore-protocol/wasm-bindgen"
 ]
+log = ["tracing/log"]
 async-std-runtime = ["async-std", "hypercore-protocol/async-std", "random-access-disk/async-std"]
 tokio-runtime = ["tokio", "hypercore-protocol/tokio", "random-access-disk/tokio"]
 
