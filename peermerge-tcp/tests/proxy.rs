@@ -1,12 +1,14 @@
+use std::collections::HashMap;
+
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use futures::stream::StreamExt;
-use peermerge::Peermerge;
 use peermerge::ROOT;
 use peermerge::{get_doc_url_info, DocumentId};
-use peermerge::{FeedMemoryPersistence, StateEvent, StateEventContent::*};
+use peermerge::{
+    FeedDiskPersistence, Peermerge, RandomAccessDisk, StateEvent, StateEventContent::*,
+};
 use peermerge::{NameDescription, Patch};
-use peermerge_tcp::{connect_tcp_client_disk, connect_tcp_server_memory};
-use random_access_memory::RandomAccessMemory;
+use peermerge_tcp::{connect_tcp_client_disk, connect_tcp_server_disk};
 use tempfile::Builder;
 use test_log::test;
 use tracing::{info, instrument};
@@ -28,9 +30,15 @@ async fn tcp_proxy_disk_encrypted() -> anyhow::Result<()> {
         UnboundedSender<StateEvent>,
         UnboundedReceiver<StateEvent>,
     ) = unbounded();
-    let mut peermerge_creator = Peermerge::new_memory(NameDescription::new("creator")).await;
+    let creator_dir = Builder::new()
+        .prefix("creator_disk_encrypted")
+        .tempdir()
+        .unwrap()
+        .into_path();
+    let mut peermerge_creator =
+        Peermerge::create_new_disk(NameDescription::new("creator"), &creator_dir).await;
     let creator_doc_id = peermerge_creator
-        .create_new_document_memory(
+        .create_new_document_disk(
             NameDescription::new("proxy_test"),
             vec![("version", 1)],
             true,
@@ -43,18 +51,6 @@ async fn tcp_proxy_disk_encrypted() -> anyhow::Result<()> {
     assert_eq!(get_doc_url_info(&doc_url).encrypted, Some(true));
     assert_eq!(encryption_key.is_some(), true);
 
-    let peermerge_creator_for_task = peermerge_creator.clone();
-    task::spawn(async move {
-        connect_tcp_server_memory(
-            peermerge_creator_for_task,
-            host,
-            port,
-            &mut creator_state_event_sender,
-        )
-        .await
-        .unwrap();
-    });
-
     let proxy_dir = Builder::new()
         .prefix("proxy_disk_encrypted")
         .tempdir()
@@ -63,14 +59,37 @@ async fn tcp_proxy_disk_encrypted() -> anyhow::Result<()> {
 
     let mut peermerge_proxy =
         Peermerge::create_new_disk(NameDescription::new("proxy"), &proxy_dir).await;
-    let _proxy_doc_id = peermerge_proxy.attach_proxy_document_disk(&doc_url).await;
     let peermerge_proxy_for_task = peermerge_proxy.clone();
     task::spawn(async move {
-        connect_tcp_client_disk(
+        connect_tcp_server_disk(
             peermerge_proxy_for_task,
             host,
             port,
             &mut proxy_state_event_sender,
+        )
+        .await
+        .unwrap();
+    });
+
+    // Reopen peermerge_creator
+    drop(peermerge_creator);
+    let mut creator_encryption_keys = HashMap::new();
+    if let Some(encryption_key) = encryption_key.as_ref() {
+        creator_encryption_keys.insert(creator_doc_id.clone(), encryption_key.clone());
+    }
+    let peermerge_creator = Peermerge::open_disk(creator_encryption_keys, &creator_dir).await;
+
+    // Delay attaching proxy document until after server above has been started.
+    let _proxy_doc_id = peermerge_proxy.attach_proxy_document_disk(&doc_url).await;
+
+    // Now ready to start client
+    let peermerge_creator_for_task = peermerge_creator.clone();
+    task::spawn(async move {
+        connect_tcp_client_disk(
+            peermerge_creator_for_task,
+            host,
+            port,
+            &mut creator_state_event_sender,
         )
         .await
         .unwrap();
@@ -126,7 +145,7 @@ async fn process_proxy_state_event(
 
 #[instrument(skip_all)]
 async fn process_creator_state_events(
-    mut peermerge: Peermerge<RandomAccessMemory, FeedMemoryPersistence>,
+    mut peermerge: Peermerge<RandomAccessDisk, FeedDiskPersistence>,
     doc_id: DocumentId,
     mut creator_state_event_receiver: UnboundedReceiver<StateEvent>,
 ) -> anyhow::Result<()> {
