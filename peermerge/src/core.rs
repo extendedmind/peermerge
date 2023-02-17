@@ -193,6 +193,12 @@ where
     }
 
     #[instrument(skip(self), fields(peer_name = self.peer_header.name))]
+    pub async fn feed_discovery_keys(&self, document_id: &DocumentId) -> Vec<[u8; 32]> {
+        let document = get_document(&self.documents, document_id).await.unwrap();
+        document.feed_discovery_keys().await
+    }
+
+    #[instrument(skip(self), fields(peer_name = self.peer_header.name))]
     pub async fn encryption_key(&self, document_id: &DocumentId) -> Option<String> {
         let document = get_document(&self.documents, document_id).await.unwrap();
         document

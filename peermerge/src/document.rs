@@ -109,6 +109,10 @@ where
         get_feed(&self.feeds, &discovery_key).await
     }
 
+    pub(crate) async fn feed_discovery_keys(&self) -> Vec<[u8; 32]> {
+        get_feed_discovery_keys(&self.feeds).await
+    }
+
     pub(crate) async fn public_keys(&self) -> (Option<[u8; 32]>, Vec<[u8; 32]>) {
         let state = self.document_state.lock().await;
         let state = state.state();
