@@ -55,6 +55,7 @@ pub struct DocumentInfo {
     pub document_id: DocumentId,
     pub doc_url_info: DocUrlInfo,
     pub document_header: Option<NameDescription>,
+    pub parent_document_id: Option<DocumentId>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

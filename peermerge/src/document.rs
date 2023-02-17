@@ -1133,6 +1133,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
             document_id: state.root_discovery_key,
             doc_url_info: state.doc_url_info(),
             document_header: state.document_header.clone(),
+            parent_document_id: None, // TODO: Support for document hierarchies
         }
     }
 
