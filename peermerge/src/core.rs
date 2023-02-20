@@ -340,7 +340,7 @@ impl Peermerge<RandomAccessMemory, FeedMemoryPersistence> {
                 state_event_sender_for_task,
                 peermerge_state,
                 documents_for_task,
-                &name_for_task,
+                &peer_name_for_task,
             )
             .await;
         });
