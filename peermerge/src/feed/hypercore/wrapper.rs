@@ -1,4 +1,5 @@
 use futures::channel::mpsc::UnboundedSender;
+use futures::lock::Mutex;
 use hypercore_protocol::{
     hypercore::{
         compact_encoding::{CompactEncoding, State},
@@ -14,12 +15,8 @@ use std::fmt::Debug;
 use std::sync::Arc;
 use tracing::{debug, instrument};
 
-#[cfg(feature = "async-std")]
-use async_std::sync::Mutex;
 #[cfg(all(not(target_arch = "wasm32"), feature = "async-std"))]
 use async_std::task;
-#[cfg(feature = "tokio")]
-use tokio::sync::Mutex;
 #[cfg(all(not(target_arch = "wasm32"), feature = "tokio"))]
 use tokio::task;
 #[cfg(target_arch = "wasm32")]

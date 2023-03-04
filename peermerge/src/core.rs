@@ -1,5 +1,6 @@
 use automerge::{ObjId, ObjType, Patch, Prop, ScalarValue};
 use dashmap::DashMap;
+use futures::lock::Mutex;
 use futures::{
     channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender},
     StreamExt,
@@ -13,12 +14,8 @@ use std::sync::Arc;
 use std::{collections::HashMap, fmt::Debug};
 use tracing::{debug, instrument, warn};
 
-#[cfg(feature = "async-std")]
-use async_std::sync::Mutex;
 #[cfg(all(not(target_arch = "wasm32"), feature = "async-std"))]
 use async_std::task;
-#[cfg(feature = "tokio")]
-use tokio::sync::Mutex;
 #[cfg(all(not(target_arch = "wasm32"), feature = "tokio"))]
 use tokio::task;
 #[cfg(target_arch = "wasm32")]

@@ -15,8 +15,6 @@ random-access-storage = { git = "https://github.com/ttiurani/random-access-stora
 random-access-memory = { git = "https://github.com/ttiurani/random-access-memory", branch = "tokio" }
 anyhow = "1.0.28"
 data-encoding = "2.3.3"
-async-std = { version = "1.9.0", features = ["attributes", "unstable"], optional = true }
-tokio = { version = "1.25.0", features = ["rt", "sync"], optional = true }
 futures = "0.3.25"
 wasm-bindgen-futures = { version = "=0.4.33", optional = true }
 derivative = "2.2.0"
@@ -26,6 +24,8 @@ chacha20poly1305 = "0.10.1"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 random-access-disk = { git = "https://github.com/ttiurani/random-access-disk", branch = "tokio" }
+tokio = { version = "1.25.0", features = ["rt", "sync"], optional = true }
+async-std = { version = "1.9.0", features = ["attributes", "unstable"], optional = true }
 
 [dev-dependencies]
 sluice = "0.5.5"

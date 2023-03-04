@@ -9,6 +9,7 @@ pub(crate) mod message;
 pub(crate) mod state;
 pub(crate) mod storage;
 mod types;
+pub(crate) mod utils;
 
 pub use cipher::get_doc_url_info;
 pub use event::{PeerEvent, PeerEventContent, StateEvent, StateEventContent};

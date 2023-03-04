@@ -1,5 +1,6 @@
 use automerge::{ObjId, ROOT};
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
+use futures::lock::Mutex;
 use futures::stream::StreamExt;
 use peermerge::{
     DocumentId, FeedMemoryPersistence, NameDescription, Patch, Peermerge, StateEvent,
@@ -12,9 +13,9 @@ use test_log::test;
 use tracing::{info, instrument};
 
 #[cfg(feature = "async-std")]
-use async_std::{sync::Mutex, task, test as async_test};
+use async_std::{task, test as async_test};
 #[cfg(feature = "tokio")]
-use tokio::{sync::Mutex, task, test as async_test};
+use tokio::{task, test as async_test};
 
 mod common;
 use common::*;

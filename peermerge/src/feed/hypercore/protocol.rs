@@ -1,5 +1,6 @@
 use dashmap::DashMap;
 use futures::channel::mpsc::UnboundedSender;
+use futures::lock::Mutex;
 use futures::StreamExt;
 use hypercore_protocol::hypercore::compact_encoding::{CompactEncoding, State};
 use hypercore_protocol::{Event, Protocol};
@@ -8,11 +9,6 @@ use std::fmt::Debug;
 use std::io::ErrorKind;
 use std::sync::Arc;
 use tracing::{debug, instrument};
-
-#[cfg(feature = "async-std")]
-use async_std::sync::Mutex;
-#[cfg(feature = "tokio")]
-use tokio::sync::Mutex;
 
 use super::{messaging::NEW_PEERS_CREATED_LOCAL_SIGNAL_NAME, HypercoreWrapper};
 use crate::common::keys::discovery_key_from_public_key;

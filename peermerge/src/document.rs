@@ -1,6 +1,7 @@
 use automerge::{ObjId, ObjType, Patch, Prop, ReadDoc, ScalarValue, Value};
 use dashmap::DashMap;
 use futures::channel::mpsc::UnboundedSender;
+use futures::lock::Mutex;
 #[cfg(not(target_arch = "wasm32"))]
 use random_access_disk::RandomAccessDisk;
 use random_access_memory::RandomAccessMemory;
@@ -8,11 +9,6 @@ use random_access_storage::RandomAccess;
 use std::sync::Arc;
 use std::{fmt::Debug, path::PathBuf};
 use tracing::{debug, instrument, warn};
-
-#[cfg(feature = "async-std")]
-use async_std::{sync::Mutex, task::yield_now};
-#[cfg(feature = "tokio")]
-use tokio::{sync::Mutex, task::yield_now};
 
 use crate::automerge::{
     apply_entries_autocommit, init_automerge_doc_from_data, init_automerge_doc_from_entries,
@@ -24,6 +20,7 @@ use crate::common::cipher::{
 use crate::common::encoding::serialize_entry;
 use crate::common::keys::{discovery_key_from_public_key, generate_keys, Keypair};
 use crate::common::state::DocumentState;
+use crate::common::utils::YieldNow;
 use crate::common::{DocumentInfo, StateEventContent::*};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::feed::{create_new_read_disk_feed, create_new_write_disk_feed, open_disk_feed};
@@ -935,7 +932,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
                     entry_found = true;
                 } else {
                     debug!("Concurrent access to feeds noticed, yielding and retrying.");
-                    yield_now().await;
+                    YieldNow(false).await;
                 }
             }
         }
@@ -1335,7 +1332,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
                     entry_found = true;
                 } else {
                     debug!("Concurrent access to feeds noticed, yielding and retrying.");
-                    yield_now().await;
+                    YieldNow(false).await;
                 }
             }
         }
@@ -1360,7 +1357,7 @@ where
                 return None;
             }
             dashmap::try_result::TryResult::Locked => {
-                yield_now().await;
+                YieldNow(false).await;
             }
             dashmap::try_result::TryResult::Present(value) => {
                 // TODO: Cloning the Document is not terribly expensive, but it's not free either.

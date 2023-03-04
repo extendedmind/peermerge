@@ -1,11 +1,8 @@
+use dashmap::DashMap;
+use futures::lock::Mutex;
 use std::sync::Arc;
 
-#[cfg(feature = "async-std")]
-use async_std::{sync::Mutex, task::yield_now};
-use dashmap::DashMap;
-#[cfg(feature = "tokio")]
-use tokio::{sync::Mutex, task::yield_now};
-
+use crate::common::utils::YieldNow;
 use crate::feed::{Feed, FeedPersistence};
 
 pub(crate) async fn get_feed<T>(
@@ -21,7 +18,7 @@ where
                 return None;
             }
             dashmap::try_result::TryResult::Locked => {
-                yield_now().await;
+                YieldNow(false).await;
             }
             dashmap::try_result::TryResult::Present(value) => {
                 return Some(value.clone());

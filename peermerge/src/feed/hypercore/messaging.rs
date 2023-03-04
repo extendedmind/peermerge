@@ -1,4 +1,5 @@
 use anyhow::Result;
+use futures::lock::Mutex;
 use hypercore_protocol::{
     hypercore::{
         compact_encoding::{CompactEncoding, State},
@@ -11,11 +12,6 @@ use random_access_storage::RandomAccess;
 use std::fmt::Debug;
 use std::sync::Arc;
 use tracing::{debug, instrument};
-
-#[cfg(feature = "async-std")]
-use async_std::sync::Mutex;
-#[cfg(feature = "tokio")]
-use tokio::sync::Mutex;
 
 use super::PeerState;
 use crate::common::{
