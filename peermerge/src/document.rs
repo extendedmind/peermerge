@@ -1,7 +1,6 @@
 use automerge::{ObjId, ObjType, Patch, Prop, ReadDoc, ScalarValue, Value};
 use dashmap::DashMap;
 use futures::channel::mpsc::UnboundedSender;
-use futures::lock::Mutex;
 #[cfg(not(target_arch = "wasm32"))]
 use random_access_disk::RandomAccessDisk;
 use random_access_memory::RandomAccessMemory;
@@ -20,7 +19,7 @@ use crate::common::cipher::{
 use crate::common::encoding::serialize_entry;
 use crate::common::keys::{discovery_key_from_public_key, generate_keys, Keypair};
 use crate::common::state::DocumentState;
-use crate::common::utils::YieldNow;
+use crate::common::utils::{Mutex, YieldNow};
 use crate::common::{DocumentInfo, StateEventContent::*};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::feed::{create_new_read_disk_feed, create_new_write_disk_feed, open_disk_feed};

@@ -1,5 +1,4 @@
 use anyhow::Result;
-use futures::lock::Mutex;
 use hypercore_protocol::{
     hypercore::{
         compact_encoding::{CompactEncoding, State},
@@ -16,6 +15,7 @@ use tracing::{debug, instrument};
 use super::PeerState;
 use crate::common::{
     message::{BroadcastMessage, NewPeersCreatedMessage, PeerSyncedMessage},
+    utils::Mutex,
     PeerEvent,
     PeerEventContent::*,
 };

@@ -1,5 +1,4 @@
 use futures::channel::mpsc::UnboundedSender;
-use futures::lock::Mutex;
 use hypercore_protocol::{
     hypercore::{
         compact_encoding::{CompactEncoding, State},
@@ -29,7 +28,7 @@ use super::{
     },
     on_doc_peer, on_peer, PeerState,
 };
-use crate::common::{cipher::EntryCipher, entry::Entry, PeerEvent};
+use crate::common::{cipher::EntryCipher, entry::Entry, utils::Mutex, PeerEvent};
 
 #[derive(Debug)]
 pub(crate) struct HypercoreWrapper<T>

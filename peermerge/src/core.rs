@@ -1,6 +1,5 @@
 use automerge::{ObjId, ObjType, Patch, Prop, ScalarValue};
 use dashmap::DashMap;
-use futures::lock::Mutex;
 use futures::{
     channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender},
     StreamExt,
@@ -31,6 +30,7 @@ use crate::{
     common::{
         cipher::{decode_encryption_key, encode_document_id},
         storage::PeermergeStateWrapper,
+        utils::Mutex,
     },
     StateEventContent,
 };

@@ -1,6 +1,5 @@
 use dashmap::DashMap;
 use futures::channel::mpsc::UnboundedSender;
-use futures::lock::Mutex;
 use futures::StreamExt;
 use hypercore_protocol::hypercore::compact_encoding::{CompactEncoding, State};
 use hypercore_protocol::{Event, Protocol};
@@ -12,6 +11,7 @@ use tracing::{debug, instrument};
 
 use super::{messaging::NEW_PEERS_CREATED_LOCAL_SIGNAL_NAME, HypercoreWrapper};
 use crate::common::keys::discovery_key_from_public_key;
+use crate::common::utils::Mutex;
 use crate::common::{message::NewPeersCreatedMessage, PeerEvent};
 use crate::document::{get_document, get_document_ids, Document};
 use crate::{DocumentId, FeedPersistence, IO};

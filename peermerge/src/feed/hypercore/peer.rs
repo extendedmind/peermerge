@@ -1,6 +1,5 @@
 use anyhow::Result;
 use futures::channel::mpsc::UnboundedSender;
-use futures::lock::Mutex;
 use futures::stream::StreamExt;
 use hypercore_protocol::{hypercore::Hypercore, Channel, ChannelReceiver, Message};
 use random_access_storage::RandomAccess;
@@ -12,7 +11,7 @@ use super::{
     messaging::{create_broadcast_message, create_initial_synchronize},
     on_message, PeerState,
 };
-use crate::common::{PeerEvent, PeerEventContent};
+use crate::common::{utils::Mutex, PeerEvent, PeerEventContent};
 
 #[instrument(level = "debug", skip_all)]
 pub(super) async fn on_peer<T>(

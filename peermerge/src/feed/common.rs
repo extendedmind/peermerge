@@ -1,8 +1,7 @@
 use dashmap::DashMap;
-use futures::lock::Mutex;
 use std::sync::Arc;
 
-use crate::common::utils::YieldNow;
+use crate::common::utils::{Mutex, YieldNow};
 use crate::feed::{Feed, FeedPersistence};
 
 pub(crate) async fn get_feed<T>(
