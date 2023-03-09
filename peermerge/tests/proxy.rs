@@ -154,7 +154,7 @@ async fn proxy_disk_encrypted() -> anyhow::Result<()> {
     ) = unbounded();
     let mut peermerge_joiner = Peermerge::new_memory(NameDescription::new("joiner")).await;
     let joiner_doc_id = peermerge_joiner
-        .reattach_writer_document_memory(&write_key_pair, &doc_url, &encryption_key)
+        .reattach_writer_document_memory(&write_key_pair, "joiner", &doc_url, &encryption_key)
         .await;
     let mut peermerge_joiner_for_task = peermerge_joiner.clone();
     let joiner_connect = task::spawn(async move {

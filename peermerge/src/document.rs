@@ -537,7 +537,11 @@ where
             });
             let mut state_events: Vec<StateEvent> =
                 if let Some(reattached_peer_header) = reattached_peer_header.take() {
-                    self.peer_name = reattached_peer_header.name.clone();
+                    // TODO: This should be a better error
+                    assert_eq!(
+                        self.peer_name, reattached_peer_header.name,
+                        "Given peer_name did not match that of the reattached document"
+                    );
                     vec![StateEvent::new(
                         self.id(),
                         Reattached(reattached_peer_header),
@@ -818,11 +822,12 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
 
     pub(crate) async fn reattach_writer_memory(
         write_key_pair: Keypair,
+        peer_name: &str,
         doc_url: &str,
         encryption_key: &Option<Vec<u8>>,
     ) -> Self {
         Self::do_attach_writer_memory(
-            &default_peer_header(),
+            &NameDescription::new(peer_name),
             doc_url,
             encryption_key,
             Some(write_key_pair),
@@ -1664,8 +1669,4 @@ fn document_name_or_default(document_header: &Option<NameDescription>) -> String
     document_header
         .clone()
         .map_or("unknown".to_string(), |header| header.name.clone())
-}
-
-fn default_peer_header() -> NameDescription {
-    NameDescription::new("unknown")
 }

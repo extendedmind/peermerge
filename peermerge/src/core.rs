@@ -302,14 +302,17 @@ impl Peermerge<RandomAccessMemory, FeedMemoryPersistence> {
         self.add_document(document).await
     }
 
+    /// Reattaches a writer based on given write_key_pair and peer_name
     pub async fn reattach_writer_document_memory(
         &mut self,
         write_key_pair: &str,
+        peer_name: &str,
         doc_url: &str,
         encryption_key: &Option<String>,
     ) -> DocumentId {
         let document = Document::reattach_writer_memory(
             key_pair_from_bytes(&decode_key_pair(write_key_pair)),
+            peer_name,
             doc_url,
             &decode_encryption_key(encryption_key),
         )
@@ -388,7 +391,6 @@ async fn on_peer_event_memory(
     mut documents: Arc<DashMap<DocumentId, Document<RandomAccessMemory, FeedMemoryPersistence>>>,
     peer_name: &str,
 ) {
-    let mut peer_name = peer_name.to_string();
     while let Some(event) = peer_event_receiver.next().await {
         debug!("Received event {:?}", event);
         match event.content {
@@ -401,7 +403,7 @@ async fn on_peer_event_memory(
                     .await;
             }
             _ => {
-                if let Some(new_peer_header) = process_peer_event(
+                process_peer_event(
                     event,
                     &mut state_event_sender,
                     &mut peermerge_state,
@@ -409,9 +411,6 @@ async fn on_peer_event_memory(
                     &peer_name,
                 )
                 .await
-                {
-                    peer_name = new_peer_header.name;
-                }
             }
         }
     }
@@ -570,7 +569,6 @@ async fn on_peer_event_disk(
     mut documents: Arc<DashMap<DocumentId, Document<RandomAccessDisk, FeedDiskPersistence>>>,
     peer_name: &str,
 ) {
-    let mut peer_name: String = peer_name.to_string();
     while let Some(event) = peer_event_receiver.next().await {
         debug!("Received event {:?}", event);
         match event.content {
@@ -583,7 +581,7 @@ async fn on_peer_event_disk(
                     .await;
             }
             _ => {
-                if let Some(new_peer_header) = process_peer_event(
+                process_peer_event(
                     event,
                     &mut state_event_sender,
                     &mut peermerge_state,
@@ -591,9 +589,6 @@ async fn on_peer_event_disk(
                     &peer_name,
                 )
                 .await
-                {
-                    peer_name = new_peer_header.name;
-                }
             }
         }
     }
@@ -611,12 +606,10 @@ async fn process_peer_event<T, U>(
     _peermerge_state: &mut Arc<Mutex<PeermergeStateWrapper<T>>>,
     documents: &mut Arc<DashMap<DocumentId, Document<T, U>>>,
     peer_name: &str,
-) -> Option<NameDescription>
-where
+) where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send + 'static,
     U: FeedPersistence,
 {
-    let mut new_peer_header: Option<NameDescription> = None;
     match event.content {
         PeerEventContent::NewPeersBroadcasted(_) => unreachable!("Implemented by concrete type"),
         PeerEventContent::PeerDisconnected(_) => {
@@ -644,12 +637,8 @@ where
                 .process_peer_synced(discovery_key, synced_contiguous_length)
                 .await;
             for state_event in state_events {
-                if let StateEventContent::Reattached(peer_header) = &state_event.content {
-                    new_peer_header = Some(peer_header.clone());
-                }
                 state_event_sender.unbounded_send(state_event).unwrap();
             }
         }
     }
-    new_peer_header
 }
