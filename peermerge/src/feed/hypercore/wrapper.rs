@@ -2,7 +2,7 @@ use futures::channel::mpsc::UnboundedSender;
 use hypercore_protocol::{
     hypercore::{
         compact_encoding::{CompactEncoding, State},
-        Hypercore,
+        Hypercore, PartialKeypair,
     },
     Channel, ChannelReceiver, ChannelSender, Message,
 };
@@ -23,8 +23,8 @@ use wasm_bindgen_futures::spawn_local;
 
 use super::{
     messaging::{
-        create_append_local_signal, create_new_peers_created_local_signal,
-        create_peer_synced_local_signal,
+        create_append_local_signal, create_closed_local_signal,
+        create_new_peers_created_local_signal, create_peer_synced_local_signal,
     },
     on_doc_peer, on_peer, PeerState,
 };
@@ -155,6 +155,14 @@ where
         Ok(())
     }
 
+    pub(crate) async fn notify_closed(&mut self) -> anyhow::Result<()> {
+        if self.channel_senders.len() > 0 {
+            let message = create_closed_local_signal();
+            self.notify_listeners(&message).await?;
+        }
+        Ok(())
+    }
+
     /// Cork sending notifications about this hypercore and start queuing in-memory messages
     /// about changes.
     pub(crate) fn cork(&mut self) {
@@ -196,6 +204,11 @@ where
             entries.push(entry);
         }
         Ok(entries)
+    }
+
+    pub(crate) async fn key_pair(&self) -> PartialKeypair {
+        let hypercore = self.hypercore.lock().await;
+        hypercore.key_pair().clone()
     }
 
     pub(super) fn public_key(&self) -> &[u8; 32] {

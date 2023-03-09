@@ -119,8 +119,18 @@ where
                             );
                         }
                     }
-                    Event::Close(_discovery_key) => {
-                        // For now, just ignore
+                    Event::Close(discovery_key) => {
+                        if let Some(index) = opened_documents
+                            .iter()
+                            .position(|&doc_id| doc_id == discovery_key)
+                        {
+                            opened_documents.remove(index);
+                        }
+                        if opened_documents.is_empty() {
+                            // When all of the documents' root feeds have been closed, the
+                            // protocol can also be closed.
+                            break;
+                        }
                     }
                     Event::LocalSignal((name, data)) => match name.as_str() {
                         NEW_PEERS_CREATED_LOCAL_SIGNAL_NAME => {

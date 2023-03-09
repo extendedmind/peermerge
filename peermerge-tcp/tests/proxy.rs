@@ -179,6 +179,9 @@ async fn process_creator_state_events(
             DocumentChanged(patches) => {
                 document_changes.push(patches);
             }
+            Reattached(_) => {
+                panic!("Should not get reattached");
+            }
         }
     }
     Ok(())

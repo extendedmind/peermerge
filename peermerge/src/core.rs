@@ -23,15 +23,17 @@ use wasm_bindgen_futures::spawn_local;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::feed::FeedDiskPersistence;
 use crate::{
-    common::{cipher::encode_encryption_key, PeerEventContent},
-    feed::{FeedMemoryPersistence, FeedPersistence, Protocol},
-};
-use crate::{
     common::{
-        cipher::{decode_encryption_key, encode_document_id},
+        cipher::{
+            decode_encryption_key, decode_key_pair, encode_document_id, encode_encryption_key,
+            encode_key_pair,
+        },
+        keys::{key_pair_from_bytes, partial_key_pair_to_bytes},
         storage::PeermergeStateWrapper,
         utils::Mutex,
+        PeerEventContent,
     },
+    feed::{FeedMemoryPersistence, FeedPersistence, Protocol},
     StateEventContent,
 };
 use crate::{
@@ -166,6 +168,15 @@ where
     }
 
     #[instrument(skip(self), fields(peer_name = self.peer_header.name))]
+    pub async fn close(&mut self) -> anyhow::Result<()> {
+        for document_id in get_document_ids(&self.documents).await {
+            let mut document = get_document(&self.documents, &document_id).await.unwrap();
+            document.close().await?;
+        }
+        Ok(())
+    }
+
+    #[instrument(skip(self), fields(peer_name = self.peer_header.name))]
     pub async fn cork(&mut self, document_id: &DocumentId) {
         let mut document = get_document(&self.documents, document_id).await.unwrap();
         document.cork().await
@@ -201,6 +212,13 @@ where
         document
             .encryption_key()
             .map(|encryption_key| encode_encryption_key(&encryption_key))
+    }
+
+    #[instrument(skip(self), fields(peer_name = self.peer_header.name))]
+    pub async fn write_key_pair(&self, document_id: &DocumentId) -> String {
+        let document = get_document(&self.documents, document_id).await.unwrap();
+        let key_pair = document.write_key_pair().await;
+        encode_key_pair(&partial_key_pair_to_bytes(key_pair))
     }
 
     async fn notify_of_document_changes(&mut self) {
@@ -284,6 +302,21 @@ impl Peermerge<RandomAccessMemory, FeedMemoryPersistence> {
         self.add_document(document).await
     }
 
+    pub async fn reattach_writer_document_memory(
+        &mut self,
+        write_key_pair: &str,
+        doc_url: &str,
+        encryption_key: &Option<String>,
+    ) -> DocumentId {
+        let document = Document::reattach_writer_memory(
+            key_pair_from_bytes(&decode_key_pair(write_key_pair)),
+            doc_url,
+            &decode_encryption_key(encryption_key),
+        )
+        .await;
+        self.add_document(document).await
+    }
+
     pub async fn attach_proxy_document_memory(&mut self, doc_url: &str) -> DocumentId {
         let document = Document::attach_proxy_memory(&self.peer_header, doc_url).await;
         self.add_document(document).await
@@ -355,6 +388,7 @@ async fn on_peer_event_memory(
     mut documents: Arc<DashMap<DocumentId, Document<RandomAccessMemory, FeedMemoryPersistence>>>,
     peer_name: &str,
 ) {
+    let mut peer_name = peer_name.to_string();
     while let Some(event) = peer_event_receiver.next().await {
         debug!("Received event {:?}", event);
         match event.content {
@@ -367,14 +401,17 @@ async fn on_peer_event_memory(
                     .await;
             }
             _ => {
-                process_peer_event(
+                if let Some(new_peer_header) = process_peer_event(
                     event,
                     &mut state_event_sender,
                     &mut peermerge_state,
                     &mut documents,
-                    peer_name,
+                    &peer_name,
                 )
                 .await
+                {
+                    peer_name = new_peer_header.name;
+                }
             }
         }
     }
@@ -533,6 +570,7 @@ async fn on_peer_event_disk(
     mut documents: Arc<DashMap<DocumentId, Document<RandomAccessDisk, FeedDiskPersistence>>>,
     peer_name: &str,
 ) {
+    let mut peer_name: String = peer_name.to_string();
     while let Some(event) = peer_event_receiver.next().await {
         debug!("Received event {:?}", event);
         match event.content {
@@ -545,14 +583,17 @@ async fn on_peer_event_disk(
                     .await;
             }
             _ => {
-                process_peer_event(
+                if let Some(new_peer_header) = process_peer_event(
                     event,
                     &mut state_event_sender,
                     &mut peermerge_state,
                     &mut documents,
-                    peer_name,
+                    &peer_name,
                 )
                 .await
+                {
+                    peer_name = new_peer_header.name;
+                }
             }
         }
     }
@@ -570,10 +611,12 @@ async fn process_peer_event<T, U>(
     _peermerge_state: &mut Arc<Mutex<PeermergeStateWrapper<T>>>,
     documents: &mut Arc<DashMap<DocumentId, Document<T, U>>>,
     peer_name: &str,
-) where
+) -> Option<NameDescription>
+where
     T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send + 'static,
     U: FeedPersistence,
 {
+    let mut new_peer_header: Option<NameDescription> = None;
     match event.content {
         PeerEventContent::NewPeersBroadcasted(_) => unreachable!("Implemented by concrete type"),
         PeerEventContent::PeerDisconnected(_) => {
@@ -601,8 +644,12 @@ async fn process_peer_event<T, U>(
                 .process_peer_synced(discovery_key, synced_contiguous_length)
                 .await;
             for state_event in state_events {
+                if let StateEventContent::Reattached(peer_header) = &state_event.content {
+                    new_peer_header = Some(peer_header.clone());
+                }
                 state_event_sender.unbounded_send(state_event).unwrap();
             }
         }
     }
+    new_peer_header
 }

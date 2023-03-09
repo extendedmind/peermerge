@@ -27,6 +27,7 @@ const PEERMERGE_BROADCAST_MSG: &str = "peermerge/v1/broadcast";
 const APPEND_LOCAL_SIGNAL_NAME: &str = "append";
 const PEER_SYNCED_LOCAL_SIGNAL_NAME: &str = "peer_synced";
 pub(super) const NEW_PEERS_CREATED_LOCAL_SIGNAL_NAME: &str = "new_peers_created";
+const CLOSED_LOCAL_SIGNAL_NAME: &str = "closed";
 
 pub(super) fn create_broadcast_message(peer_state: &PeerState) -> Message {
     let broadcast_message: BroadcastMessage = BroadcastMessage {
@@ -76,6 +77,10 @@ pub(super) fn create_new_peers_created_local_signal(
         NEW_PEERS_CREATED_LOCAL_SIGNAL_NAME.to_string(),
         buffer.to_vec(),
     ))
+}
+
+pub(super) fn create_closed_local_signal() -> Message {
+    Message::LocalSignal((CLOSED_LOCAL_SIGNAL_NAME.to_string(), vec![]))
 }
 
 pub(super) async fn create_initial_synchronize<T>(
@@ -428,6 +433,14 @@ where
                     messages.extend(create_initial_synchronize(hypercore, peer_state).await);
                 }
                 channel.send_batch(&messages).await?;
+            }
+
+            CLOSED_LOCAL_SIGNAL_NAME => {
+                assert!(
+                    peer_state.is_doc,
+                    "Only doc peer should ever get closed message"
+                );
+                channel.close().await?;
             }
             _ => {
                 panic!("Received unexpected local signal {}", name);

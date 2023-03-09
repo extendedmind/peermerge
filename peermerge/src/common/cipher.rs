@@ -177,23 +177,31 @@ pub(crate) fn encode_encryption_key(encryption_key: &[u8]) -> String {
     data_encoding::BASE32_NOPAD.encode(encryption_key)
 }
 
+pub(crate) fn encode_key_pair(key_pair: &[u8]) -> String {
+    data_encoding::BASE32_NOPAD.encode(key_pair)
+}
+
 pub(crate) fn decode_encryption_key(encryption_key: &Option<String>) -> Option<Vec<u8>> {
-    if let Some(encryption_key) = encryption_key {
-        let encryption_key_base32 = encryption_key.as_bytes();
-        let mut encryption_key = vec![
-            0;
-            data_encoding::BASE32_NOPAD
-                .decode_len(encryption_key_base32.len())
-                .unwrap()
-        ];
-        let decoded_len = data_encoding::BASE32_NOPAD
-            .decode_mut(encryption_key_base32, &mut encryption_key)
-            .unwrap();
-        assert_eq!(decoded_len, 32);
-        Some(encryption_key)
-    } else {
-        None
-    }
+    encryption_key.as_ref().map(|key| decode_keys(key, 32))
+}
+
+pub(crate) fn decode_key_pair(key_pair: &str) -> Vec<u8> {
+    decode_keys(key_pair, 64)
+}
+
+fn decode_keys(keys: &str, expected_len: usize) -> Vec<u8> {
+    let keys_base32 = keys.as_bytes();
+    let mut keys = vec![
+        0;
+        data_encoding::BASE32_NOPAD
+            .decode_len(keys_base32.len())
+            .unwrap()
+    ];
+    let decoded_len = data_encoding::BASE32_NOPAD
+        .decode_mut(keys_base32, &mut keys)
+        .unwrap();
+    assert_eq!(decoded_len, expected_len);
+    keys
 }
 
 fn encode_domain(root_public_key: &[u8; 32]) -> String {

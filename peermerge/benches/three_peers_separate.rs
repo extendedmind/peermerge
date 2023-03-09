@@ -63,6 +63,9 @@ async fn append_three(
             DocumentInitialized() => {
                 panic!("Should not get document initialized");
             }
+            Reattached(_) => {
+                panic!("Should not get reattached");
+            }
         }
         if sync_remaining < 0 && remote_sync_remaining < 0 && patches_remaining < 0 {
             panic!(

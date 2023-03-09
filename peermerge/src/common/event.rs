@@ -1,6 +1,6 @@
 use automerge::Patch;
 
-use crate::DocumentId;
+use crate::{DocumentId, NameDescription};
 
 #[derive(Clone, Debug)]
 pub struct StateEvent {
@@ -21,6 +21,7 @@ impl StateEvent {
 pub enum StateEventContent {
     PeerSynced((Option<String>, [u8; 32], u64)),
     RemotePeerSynced(([u8; 32], u64)),
+    Reattached(NameDescription),
     DocumentInitialized(),
     DocumentChanged(Vec<Patch>),
 }

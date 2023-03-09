@@ -95,6 +95,9 @@ pub async fn setup_peermerge_mesh(
                 DocumentInitialized(..) => {
                     document_initialized_remaining -= 1;
                 }
+                Reattached(_) => {
+                    panic!("Should not get reattached");
+                }
             }
 
             if sync_remaining == 0

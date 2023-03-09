@@ -78,7 +78,7 @@ pub(crate) async fn open_disk_hypercore(
 
 pub(crate) async fn create_new_write_memory_hypercore(
     key_pair: Keypair,
-    init_data: Vec<u8>,
+    init_data: Option<Vec<u8>>,
     encrypted: bool,
     encryption_key: &Option<Vec<u8>>,
 ) -> (u64, HypercoreWrapper<RandomAccessMemory>, Option<Vec<u8>>) {
@@ -87,7 +87,7 @@ pub(crate) async fn create_new_write_memory_hypercore(
             public: key_pair.public,
             secret: Some(key_pair.secret),
         },
-        Some(init_data),
+        init_data,
         false,
         encrypted,
         encryption_key,
