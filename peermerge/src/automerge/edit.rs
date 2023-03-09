@@ -87,7 +87,10 @@ impl UnappliedEntries {
             for kv in self.data.iter_mut() {
                 let discovery_key = kv.0;
                 let value = kv.1;
-                let mut new_length = value.0;
+                // The data structure stores in value.0 the length after all entries are applied.
+                // When iterating the entries, start from the first.
+                let original_start_index = value.0 - value.1.len() as u64;
+                let mut new_length = original_start_index;
                 for entry in value.1.iter() {
                     match entry.entry_type {
                         EntryType::Change => {
@@ -104,6 +107,7 @@ impl UnappliedEntries {
                                     false
                                 }
                             }) {
+                                new_length += 1;
                                 changes_to_apply.push(change.clone());
                                 hashes.insert(change.hash());
                                 if let Some(result_value) = result.get_mut(discovery_key) {
@@ -114,7 +118,6 @@ impl UnappliedEntries {
                                         ApplyEntriesFeedChange::new(new_length),
                                     );
                                 }
-                                new_length += 1;
                                 changed = true;
                             } else {
                                 // Only try to insert in order per hypercore, don't apply in between changes, as they
@@ -123,6 +126,7 @@ impl UnappliedEntries {
                             }
                         }
                         EntryType::InitPeer => {
+                            new_length += 1;
                             let peer_header = NameDescription {
                                 name: entry.name.as_ref().unwrap().to_string(),
                                 description: entry.description.clone(),
@@ -139,7 +143,6 @@ impl UnappliedEntries {
                                     ),
                                 );
                             }
-                            new_length += 1;
                             changed = true;
                         }
                         _ => panic!("Unexpected entry {:?}", entry),
@@ -147,7 +150,7 @@ impl UnappliedEntries {
                 }
 
                 // Remove from the unapplied changes queue all that were now inserted
-                for _ in value.0..new_length {
+                for _ in original_start_index..new_length {
                     value.1.pop_front();
                 }
             }
