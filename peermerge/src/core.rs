@@ -302,17 +302,16 @@ impl Peermerge<RandomAccessMemory, FeedMemoryPersistence> {
         self.add_document(document).await
     }
 
-    /// Reattaches a writer based on given write_key_pair and peer_name
+    /// Reattaches a writer based on given write_key_pair and peer name
     pub async fn reattach_writer_document_memory(
         &mut self,
-        write_key_pair: &str,
-        peer_name: &str,
         doc_url: &str,
         encryption_key: &Option<String>,
+        write_key_pair: &str,
     ) -> DocumentId {
         let document = Document::reattach_writer_memory(
             key_pair_from_bytes(&decode_key_pair(write_key_pair)),
-            peer_name,
+            &self.peer_header.name,
             doc_url,
             &decode_encryption_key(encryption_key),
         )
