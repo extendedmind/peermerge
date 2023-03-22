@@ -23,15 +23,9 @@ pub(crate) use hypercore::{
 pub use random_access_disk::RandomAccessDisk as FeedDiskPersistence;
 pub use random_access_memory::RandomAccessMemory as FeedMemoryPersistence;
 
-pub trait FeedPersistence:
-    RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send + 'static
-{
-}
+pub trait FeedPersistence: RandomAccess + Debug + Send + 'static {}
 
-impl<T> FeedPersistence for T where
-    T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send + 'static
-{
-}
+impl<T> FeedPersistence for T where T: RandomAccess + Debug + Send + 'static {}
 
 // TODO: Expose p2panda's versions of
 // Feed, FeedPersistence, FeedMemoryPersistence, FeedDiskPersistence, ProtocolBuilder, Protocol<IO>

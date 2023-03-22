@@ -2,7 +2,7 @@ use chacha20poly1305::{
     aead::{Aead, KeyInit, OsRng},
     XChaCha20Poly1305, XNonce,
 };
-use hypercore_protocol::hypercore::compact_encoding::{CompactEncoding, State};
+use compact_encoding::{CompactEncoding, State};
 use std::convert::TryInto;
 use std::fmt::Debug;
 

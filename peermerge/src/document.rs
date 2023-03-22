@@ -47,7 +47,7 @@ use crate::{DocumentId, NameDescription};
 #[derive(Debug)]
 pub(crate) struct Document<T, U>
 where
-    T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send,
+    T: RandomAccess + Debug + Send,
     U: FeedPersistence,
 {
     /// Map of the feeds of this document
@@ -78,7 +78,7 @@ where
 
 impl<T, U> Document<T, U>
 where
-    T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send + 'static,
+    T: RandomAccess + Debug + Send + 'static,
     U: FeedPersistence,
 {
     pub(crate) fn id(&self) -> DocumentId {
@@ -1450,7 +1450,7 @@ pub(crate) async fn get_document<T, U>(
     document_id: &DocumentId,
 ) -> Option<Document<T, U>>
 where
-    T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send + 'static,
+    T: RandomAccess + Debug + Send + 'static,
     U: FeedPersistence,
 {
     loop {
@@ -1475,7 +1475,7 @@ pub(crate) async fn get_document_ids<T, U>(
     documents: &Arc<DashMap<DocumentId, Document<T, U>>>,
 ) -> Vec<DocumentId>
 where
-    T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send + 'static,
+    T: RandomAccess + Debug + Send + 'static,
     U: FeedPersistence,
 {
     // I believe this needs to be resolved xacrimon/dashmap/issues/151 for this to guarantee
@@ -1540,7 +1540,7 @@ async fn update_content<T>(
     unapplied_entries: &mut UnappliedEntries,
 ) -> anyhow::Result<(bool, Vec<([u8; 32], NameDescription)>)>
 where
-    T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send + 'static,
+    T: RandomAccess + Debug + Send + 'static,
 {
     let mut new_peer_headers: Vec<([u8; 32], NameDescription)> = vec![];
     let mut changed = false;
@@ -1574,7 +1574,7 @@ async fn get_new_entries<T>(
     feeds: &Arc<DashMap<[u8; 32], Arc<Mutex<Feed<T>>>>>,
 ) -> anyhow::Result<(u64, Vec<Entry>)>
 where
-    T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send + 'static,
+    T: RandomAccess + Debug + Send + 'static,
 {
     let feed = get_feed(feeds, discovery_key).await.unwrap();
     let mut feed = feed.lock().await;

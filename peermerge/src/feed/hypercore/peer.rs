@@ -22,7 +22,7 @@ pub(super) async fn on_peer<T>(
     peer_event_sender: &mut UnboundedSender<PeerEvent>,
 ) -> Result<()>
 where
-    T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send + 'static,
+    T: RandomAccess + Debug + Send + 'static,
 {
     // Immediately send an initial synchronize
     let messages = create_initial_synchronize(&mut hypercore, &mut peer_state).await;
@@ -56,7 +56,7 @@ pub(super) async fn on_doc_peer<T>(
     peer_event_sender: &mut UnboundedSender<PeerEvent>,
 ) -> Result<()>
 where
-    T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send + 'static,
+    T: RandomAccess + Debug + Send + 'static,
 {
     // Immediately broadcast hypercores to the other end on the doc peer
     let message = create_broadcast_message(&peer_state);
@@ -90,7 +90,7 @@ async fn process_message<T>(
     peer_event_sender: &mut UnboundedSender<PeerEvent>,
 ) -> Result<bool>
 where
-    T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send + 'static,
+    T: RandomAccess + Debug + Send + 'static,
 {
     let event = on_message(hypercore, peer_state, channel, message).await?;
     if let Some(event) = event {

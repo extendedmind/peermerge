@@ -1,7 +1,7 @@
+use compact_encoding::{CompactEncoding, State};
 use dashmap::DashMap;
 use futures::channel::mpsc::UnboundedSender;
 use futures::StreamExt;
-use hypercore_protocol::hypercore::compact_encoding::{CompactEncoding, State};
 use hypercore_protocol::{Event, Protocol};
 use random_access_storage::RandomAccess;
 use std::fmt::Debug;
@@ -23,7 +23,7 @@ pub(crate) async fn on_protocol<T, U, V>(
     peer_event_sender: &mut UnboundedSender<PeerEvent>,
 ) -> anyhow::Result<()>
 where
-    T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send + 'static,
+    T: RandomAccess + Debug + Send + 'static,
     U: FeedPersistence,
     V: IO,
 {
@@ -188,7 +188,7 @@ async fn get_openeable_hypercore_for_discovery_key<T, U>(
     opened_documents: &Vec<DocumentId>,
 ) -> Option<Arc<Mutex<HypercoreWrapper<U>>>>
 where
-    T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send + 'static,
+    T: RandomAccess + Debug + Send + 'static,
     U: FeedPersistence,
 {
     if let Some(document) = get_document(documents, discovery_key).await {
@@ -211,7 +211,7 @@ async fn get_document_and_openeable_hypercore_for_discovery_key<T, U>(
     opened_documents: &Vec<DocumentId>,
 ) -> Option<(Document<T, U>, Arc<Mutex<HypercoreWrapper<U>>>, bool)>
 where
-    T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send + 'static,
+    T: RandomAccess + Debug + Send + 'static,
     U: FeedPersistence,
 {
     if let Some(document) = get_document(documents, discovery_key).await {

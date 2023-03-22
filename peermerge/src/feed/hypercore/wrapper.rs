@@ -1,9 +1,7 @@
+use compact_encoding::{CompactEncoding, State};
 use futures::channel::mpsc::UnboundedSender;
 use hypercore_protocol::{
-    hypercore::{
-        compact_encoding::{CompactEncoding, State},
-        Hypercore, PartialKeypair,
-    },
+    hypercore::{Hypercore, PartialKeypair},
     Channel, ChannelReceiver, ChannelSender, Message,
 };
 #[cfg(not(target_arch = "wasm32"))]
@@ -33,7 +31,7 @@ use crate::common::{cipher::EntryCipher, entry::Entry, utils::Mutex, PeerEvent};
 #[derive(Debug)]
 pub(crate) struct HypercoreWrapper<T>
 where
-    T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send,
+    T: RandomAccess + Debug + Send,
 {
     pub(super) public_key: [u8; 32],
     pub(super) hypercore: Arc<Mutex<Hypercore<T>>>,
@@ -103,7 +101,7 @@ impl HypercoreWrapper<RandomAccessMemory> {
 
 impl<T> HypercoreWrapper<T>
 where
-    T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send + 'static,
+    T: RandomAccess + Debug + Send + 'static,
 {
     pub(crate) async fn append(&mut self, data: &[u8]) -> anyhow::Result<u64> {
         if self.proxy {

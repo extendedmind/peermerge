@@ -1,9 +1,7 @@
 use anyhow::Result;
+use compact_encoding::{CompactEncoding, State};
 use hypercore_protocol::{
-    hypercore::{
-        compact_encoding::{CompactEncoding, State},
-        Hypercore, RequestBlock, RequestUpgrade,
-    },
+    hypercore::{Hypercore, RequestBlock, RequestUpgrade},
     schema::*,
     Channel, Message,
 };
@@ -88,7 +86,7 @@ pub(super) async fn create_initial_synchronize<T>(
     peer_state: &mut PeerState,
 ) -> Vec<Message>
 where
-    T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send,
+    T: RandomAccess + Debug + Send,
 {
     // There are no new peers, start sync
     let info = {
@@ -136,7 +134,7 @@ pub(super) async fn on_message<T>(
     message: Message,
 ) -> Result<Option<PeerEvent>>
 where
-    T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send,
+    T: RandomAccess + Debug + Send,
 {
     debug!("Message on channel={}", channel.id(),);
     match message {
@@ -465,7 +463,7 @@ async fn next_request<T>(
     peer_state: &mut PeerState,
 ) -> anyhow::Result<Option<Request>>
 where
-    T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send,
+    T: RandomAccess + Debug + Send,
 {
     let info = hypercore.info();
 

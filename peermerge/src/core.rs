@@ -50,7 +50,7 @@ use crate::{document::Document, StateEvent};
 #[derive(Debug)]
 pub struct Peermerge<T, U>
 where
-    T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send,
+    T: RandomAccess + Debug + Send,
     U: FeedPersistence,
 {
     /// Name and description of this peer
@@ -67,7 +67,7 @@ where
 
 impl<T, U> Peermerge<T, U>
 where
-    T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send + 'static,
+    T: RandomAccess + Debug + Send + 'static,
     U: FeedPersistence,
 {
     pub fn peer_name(&self) -> String {
@@ -606,7 +606,7 @@ async fn process_peer_event<T, U>(
     documents: &mut Arc<DashMap<DocumentId, Document<T, U>>>,
     peer_name: &str,
 ) where
-    T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send + 'static,
+    T: RandomAccess + Debug + Send + 'static,
     U: FeedPersistence,
 {
     match event.content {

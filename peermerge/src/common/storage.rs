@@ -1,5 +1,5 @@
 use automerge::ObjId;
-use hypercore_protocol::hypercore::compact_encoding::{CompactEncoding, State};
+use compact_encoding::{CompactEncoding, State};
 #[cfg(not(target_arch = "wasm32"))]
 use random_access_disk::RandomAccessDisk;
 use random_access_memory::RandomAccessMemory;
@@ -19,7 +19,7 @@ use super::{
 #[derive(Debug)]
 pub(crate) struct PeermergeStateWrapper<T>
 where
-    T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send,
+    T: RandomAccess + Debug + Send,
 {
     pub(crate) state: PeermergeState,
     storage: T,
@@ -27,7 +27,7 @@ where
 
 impl<T> PeermergeStateWrapper<T>
 where
-    T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send,
+    T: RandomAccess + Debug + Send,
 {
     pub(crate) async fn add_document_id_to_state(&mut self, document_id: &DocumentId) {
         self.state.document_ids.push(document_id.clone());
@@ -83,7 +83,7 @@ fn get_peermerge_state_path(data_root_dir: &PathBuf) -> PathBuf {
 #[derive(Debug)]
 pub(crate) struct DocStateWrapper<T>
 where
-    T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send,
+    T: RandomAccess + Debug + Send,
 {
     state: DocumentState,
     unapplied_entries: UnappliedEntries,
@@ -92,7 +92,7 @@ where
 
 impl<T> DocStateWrapper<T>
 where
-    T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send,
+    T: RandomAccess + Debug + Send,
 {
     pub(crate) async fn add_peer_public_keys_to_state(
         &mut self,
@@ -265,7 +265,7 @@ fn get_document_state_path(data_root_dir: &PathBuf) -> PathBuf {
 
 async fn write_repo_state<T>(repo_state: &PeermergeState, storage: &mut T)
 where
-    T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send,
+    T: RandomAccess + Debug + Send,
 {
     let mut enc_state = State::new();
     enc_state.preencode(repo_state);
@@ -297,7 +297,7 @@ fn add_peer_public_keys_to_document_state(
 
 async fn write_document_state<T>(document_state: &DocumentState, storage: &mut T)
 where
-    T: RandomAccess<Error = Box<dyn std::error::Error + Send + Sync>> + Debug + Send,
+    T: RandomAccess + Debug + Send,
 {
     let mut enc_state = State::new();
     enc_state.preencode(document_state);

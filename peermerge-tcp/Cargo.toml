@@ -10,8 +10,8 @@ authors = ["Timo Tiuraniemi <timo.tiuraniemi@iki.fi>"]
 
 [dependencies]
 peermerge = { path = "../peermerge", default-features = false }
-random-access-memory = { git = "https://github.com/ttiurani/random-access-memory", branch = "tokio" }
-random-access-disk = { git = "https://github.com/ttiurani/random-access-disk", branch = "tokio" }
+random-access-memory = { git = "https://github.com/ttiurani/random-access-memory", branch = "thiserror" }
+random-access-disk = { git = "https://github.com/ttiurani/random-access-disk", branch = "thiserror" }
 anyhow = "1.0.28"
 futures = "0.3.25"
 tracing = "0.1.37"

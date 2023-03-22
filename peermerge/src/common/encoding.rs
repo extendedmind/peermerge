@@ -1,5 +1,5 @@
 //! Binary encoding of needed peermerge persistent data
-use hypercore_protocol::hypercore::compact_encoding::{CompactEncoding, State};
+use compact_encoding::{CompactEncoding, State};
 use std::convert::TryInto;
 
 pub(crate) use crate::common::entry::Entry;
