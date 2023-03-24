@@ -1,4 +1,4 @@
-use hypercore_protocol::hypercore::{Hypercore, Keypair, PartialKeypair, PublicKey, Storage};
+use hypercore_protocol::hypercore::{Builder, Keypair, PartialKeypair, PublicKey, Storage};
 #[cfg(not(target_arch = "wasm32"))]
 use random_access_disk::RandomAccessDisk;
 use random_access_memory::RandomAccessMemory;
@@ -18,15 +18,14 @@ pub(crate) async fn create_new_write_disk_hypercore(
 ) -> (u64, HypercoreWrapper<RandomAccessDisk>, Option<Vec<u8>>) {
     let hypercore_dir = get_path_from_discovery_key(prefix, discovery_key);
     let storage = Storage::new_disk(&hypercore_dir, true).await.unwrap();
-    let hypercore = Hypercore::new_with_key_pair(
-        storage,
-        PartialKeypair {
+    let hypercore = Builder::new(storage)
+        .set_key_pair(PartialKeypair {
             public: key_pair.public,
             secret: Some(key_pair.secret),
-        },
-    )
-    .await
-    .unwrap();
+        })
+        .build()
+        .await
+        .unwrap();
     let (mut wrapper, encryption_key) =
         HypercoreWrapper::from_disk_hypercore(hypercore, false, encrypted, encryption_key, true);
     let len = wrapper.append(&init_data).await.unwrap();
@@ -44,15 +43,14 @@ pub(crate) async fn create_new_read_disk_hypercore(
 ) -> (u64, HypercoreWrapper<RandomAccessDisk>) {
     let hypercore_dir = get_path_from_discovery_key(prefix, discovery_key);
     let storage = Storage::new_disk(&hypercore_dir, true).await.unwrap();
-    let hypercore = Hypercore::new_with_key_pair(
-        storage,
-        PartialKeypair {
+    let hypercore = Builder::new(storage)
+        .set_key_pair(PartialKeypair {
             public: PublicKey::from_bytes(public_key).unwrap(),
             secret: None,
-        },
-    )
-    .await
-    .unwrap();
+        })
+        .build()
+        .await
+        .unwrap();
     (
         hypercore.info().length,
         HypercoreWrapper::from_disk_hypercore(hypercore, proxy, encrypted, encryption_key, false).0,
@@ -69,7 +67,7 @@ pub(crate) async fn open_disk_hypercore(
 ) -> (u64, HypercoreWrapper<RandomAccessDisk>) {
     let hypercore_dir = get_path_from_discovery_key(prefix, discovery_key);
     let storage = Storage::new_disk(&hypercore_dir, false).await.unwrap();
-    let hypercore = Hypercore::open(storage).await.unwrap();
+    let hypercore = Builder::new(storage).set_open(true).build().await.unwrap();
     (
         hypercore.info().length,
         HypercoreWrapper::from_disk_hypercore(hypercore, proxy, encrypted, encryption_key, false).0,
@@ -123,7 +121,9 @@ async fn create_new_memory_hypercore(
     encryption_key: &Option<Vec<u8>>,
 ) -> (u64, HypercoreWrapper<RandomAccessMemory>, Option<Vec<u8>>) {
     let storage = Storage::new_memory().await.unwrap();
-    let hypercore = Hypercore::new_with_key_pair(storage, key_pair)
+    let hypercore = Builder::new(storage)
+        .set_key_pair(key_pair)
+        .build()
         .await
         .unwrap();
 
