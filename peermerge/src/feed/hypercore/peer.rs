@@ -1,4 +1,3 @@
-use anyhow::Result;
 use futures::channel::mpsc::UnboundedSender;
 use futures::stream::StreamExt;
 use hypercore_protocol::{hypercore::Hypercore, Channel, ChannelReceiver, Message};
@@ -11,7 +10,10 @@ use super::{
     messaging::{create_broadcast_message, create_initial_synchronize},
     on_message, PeerState,
 };
-use crate::common::{utils::Mutex, PeerEvent, PeerEventContent};
+use crate::{
+    common::{utils::Mutex, PeerEvent, PeerEventContent},
+    PeermergeError,
+};
 
 #[instrument(level = "debug", skip_all)]
 pub(super) async fn on_peer<T>(
@@ -20,7 +22,7 @@ pub(super) async fn on_peer<T>(
     mut channel: Channel,
     mut channel_receiver: ChannelReceiver<Message>,
     peer_event_sender: &mut UnboundedSender<PeerEvent>,
-) -> Result<()>
+) -> Result<(), PeermergeError>
 where
     T: RandomAccess + Debug + Send + 'static,
 {
@@ -54,7 +56,7 @@ pub(super) async fn on_doc_peer<T>(
     mut channel: Channel,
     mut channel_receiver: ChannelReceiver<Message>,
     peer_event_sender: &mut UnboundedSender<PeerEvent>,
-) -> Result<()>
+) -> Result<(), PeermergeError>
 where
     T: RandomAccess + Debug + Send + 'static,
 {
@@ -88,7 +90,7 @@ async fn process_message<T>(
     peer_state: &mut PeerState,
     channel: &mut Channel,
     peer_event_sender: &mut UnboundedSender<PeerEvent>,
-) -> Result<bool>
+) -> Result<bool, PeermergeError>
 where
     T: RandomAccess + Debug + Send + 'static,
 {

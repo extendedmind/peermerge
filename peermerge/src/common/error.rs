@@ -10,6 +10,12 @@ pub enum PeermergeError {
         /// Context for the error
         context: String,
     },
+    /// Disconnected
+    #[error("Peermerge disconnected. {context}")]
+    Disconnected {
+        /// Context for the error
+        context: String,
+    },
     /// Not writable
     #[error("Peermerge not writable")]
     NotWritable,
@@ -73,6 +79,20 @@ impl From<HypercoreError> for PeermergeError {
                 context: Some(format!("Hypercore IO error, context: {:?}", context)),
                 source,
             },
+        }
+    }
+}
+
+impl<T> From<futures::channel::mpsc::TrySendError<T>> for PeermergeError {
+    fn from(err: futures::channel::mpsc::TrySendError<T>) -> Self {
+        if err.is_disconnected() {
+            Self::Disconnected {
+                context: "Channel disconnected".to_string(),
+            }
+        } else {
+            Self::InvalidOperation {
+                context: format!("Unexpected channel error, {:?}", err),
+            }
         }
     }
 }
