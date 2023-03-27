@@ -3,6 +3,7 @@
 pub(crate) mod cipher;
 pub(crate) mod encoding;
 pub(crate) mod entry;
+mod error;
 mod event;
 pub(crate) mod keys;
 pub(crate) mod message;
@@ -12,5 +13,6 @@ mod types;
 pub(crate) mod utils;
 
 pub use cipher::get_doc_url_info;
+pub use error::PeermergeError;
 pub use event::{PeerEvent, PeerEventContent, StateEvent, StateEventContent};
 pub use types::{DocUrlInfo, DocumentInfo, FeedType, NameDescription};

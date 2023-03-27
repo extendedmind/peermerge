@@ -12,7 +12,8 @@ impl<T> IO for T where T: AsyncWrite + AsyncRead + Send + Unpin + 'static {}
 
 // Crate exports
 pub use crate::common::{
-    get_doc_url_info, DocUrlInfo, FeedType, NameDescription, StateEvent, StateEventContent,
+    get_doc_url_info, DocUrlInfo, FeedType, NameDescription, PeermergeError, StateEvent,
+    StateEventContent,
 };
 pub use crate::core::Peermerge;
 #[cfg(not(target_arch = "wasm32"))]

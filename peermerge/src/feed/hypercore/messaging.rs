@@ -1,4 +1,3 @@
-use anyhow::Result;
 use compact_encoding::{CompactEncoding, State};
 use hypercore_protocol::{
     hypercore::{Hypercore, RequestBlock, RequestUpgrade},
@@ -11,11 +10,14 @@ use std::sync::Arc;
 use tracing::{debug, instrument};
 
 use super::PeerState;
-use crate::common::{
-    message::{BroadcastMessage, NewPeersCreatedMessage, PeerSyncedMessage},
-    utils::Mutex,
-    PeerEvent,
-    PeerEventContent::*,
+use crate::{
+    common::{
+        message::{BroadcastMessage, NewPeersCreatedMessage, PeerSyncedMessage},
+        utils::Mutex,
+        PeerEvent,
+        PeerEventContent::*,
+    },
+    PeermergeError,
 };
 
 // Messages sent over-the-wire
@@ -132,7 +134,7 @@ pub(super) async fn on_message<T>(
     peer_state: &mut PeerState,
     channel: &mut Channel,
     message: Message,
-) -> Result<Option<PeerEvent>>
+) -> Result<Option<PeerEvent>, PeermergeError>
 where
     T: RandomAccess + Debug + Send,
 {
@@ -461,7 +463,7 @@ where
 async fn next_request<T>(
     hypercore: &mut Hypercore<T>,
     peer_state: &mut PeerState,
-) -> anyhow::Result<Option<Request>>
+) -> Result<Option<Request>, PeermergeError>
 where
     T: RandomAccess + Debug + Send,
 {
