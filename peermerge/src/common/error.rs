@@ -1,4 +1,4 @@
-use hypercore_protocol::hypercore::HypercoreError;
+use hypercore_protocol::{hypercore::HypercoreError, ChannelSendError};
 use thiserror::Error;
 
 /// Common error type for the peermerge interface
@@ -93,6 +93,14 @@ impl<T> From<futures::channel::mpsc::TrySendError<T>> for PeermergeError {
             Self::InvalidOperation {
                 context: format!("Unexpected channel error, {:?}", err),
             }
+        }
+    }
+}
+
+impl<T> From<ChannelSendError<T>> for PeermergeError {
+    fn from(err: ChannelSendError<T>) -> Self {
+        Self::InvalidOperation {
+            context: format!("Unexpected hypercore protocol channel error, {:?}", err),
         }
     }
 }

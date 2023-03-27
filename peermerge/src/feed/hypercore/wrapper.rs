@@ -26,7 +26,10 @@ use super::{
     },
     on_doc_peer, on_peer, PeerState,
 };
-use crate::common::{cipher::EntryCipher, entry::Entry, utils::Mutex, PeerEvent};
+use crate::{
+    common::{cipher::EntryCipher, entry::Entry, utils::Mutex, PeerEvent},
+    PeermergeError,
+};
 
 #[derive(Debug)]
 pub(crate) struct HypercoreWrapper<T>
@@ -103,7 +106,7 @@ impl<T> HypercoreWrapper<T>
 where
     T: RandomAccess + Debug + Send + 'static,
 {
-    pub(crate) async fn append(&mut self, data: &[u8]) -> anyhow::Result<u64> {
+    pub(crate) async fn append(&mut self, data: &[u8]) -> Result<u64, PeermergeError> {
         if self.proxy {
             panic!("Can not append to a proxy");
         }
@@ -133,7 +136,7 @@ where
     pub(crate) async fn notify_peer_synced(
         &mut self,
         contiguous_length: u64,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), PeermergeError> {
         if self.channel_senders.len() > 0 {
             let message = create_peer_synced_local_signal(contiguous_length);
             self.notify_listeners(&message).await?;
@@ -145,7 +148,7 @@ where
         &mut self,
         doc_discovery_key: [u8; 32],
         public_keys: Vec<[u8; 32]>,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), PeermergeError> {
         if self.channel_senders.len() > 0 {
             let message = create_new_peers_created_local_signal(doc_discovery_key, public_keys);
             self.notify_listeners(&message).await?;
@@ -153,7 +156,7 @@ where
         Ok(())
     }
 
-    pub(crate) async fn notify_closed(&mut self) -> anyhow::Result<()> {
+    pub(crate) async fn notify_closed(&mut self) -> Result<(), PeermergeError> {
         if self.channel_senders.len() > 0 {
             let message = create_closed_local_signal();
             self.notify_listeners(&message).await?;
@@ -168,7 +171,7 @@ where
     }
 
     /// Remove cork and send out all of the messages that were corked to listeners.
-    pub(crate) async fn uncork(&mut self) -> anyhow::Result<()> {
+    pub(crate) async fn uncork(&mut self) -> Result<(), PeermergeError> {
         let messages = {
             self.corked = false;
             self.message_queue.clone()
@@ -184,7 +187,11 @@ where
         Ok(())
     }
 
-    pub(crate) async fn entries(&mut self, index: u64, len: u64) -> anyhow::Result<Vec<Entry>> {
+    pub(crate) async fn entries(
+        &mut self,
+        index: u64,
+        len: u64,
+    ) -> Result<Vec<Entry>, PeermergeError> {
         if self.proxy {
             panic!("Can not get entries from a proxy");
         }
@@ -292,7 +299,7 @@ where
         });
     }
 
-    async fn notify_listeners(&mut self, message: &Message) -> anyhow::Result<()> {
+    async fn notify_listeners(&mut self, message: &Message) -> Result<(), PeermergeError> {
         let mut closed_indices: Vec<usize> = vec![];
         for i in 0..self.channel_senders.len() {
             if self.channel_senders[i].is_closed() {
