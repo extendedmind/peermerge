@@ -1,6 +1,7 @@
 use futures::channel::mpsc::UnboundedSender;
 use peermerge::{
-    FeedDiskPersistence, FeedMemoryPersistence, Peermerge, ProtocolBuilder, StateEvent,
+    FeedDiskPersistence, FeedMemoryPersistence, Peermerge, PeermergeError, ProtocolBuilder,
+    StateEvent,
 };
 use random_access_disk::RandomAccessDisk;
 use random_access_memory::RandomAccessMemory;
@@ -32,7 +33,7 @@ pub async fn connect_tcp_server_memory(
     host: &str,
     port: u16,
     state_event_sender: &mut UnboundedSender<StateEvent>,
-) -> anyhow::Result<()> {
+) -> Result<(), PeermergeError> {
     let listener = TcpListener::bind(&format!("{}:{}", host, port)).await?;
     let mut incoming = listener.incoming();
     while let Some(Ok(stream)) = incoming.next().await {
@@ -56,7 +57,7 @@ pub async fn connect_tcp_server_memory(
     host: &str,
     port: u16,
     state_event_sender: &mut UnboundedSender<StateEvent>,
-) -> anyhow::Result<()> {
+) -> Result<(), PeermergeError> {
     let listener = TcpListener::bind(&format!("{}:{}", host, port)).await?;
 
     while let Ok((stream, _peer_address)) = listener.accept().await {
@@ -80,7 +81,7 @@ pub async fn connect_tcp_client_memory(
     host: &str,
     port: u16,
     state_event_sender: &mut UnboundedSender<StateEvent>,
-) -> anyhow::Result<()> {
+) -> Result<(), PeermergeError> {
     let stream = TcpStream::connect(&format!("{}:{}", host, port)).await?;
     let mut protocol = ProtocolBuilder::new(true).connect(stream);
     peermerge
@@ -97,7 +98,7 @@ pub async fn connect_tcp_client_memory(
     host: &str,
     port: u16,
     state_event_sender: &mut UnboundedSender<StateEvent>,
-) -> anyhow::Result<()> {
+) -> Result<(), PeermergeError> {
     let stream = TcpStream::connect(&format!("{}:{}", host, port)).await?;
     let mut protocol = ProtocolBuilder::new(true).connect(stream.compat());
     peermerge
@@ -118,7 +119,7 @@ pub async fn connect_tcp_server_disk(
     host: &str,
     port: u16,
     state_event_sender: &mut UnboundedSender<StateEvent>,
-) -> anyhow::Result<()> {
+) -> Result<(), PeermergeError> {
     let listener = TcpListener::bind(&format!("{}:{}", host, port)).await?;
     let mut incoming = listener.incoming();
     while let Some(Ok(stream)) = incoming.next().await {
@@ -142,7 +143,7 @@ pub async fn connect_tcp_server_disk(
     host: &str,
     port: u16,
     state_event_sender: &mut UnboundedSender<StateEvent>,
-) -> anyhow::Result<()> {
+) -> Result<(), PeermergeError> {
     let listener = TcpListener::bind(&format!("{}:{}", host, port)).await?;
 
     while let Ok((stream, _peer_address)) = listener.accept().await {
@@ -166,7 +167,7 @@ pub async fn connect_tcp_client_disk(
     host: &str,
     port: u16,
     state_event_sender: &mut UnboundedSender<StateEvent>,
-) -> anyhow::Result<()> {
+) -> Result<(), PeermergeError> {
     let stream = TcpStream::connect(&format!("{}:{}", host, port)).await?;
     let mut protocol = ProtocolBuilder::new(true).connect(stream);
     peermerge
@@ -183,7 +184,7 @@ pub async fn connect_tcp_client_disk(
     host: &str,
     port: u16,
     state_event_sender: &mut UnboundedSender<StateEvent>,
-) -> anyhow::Result<()> {
+) -> Result<(), PeermergeError> {
     let stream = TcpStream::connect(&format!("{}:{}", host, port)).await?;
     let mut protocol = ProtocolBuilder::new(true).connect(stream.compat());
     peermerge
