@@ -14,14 +14,14 @@ use crate::common::keys::discovery_key_from_public_key;
 use crate::common::utils::Mutex;
 use crate::common::{message::NewPeersCreatedMessage, PeerEvent};
 use crate::document::{get_document, get_document_ids, Document};
-use crate::{DocumentId, FeedPersistence, IO};
+use crate::{DocumentId, FeedPersistence, PeermergeError, IO};
 
 #[instrument(level = "debug", skip_all, fields(is_initiator = protocol.is_initiator()))]
 pub(crate) async fn on_protocol<T, U, V>(
     protocol: &mut Protocol<V>,
     documents: Arc<DashMap<DocumentId, Document<T, U>>>,
     peer_event_sender: &mut UnboundedSender<PeerEvent>,
-) -> anyhow::Result<()>
+) -> Result<(), PeermergeError>
 where
     T: RandomAccess + Debug + Send + 'static,
     U: FeedPersistence,
@@ -40,7 +40,10 @@ where
                     // Ignore broken pipe, can happen when the other end closes shop
                     break;
                 }
-                return Err(anyhow::anyhow!(err));
+                return Err(PeermergeError::IO {
+                    context: Some(format!("Unexpected protocol error")),
+                    source: err,
+                });
             }
             Ok(event) => {
                 match event {
