@@ -5,7 +5,10 @@ use automerge::{
 use std::collections::HashMap;
 
 use super::{apply_entries_autocommit, ApplyEntriesFeedChange, AutomergeDoc, UnappliedEntries};
-use crate::common::entry::{Entry, EntryType};
+use crate::{
+    common::entry::{Entry, EntryType},
+    PeermergeError,
+};
 
 /// Convenience method to initialize an Automerge document with root scalars
 pub(crate) fn init_automerge_doc_with_root_scalars<P: Into<Prop>, V: Into<ScalarValue>>(
@@ -39,11 +42,14 @@ pub(crate) fn init_automerge_doc_from_entries(
     synced_discovery_key: &[u8; 32],
     init_entry: Entry,
     unapplied_entries: &mut UnappliedEntries,
-) -> anyhow::Result<(
-    AutomergeDoc,
-    Vec<u8>,
-    HashMap<[u8; 32], ApplyEntriesFeedChange>,
-)> {
+) -> Result<
+    (
+        AutomergeDoc,
+        Vec<u8>,
+        HashMap<[u8; 32], ApplyEntriesFeedChange>,
+    ),
+    PeermergeError,
+> {
     assert!(init_entry.entry_type == EntryType::InitDoc);
     let contiguous_length = 1;
     let mut automerge_doc =

@@ -1,3 +1,4 @@
+use automerge::AutomergeError;
 use hypercore_protocol::{hypercore::HypercoreError, ChannelSendError};
 use thiserror::Error;
 
@@ -9,6 +10,15 @@ pub enum PeermergeError {
     BadArgument {
         /// Context for the error
         context: String,
+    },
+    #[error("Automerge error occured.{}",
+          .context.as_ref().map_or_else(String::new, |ctx| format!(" {}.", ctx)))]
+    AutomergeError {
+        /// Context for the error
+        context: Option<String>,
+        /// Original source error
+        #[source]
+        source: AutomergeError,
     },
     /// Disconnected
     #[error("Peermerge disconnected. {context}")]
@@ -79,6 +89,15 @@ impl From<HypercoreError> for PeermergeError {
                 context: Some(format!("Hypercore IO error, context: {:?}", context)),
                 source,
             },
+        }
+    }
+}
+
+impl From<AutomergeError> for PeermergeError {
+    fn from(err: AutomergeError) -> Self {
+        Self::AutomergeError {
+            context: None,
+            source: err,
         }
     }
 }

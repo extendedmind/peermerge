@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use super::AutomergeDoc;
 use crate::{
     common::entry::{Entry, EntryType},
-    NameDescription,
+    NameDescription, PeermergeError,
 };
 
 #[derive(Debug)]
@@ -172,7 +172,7 @@ pub(crate) fn apply_entries_autocommit(
     contiguous_length: u64,
     entries: Vec<Entry>,
     unapplied_entries: &mut UnappliedEntries,
-) -> anyhow::Result<HashMap<[u8; 32], ApplyEntriesFeedChange>> {
+) -> Result<HashMap<[u8; 32], ApplyEntriesFeedChange>, PeermergeError> {
     let mut result: HashMap<[u8; 32], ApplyEntriesFeedChange> = HashMap::new();
     let mut changes_to_apply: Vec<Change> = vec![];
     let len = entries.len() as u64;
@@ -232,7 +232,7 @@ pub(crate) fn put_object_autocommit<O: AsRef<ObjId>, P: Into<Prop>>(
     obj: O,
     prop: P,
     object: ObjType,
-) -> anyhow::Result<(Entry, ObjId)> {
+) -> Result<(Entry, ObjId), PeermergeError> {
     let id = automerge_doc.put_object(obj, prop, object)?;
     let change = automerge_doc.get_last_local_change().unwrap().clone();
     Ok((Entry::new_change(change), id))
@@ -243,7 +243,7 @@ pub(crate) fn put_scalar_autocommit<O: AsRef<ObjId>, P: Into<Prop>, V: Into<Scal
     obj: O,
     prop: P,
     value: V,
-) -> anyhow::Result<Entry> {
+) -> Result<Entry, PeermergeError> {
     automerge_doc.put(obj, prop, value)?;
     let change = automerge_doc.get_last_local_change().unwrap().clone();
     Ok(Entry::new_change(change))
@@ -255,7 +255,7 @@ pub(crate) fn splice_text<O: AsRef<ObjId>>(
     index: usize,
     delete: usize,
     text: &str,
-) -> anyhow::Result<Entry> {
+) -> Result<Entry, PeermergeError> {
     automerge_doc.splice_text(obj, index, delete, text)?;
     let change = automerge_doc.get_last_local_change().unwrap().clone();
     Ok(Entry::new_change(change))

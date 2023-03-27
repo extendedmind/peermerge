@@ -34,7 +34,7 @@ use crate::{
         PeerEventContent,
     },
     feed::{FeedMemoryPersistence, FeedPersistence, Protocol},
-    StateEventContent,
+    PeermergeError, StateEventContent,
 };
 use crate::{
     common::{DocumentInfo, PeerEvent},
@@ -86,7 +86,7 @@ where
         document_id: &DocumentId,
         obj: O,
         prop: P,
-    ) -> anyhow::Result<Option<ObjId>> {
+    ) -> Result<Option<ObjId>, PeermergeError> {
         let document = get_document(&self.documents, document_id).await.unwrap();
         document.get_id(obj, prop).await
     }
@@ -97,7 +97,7 @@ where
         document_id: &DocumentId,
         obj: O,
         prop: P,
-    ) -> anyhow::Result<Option<ScalarValue>> {
+    ) -> Result<Option<ScalarValue>, PeermergeError> {
         let document = get_document(&self.documents, document_id).await.unwrap();
         document.get_scalar(obj, prop).await
     }
@@ -107,7 +107,7 @@ where
         &self,
         document_id: &DocumentId,
         obj: O,
-    ) -> anyhow::Result<Option<String>> {
+    ) -> Result<Option<String>, PeermergeError> {
         let document = get_document(&self.documents, document_id).await.unwrap();
         document.realize_text(obj).await
     }
@@ -119,7 +119,7 @@ where
         obj: O,
         prop: P,
         object: ObjType,
-    ) -> anyhow::Result<ObjId> {
+    ) -> Result<ObjId, PeermergeError> {
         let result = {
             let mut document = get_document(&self.documents, document_id).await.unwrap();
             document.put_object(obj, prop, object).await?
@@ -137,7 +137,7 @@ where
         obj: O,
         prop: P,
         value: V,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), PeermergeError> {
         let result = {
             let mut document = get_document(&self.documents, document_id).await.unwrap();
             document.put_scalar(obj, prop, value).await?
@@ -156,7 +156,7 @@ where
         index: usize,
         delete: usize,
         text: &str,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), PeermergeError> {
         let result = {
             let mut document = get_document(&self.documents, document_id).await.unwrap();
             document.splice_text(obj, index, delete, text).await?
@@ -168,7 +168,7 @@ where
     }
 
     #[instrument(skip(self), fields(peer_name = self.peer_header.name))]
-    pub async fn close(&mut self) -> anyhow::Result<()> {
+    pub async fn close(&mut self) -> Result<(), PeermergeError> {
         for document_id in get_document_ids(&self.documents).await {
             let mut document = get_document(&self.documents, &document_id).await.unwrap();
             document.close().await?;
@@ -183,7 +183,7 @@ where
     }
 
     #[instrument(skip(self), fields(peer_name = self.peer_header.name))]
-    pub async fn uncork(&mut self, document_id: &DocumentId) -> anyhow::Result<()> {
+    pub async fn uncork(&mut self, document_id: &DocumentId) -> Result<(), PeermergeError> {
         let mut document = get_document(&self.documents, document_id).await.unwrap();
         document.uncork().await
     }
@@ -329,7 +329,7 @@ impl Peermerge<RandomAccessMemory, FeedMemoryPersistence> {
         &mut self,
         protocol: &mut Protocol<T>,
         state_event_sender: &mut UnboundedSender<StateEvent>,
-    ) -> anyhow::Result<()>
+    ) -> Result<(), PeermergeError>
     where
         T: IO,
     {
@@ -519,7 +519,7 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
         &mut self,
         protocol: &mut Protocol<T>,
         state_event_sender: &mut UnboundedSender<StateEvent>,
-    ) -> anyhow::Result<()>
+    ) -> Result<(), PeermergeError>
     where
         T: IO,
     {

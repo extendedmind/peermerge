@@ -39,7 +39,7 @@ use crate::{
     },
     FeedMemoryPersistence, FeedPersistence, StateEvent,
 };
-use crate::{DocumentId, NameDescription};
+use crate::{DocumentId, NameDescription, PeermergeError};
 
 /// Document represents a single Automerge doc shared via feeds.
 #[derive(derivative::Derivative)]
@@ -137,7 +137,7 @@ where
         &self,
         obj: O,
         prop: P,
-    ) -> anyhow::Result<Option<ObjId>> {
+    ) -> Result<Option<ObjId>, PeermergeError> {
         if self.proxy {
             panic!("Can not get id on a proxy");
         }
@@ -170,7 +170,7 @@ where
         &self,
         obj: O,
         prop: P,
-    ) -> anyhow::Result<Option<ScalarValue>> {
+    ) -> Result<Option<ScalarValue>, PeermergeError> {
         if self.proxy {
             panic!("Can not get id on a proxy");
         }
@@ -207,7 +207,7 @@ where
         &self,
         obj: O,
         prop: P,
-    ) -> anyhow::Result<Option<(Value, ObjId)>> {
+    ) -> Result<Option<(Value, ObjId)>, PeermergeError> {
         if self.proxy {
             panic!("Can not get document values on a proxy");
         }
@@ -241,7 +241,7 @@ where
     pub(crate) async fn realize_text<O: AsRef<ObjId>>(
         &self,
         obj: O,
-    ) -> anyhow::Result<Option<String>> {
+    ) -> Result<Option<String>, PeermergeError> {
         if self.proxy {
             panic!("Can not realize text on a proxy");
         }
@@ -286,7 +286,7 @@ where
         obj: O,
         prop: P,
         object: ObjType,
-    ) -> anyhow::Result<ObjId> {
+    ) -> Result<ObjId, PeermergeError> {
         if self.proxy {
             panic!("Can not put object on a proxy");
         }
@@ -323,7 +323,7 @@ where
         obj: O,
         prop: P,
         value: V,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), PeermergeError> {
         if self.proxy {
             panic!("Can not put scalar on a proxy");
         }
@@ -360,7 +360,7 @@ where
         index: usize,
         delete: usize,
         text: &str,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), PeermergeError> {
         if self.proxy {
             panic!("Can not splice text on a proxy");
         }
@@ -390,7 +390,7 @@ where
     }
 
     #[instrument(skip_all, fields(doc_name = self.document_name))]
-    pub(crate) async fn close(&mut self) -> anyhow::Result<()> {
+    pub(crate) async fn close(&mut self) -> Result<(), PeermergeError> {
         let root_feed = get_feed(&self.feeds, &self.root_discovery_key)
             .await
             .unwrap();
@@ -412,7 +412,7 @@ where
     }
 
     #[instrument(skip_all, fields(doc_name = self.document_name))]
-    pub(crate) async fn uncork(&mut self) -> anyhow::Result<()> {
+    pub(crate) async fn uncork(&mut self) -> Result<(), PeermergeError> {
         if self.proxy {
             panic!("Can not uncork a proxy");
         }
@@ -622,13 +622,14 @@ where
         synced_contiguous_length: u64,
         write_discovery_key: &[u8; 32],
         unapplied_entries: &mut UnappliedEntries,
-    ) -> anyhow::Result<
+    ) -> Result<
         Option<(
             DocumentContent,
             Vec<([u8; 32], NameDescription)>,
             Option<NameDescription>,
             Vec<([u8; 32], u64)>,
         )>,
+        PeermergeError,
     > {
         // The document starts from the doc feed, so get that first
         if synced_discovery_key == &self.root_discovery_key {
@@ -718,12 +719,15 @@ where
         synced_contiguous_length: u64,
         content: &mut DocumentContent,
         unapplied_entries: &mut UnappliedEntries,
-    ) -> anyhow::Result<(
-        Vec<Patch>,
-        Vec<([u8; 32], NameDescription)>,
-        Option<NameDescription>,
-        Vec<([u8; 32], u64)>,
-    )> {
+    ) -> Result<
+        (
+            Vec<Patch>,
+            Vec<([u8; 32], NameDescription)>,
+            Option<NameDescription>,
+            Vec<([u8; 32], u64)>,
+        ),
+        PeermergeError,
+    > {
         let (_, entries) = get_new_entries(
             synced_discovery_key,
             Some(synced_contiguous_length),
@@ -1538,7 +1542,7 @@ async fn update_content<T>(
     write_discovery_key: &Option<[u8; 32]>,
     feeds: &Arc<DashMap<[u8; 32], Arc<Mutex<Feed<T>>>>>,
     unapplied_entries: &mut UnappliedEntries,
-) -> anyhow::Result<(bool, Vec<([u8; 32], NameDescription)>)>
+) -> Result<(bool, Vec<([u8; 32], NameDescription)>), PeermergeError>
 where
     T: RandomAccess + Debug + Send + 'static,
 {
@@ -1572,7 +1576,7 @@ async fn get_new_entries<T>(
     known_contiguous_length: Option<u64>,
     content: &mut DocumentContent,
     feeds: &Arc<DashMap<[u8; 32], Arc<Mutex<Feed<T>>>>>,
-) -> anyhow::Result<(u64, Vec<Entry>)>
+) -> Result<(u64, Vec<Entry>), PeermergeError>
 where
     T: RandomAccess + Debug + Send + 'static,
 {
@@ -1597,12 +1601,15 @@ async fn update_content_with_entries(
     write_discovery_key: &Option<[u8; 32]>,
     content: &mut DocumentContent,
     unapplied_entries: &mut UnappliedEntries,
-) -> anyhow::Result<(
-    Vec<Patch>,
-    Vec<([u8; 32], NameDescription)>,
-    Option<NameDescription>,
-    Vec<([u8; 32], u64)>,
-)> {
+) -> Result<
+    (
+        Vec<Patch>,
+        Vec<([u8; 32], NameDescription)>,
+        Option<NameDescription>,
+        Vec<([u8; 32], u64)>,
+    ),
+    PeermergeError,
+> {
     let (patches, new_headers, reattached_peer_header, cursor_changes, peer_syncs) = {
         let automerge_doc = content.automerge_doc.as_mut().unwrap();
         let result = apply_entries_autocommit(
