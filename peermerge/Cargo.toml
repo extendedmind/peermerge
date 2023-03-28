@@ -10,7 +10,7 @@ authors = ["Timo Tiuraniemi <timo.tiuraniemi@iki.fi>"]
 
 [dependencies]
 automerge = { version = "0.3.0", features = ["wasm"] }
-hypercore-protocol = { git = "https://github.com/ttiurani/hypercore-protocol-rs", branch = "v10_cleanup", default-features = false }
+hypercore-protocol = { git = "https://github.com/ttiurani/hypercore-protocol-rs", branch = "v10_cleanup", default-features = false, features = ["cache"] }
 random-access-storage = { git = "https://github.com/ttiurani/random-access-storage", branch = "thiserror" }
 random-access-memory = { git = "https://github.com/ttiurani/random-access-memory", branch = "thiserror" }
 thiserror = "1"
