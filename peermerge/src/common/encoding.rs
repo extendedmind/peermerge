@@ -1,5 +1,5 @@
 //! Binary encoding of needed peermerge persistent data
-use compact_encoding::{CompactEncoding, State};
+use compact_encoding::{CompactEncoding, EncodingError, State};
 use std::convert::TryInto;
 
 pub(crate) use crate::common::entry::Entry;
@@ -11,52 +11,61 @@ use super::state::{DocumentContent, DocumentCursor, DocumentPeerState};
 use crate::NameDescription;
 
 impl CompactEncoding<PeermergeState> for State {
-    fn preencode(&mut self, value: &PeermergeState) {
-        self.preencode(&value.version);
-        self.preencode(&value.peer_header);
-        preencode_fixed_32_byte_vec(self, &value.document_ids);
+    fn preencode(&mut self, value: &PeermergeState) -> Result<usize, EncodingError> {
+        self.preencode(&value.version)?;
+        self.preencode(&value.peer_header)?;
+        preencode_fixed_32_byte_vec(self, &value.document_ids)
     }
 
-    fn encode(&mut self, value: &PeermergeState, buffer: &mut [u8]) {
-        self.encode(&value.version, buffer);
-        self.encode(&value.peer_header, buffer);
-        encode_fixed_32_byte_vec(self, &value.document_ids, buffer);
+    fn encode(
+        &mut self,
+        value: &PeermergeState,
+        buffer: &mut [u8],
+    ) -> Result<usize, EncodingError> {
+        self.encode(&value.version, buffer)?;
+        self.encode(&value.peer_header, buffer)?;
+        encode_fixed_32_byte_vec(self, &value.document_ids, buffer)
     }
 
-    fn decode(&mut self, buffer: &[u8]) -> PeermergeState {
-        let version: u8 = self.decode(buffer);
-        let peer_header: NameDescription = self.decode(buffer);
-        let document_ids = decode_fixed_32_byte_vec(self, buffer);
-        PeermergeState::new_with_version(version, peer_header, document_ids)
+    fn decode(&mut self, buffer: &[u8]) -> Result<PeermergeState, EncodingError> {
+        let version: u8 = self.decode(buffer)?;
+        let peer_header: NameDescription = self.decode(buffer)?;
+        let document_ids = decode_fixed_32_byte_vec(self, buffer)?;
+        Ok(PeermergeState::new_with_version(
+            version,
+            peer_header,
+            document_ids,
+        ))
     }
 }
 
 impl CompactEncoding<DocumentState> for State {
-    fn preencode(&mut self, value: &DocumentState) {
-        self.preencode(&value.version);
-        self.preencode(&value.plain_doc_url);
-        self.end += 1; // flags
+    fn preencode(&mut self, value: &DocumentState) -> Result<usize, EncodingError> {
+        self.preencode(&value.version)?;
+        self.preencode(&value.plain_doc_url)?;
+        self.add_end(1)?; // flags
         let len = value.peers.len();
         if len > 0 {
-            self.preencode(&len);
+            self.preencode(&len)?;
             for peer in &value.peers {
-                self.preencode(peer);
+                self.preencode(peer)?;
             }
         }
         if value.write_public_key.is_some() {
-            self.end += 32;
+            self.add_end(32)?;
         }
         if let Some(content) = &value.content {
-            self.preencode(content);
+            self.preencode(content)?;
         }
+        Ok(self.end())
     }
 
-    fn encode(&mut self, value: &DocumentState, buffer: &mut [u8]) {
-        self.encode(&value.version, buffer);
-        self.encode(&value.plain_doc_url, buffer);
-        let flags_index = self.start;
+    fn encode(&mut self, value: &DocumentState, buffer: &mut [u8]) -> Result<usize, EncodingError> {
+        self.encode(&value.version, buffer)?;
+        self.encode(&value.plain_doc_url, buffer)?;
+        let flags_index = self.start();
         let mut flags: u8 = 0;
-        self.start += 1;
+        self.add_start(1)?;
         if value.proxy {
             flags = flags | 1;
         }
@@ -66,34 +75,35 @@ impl CompactEncoding<DocumentState> for State {
         let len = value.peers.len();
         if len > 0 {
             flags = flags | 4;
-            self.encode(&len, buffer);
+            self.encode(&len, buffer)?;
             for peer in &value.peers {
-                self.encode(peer, buffer);
+                self.encode(peer, buffer)?;
             }
         }
         if let Some(write_public_key) = &value.write_public_key {
             flags = flags | 8;
-            self.encode_fixed_32(write_public_key, buffer);
+            self.encode_fixed_32(write_public_key, buffer)?;
         }
         if let Some(content) = &value.content {
             flags = flags | 16;
-            self.encode(content, buffer);
+            self.encode(content, buffer)?;
         }
 
         buffer[flags_index] = flags;
+        Ok(self.start())
     }
 
-    fn decode(&mut self, buffer: &[u8]) -> DocumentState {
-        let version: u8 = self.decode(buffer);
-        let plain_doc_url: String = self.decode(buffer);
-        let flags: u8 = self.decode(buffer);
+    fn decode(&mut self, buffer: &[u8]) -> Result<DocumentState, EncodingError> {
+        let version: u8 = self.decode(buffer)?;
+        let plain_doc_url: String = self.decode(buffer)?;
+        let flags: u8 = self.decode(buffer)?;
         let proxy = flags & 1 != 0;
         let encrypted: Option<bool> = if !proxy { Some(flags & 2 != 0) } else { None };
         let peers: Vec<DocumentPeerState> = if flags & 4 != 0 {
-            let len: usize = self.decode(buffer);
+            let len: usize = self.decode(buffer)?;
             let mut peers: Vec<DocumentPeerState> = Vec::with_capacity(len);
             for _ in 0..len {
-                let peer: DocumentPeerState = self.decode(buffer);
+                let peer: DocumentPeerState = self.decode(buffer)?;
                 peers.push(peer);
             }
             peers
@@ -102,17 +112,17 @@ impl CompactEncoding<DocumentState> for State {
         };
 
         let write_public_key: Option<[u8; 32]> = if flags & 8 != 0 {
-            Some(self.decode_fixed_32(buffer).to_vec().try_into().unwrap())
+            Some(self.decode_fixed_32(buffer)?.to_vec().try_into().unwrap())
         } else {
             None
         };
 
         let content: Option<DocumentContent> = if flags & 16 != 0 {
-            Some(self.decode(buffer))
+            Some(self.decode(buffer)?)
         } else {
             None
         };
-        DocumentState::new_from_plain_doc_url(
+        Ok(DocumentState::new_from_plain_doc_url(
             version,
             plain_doc_url,
             proxy,
@@ -120,305 +130,359 @@ impl CompactEncoding<DocumentState> for State {
             peers,
             write_public_key,
             content,
-        )
+        ))
     }
 }
 
 impl CompactEncoding<DocumentPeerState> for State {
-    fn preencode(&mut self, value: &DocumentPeerState) {
-        self.end += 32;
-        self.end += 1; // flags
+    fn preencode(&mut self, value: &DocumentPeerState) -> Result<usize, EncodingError> {
+        self.add_end(32 + 1)?; // flags
         if let Some(peer_header) = &value.peer_header {
-            self.preencode(peer_header);
+            self.preencode(peer_header)?;
         }
+        Ok(self.end())
     }
 
-    fn encode(&mut self, value: &DocumentPeerState, buffer: &mut [u8]) {
-        self.encode_fixed_32(&value.public_key, buffer);
-        let flags_index = self.start;
+    fn encode(
+        &mut self,
+        value: &DocumentPeerState,
+        buffer: &mut [u8],
+    ) -> Result<usize, EncodingError> {
+        self.encode_fixed_32(&value.public_key, buffer)?;
+        let flags_index = self.start();
         let mut flags: u8 = 0;
-        self.start += 1;
+        self.add_start(1)?;
         if let Some(peer_header) = &value.peer_header {
             flags = flags | 1;
-            self.encode(peer_header, buffer);
+            self.encode(peer_header, buffer)?;
         }
         buffer[flags_index] = flags;
+        Ok(self.start())
     }
 
-    fn decode(&mut self, buffer: &[u8]) -> DocumentPeerState {
-        let public_key: [u8; 32] = self.decode_fixed_32(buffer).to_vec().try_into().unwrap();
-        let flags: u8 = self.decode(buffer);
+    fn decode(&mut self, buffer: &[u8]) -> Result<DocumentPeerState, EncodingError> {
+        let public_key: [u8; 32] = self.decode_fixed_32(buffer)?.to_vec().try_into().unwrap();
+        let flags: u8 = self.decode(buffer)?;
         let peer_header: Option<NameDescription> = if flags & 1 != 0 {
-            Some(self.decode(buffer))
+            Some(self.decode(buffer)?)
         } else {
             None
         };
-        DocumentPeerState::new(public_key, peer_header)
+        Ok(DocumentPeerState::new(public_key, peer_header))
     }
 }
 
 impl CompactEncoding<DocumentContent> for State {
-    fn preencode(&mut self, value: &DocumentContent) {
-        self.preencode(&value.data);
+    fn preencode(&mut self, value: &DocumentContent) -> Result<usize, EncodingError> {
+        self.preencode(&value.data)?;
         let len = value.cursors.len();
-        self.preencode(&len);
+        self.preencode(&len)?;
         for cursor in &value.cursors {
-            self.preencode(cursor);
+            self.preencode(cursor)?;
         }
+        Ok(self.end())
     }
 
-    fn encode(&mut self, value: &DocumentContent, buffer: &mut [u8]) {
-        self.encode(&value.data, buffer);
+    fn encode(
+        &mut self,
+        value: &DocumentContent,
+        buffer: &mut [u8],
+    ) -> Result<usize, EncodingError> {
+        self.encode(&value.data, buffer)?;
         let len = value.cursors.len();
-        self.encode(&len, buffer);
+        self.encode(&len, buffer)?;
         for cursor in &value.cursors {
-            self.encode(cursor, buffer);
+            self.encode(cursor, buffer)?;
         }
+        Ok(self.start())
     }
 
-    fn decode(&mut self, buffer: &[u8]) -> DocumentContent {
-        let data: Vec<u8> = self.decode(buffer);
-        let len: usize = self.decode(buffer);
+    fn decode(&mut self, buffer: &[u8]) -> Result<DocumentContent, EncodingError> {
+        let data: Vec<u8> = self.decode(buffer)?;
+        let len: usize = self.decode(buffer)?;
         let mut cursors: Vec<DocumentCursor> = Vec::with_capacity(len);
         for _ in 0..len {
-            let cursor: DocumentCursor = self.decode(buffer);
+            let cursor: DocumentCursor = self.decode(buffer)?;
             cursors.push(cursor);
         }
-        DocumentContent {
+        Ok(DocumentContent {
             data,
             cursors,
             automerge_doc: None,
-        }
+        })
     }
 }
 
 impl CompactEncoding<DocumentCursor> for State {
-    fn preencode(&mut self, value: &DocumentCursor) {
-        self.end += 32;
-        self.preencode(&value.length);
+    fn preencode(&mut self, value: &DocumentCursor) -> Result<usize, EncodingError> {
+        self.add_end(32)?;
+        self.preencode(&value.length)
     }
 
-    fn encode(&mut self, value: &DocumentCursor, buffer: &mut [u8]) {
-        self.encode_fixed_32(&value.discovery_key, buffer);
-        self.encode(&value.length, buffer);
+    fn encode(
+        &mut self,
+        value: &DocumentCursor,
+        buffer: &mut [u8],
+    ) -> Result<usize, EncodingError> {
+        self.encode_fixed_32(&value.discovery_key, buffer)?;
+        self.encode(&value.length, buffer)
     }
 
-    fn decode(&mut self, buffer: &[u8]) -> DocumentCursor {
-        let discovery_key: [u8; 32] = self.decode_fixed_32(buffer).to_vec().try_into().unwrap();
-        let length: u64 = self.decode(buffer);
-        DocumentCursor {
+    fn decode(&mut self, buffer: &[u8]) -> Result<DocumentCursor, EncodingError> {
+        let discovery_key: [u8; 32] = self.decode_fixed_32(buffer)?.to_vec().try_into().unwrap();
+        let length: u64 = self.decode(buffer)?;
+        Ok(DocumentCursor {
             discovery_key,
             length,
-        }
+        })
     }
 }
 
 impl CompactEncoding<BroadcastMessage> for State {
-    fn preencode(&mut self, value: &BroadcastMessage) {
-        self.end += 1; // flags
+    fn preencode(&mut self, value: &BroadcastMessage) -> Result<usize, EncodingError> {
+        self.add_end(1)?; // flags
         if value.write_public_key.is_some() {
-            self.end += 32;
+            self.add_end(32)?;
         }
         let len = value.peer_public_keys.len();
         if len > 0 {
-            preencode_fixed_32_byte_vec(self, &value.peer_public_keys);
+            preencode_fixed_32_byte_vec(self, &value.peer_public_keys)?;
         }
+        Ok(self.end())
     }
 
-    fn encode(&mut self, value: &BroadcastMessage, buffer: &mut [u8]) {
-        let flags_index = self.start;
+    fn encode(
+        &mut self,
+        value: &BroadcastMessage,
+        buffer: &mut [u8],
+    ) -> Result<usize, EncodingError> {
+        let flags_index = self.start();
         let mut flags: u8 = 0;
-        self.start += 1;
+        self.add_start(1)?;
         if let Some(public_key) = &value.write_public_key {
             flags = flags | 1;
-            self.encode_fixed_32(public_key, buffer);
+            self.encode_fixed_32(public_key, buffer)?;
         }
         let len = value.peer_public_keys.len();
         if len > 0 {
             flags = flags | 2;
-            encode_fixed_32_byte_vec(self, &value.peer_public_keys, buffer);
+            encode_fixed_32_byte_vec(self, &value.peer_public_keys, buffer)?;
         }
         buffer[flags_index] = flags;
+        Ok(self.start())
     }
 
-    fn decode(&mut self, buffer: &[u8]) -> BroadcastMessage {
-        let flags: u8 = self.decode(buffer);
+    fn decode(&mut self, buffer: &[u8]) -> Result<BroadcastMessage, EncodingError> {
+        let flags: u8 = self.decode(buffer)?;
         let write_public_key: Option<[u8; 32]> = if flags & 1 != 0 {
-            Some(self.decode_fixed_32(buffer).to_vec().try_into().unwrap())
+            Some(self.decode_fixed_32(buffer)?.to_vec().try_into().unwrap())
         } else {
             None
         };
         let peer_public_keys: Vec<[u8; 32]> = if flags & 2 != 0 {
-            decode_fixed_32_byte_vec(self, buffer)
+            decode_fixed_32_byte_vec(self, buffer)?
         } else {
             vec![]
         };
-        BroadcastMessage::new(write_public_key, peer_public_keys)
+        Ok(BroadcastMessage::new(write_public_key, peer_public_keys))
     }
 }
 
 impl CompactEncoding<NewPeersCreatedMessage> for State {
-    fn preencode(&mut self, value: &NewPeersCreatedMessage) {
-        self.end += 32;
-        preencode_fixed_32_byte_vec(self, &value.public_keys);
+    fn preencode(&mut self, value: &NewPeersCreatedMessage) -> Result<usize, EncodingError> {
+        self.add_end(32)?;
+        preencode_fixed_32_byte_vec(self, &value.public_keys)
     }
 
-    fn encode(&mut self, value: &NewPeersCreatedMessage, buffer: &mut [u8]) {
-        self.encode_fixed_32(&value.doc_discovery_key, buffer);
-        encode_fixed_32_byte_vec(self, &value.public_keys, buffer);
+    fn encode(
+        &mut self,
+        value: &NewPeersCreatedMessage,
+        buffer: &mut [u8],
+    ) -> Result<usize, EncodingError> {
+        self.encode_fixed_32(&value.doc_discovery_key, buffer)?;
+        encode_fixed_32_byte_vec(self, &value.public_keys, buffer)
     }
 
-    fn decode(&mut self, buffer: &[u8]) -> NewPeersCreatedMessage {
-        let doc_discovery_key: [u8; 32] = self.decode_fixed_32(buffer).to_vec().try_into().unwrap();
-        let public_keys: Vec<[u8; 32]> = decode_fixed_32_byte_vec(self, buffer);
-        NewPeersCreatedMessage::new(doc_discovery_key, public_keys)
+    fn decode(&mut self, buffer: &[u8]) -> Result<NewPeersCreatedMessage, EncodingError> {
+        let doc_discovery_key: [u8; 32] =
+            self.decode_fixed_32(buffer)?.to_vec().try_into().unwrap();
+        let public_keys: Vec<[u8; 32]> = decode_fixed_32_byte_vec(self, buffer)?;
+        Ok(NewPeersCreatedMessage::new(doc_discovery_key, public_keys))
     }
 }
 
 impl CompactEncoding<PeerSyncedMessage> for State {
-    fn preencode(&mut self, value: &PeerSyncedMessage) {
-        self.preencode(&value.contiguous_length);
+    fn preencode(&mut self, value: &PeerSyncedMessage) -> Result<usize, EncodingError> {
+        self.preencode(&value.contiguous_length)
     }
 
-    fn encode(&mut self, value: &PeerSyncedMessage, buffer: &mut [u8]) {
-        self.encode(&value.contiguous_length, buffer);
+    fn encode(
+        &mut self,
+        value: &PeerSyncedMessage,
+        buffer: &mut [u8],
+    ) -> Result<usize, EncodingError> {
+        self.encode(&value.contiguous_length, buffer)
     }
 
-    fn decode(&mut self, buffer: &[u8]) -> PeerSyncedMessage {
-        let contiguous_length: u64 = self.decode(buffer);
-        PeerSyncedMessage { contiguous_length }
+    fn decode(&mut self, buffer: &[u8]) -> Result<PeerSyncedMessage, EncodingError> {
+        let contiguous_length: u64 = self.decode(buffer)?;
+        Ok(PeerSyncedMessage { contiguous_length })
     }
 }
 
 impl CompactEncoding<Entry> for State {
-    fn preencode(&mut self, value: &Entry) {
-        self.preencode(&value.version);
-        self.preencode(&(value.entry_type as u8));
-        self.end += 1; // flags
+    fn preencode(&mut self, value: &Entry) -> Result<usize, EncodingError> {
+        self.preencode(&value.version)?;
+        self.preencode(&(value.entry_type as u8))?;
+        self.add_end(1)?; // flags
         if value.data.len() > 0 {
-            self.preencode(&value.data);
+            self.preencode(&value.data)?;
         }
         if let Some(name) = &value.name {
-            self.preencode(name);
+            self.preencode(name)?;
         }
         if let Some(peer_name) = &value.description {
-            self.preencode(peer_name);
+            self.preencode(peer_name)?;
         }
+        Ok(self.end())
     }
 
-    fn encode(&mut self, value: &Entry, buffer: &mut [u8]) {
-        self.encode(&value.version, buffer);
-        self.encode(&(value.entry_type as u8), buffer);
+    fn encode(&mut self, value: &Entry, buffer: &mut [u8]) -> Result<usize, EncodingError> {
+        self.encode(&value.version, buffer)?;
+        self.encode(&(value.entry_type as u8), buffer)?;
 
-        let flags_index = self.start;
+        let flags_index = self.start();
         let mut flags: u8 = 0;
-        self.start += 1;
+        self.add_start(1)?;
         if value.data.len() > 0 {
             flags = flags | 1;
-            self.encode(&value.data, buffer);
+            self.encode(&value.data, buffer)?;
         }
         if let Some(name) = &value.name {
             flags = flags | 2;
-            self.encode(name, buffer);
+            self.encode(name, buffer)?;
         }
         if let Some(peer_name) = &value.description {
             flags = flags | 4;
-            self.encode(peer_name, buffer);
+            self.encode(peer_name, buffer)?;
         }
         buffer[flags_index] = flags;
+        Ok(self.start())
     }
 
-    fn decode(&mut self, buffer: &[u8]) -> Entry {
-        let version: u8 = self.decode(buffer);
-        let entry_type: u8 = self.decode(buffer);
-        let flags: u8 = self.decode(buffer);
+    fn decode(&mut self, buffer: &[u8]) -> Result<Entry, EncodingError> {
+        let version: u8 = self.decode(buffer)?;
+        let entry_type: u8 = self.decode(buffer)?;
+        let flags: u8 = self.decode(buffer)?;
 
         let data: Vec<u8> = if flags & 1 != 0 {
-            self.decode(buffer)
+            self.decode(buffer)?
         } else {
             vec![]
         };
 
         let name: Option<String> = if flags & 2 != 0 {
-            Some(self.decode(buffer))
+            Some(self.decode(buffer)?)
         } else {
             None
         };
 
         let description: Option<String> = if flags & 4 != 0 {
-            Some(self.decode(buffer))
+            Some(self.decode(buffer)?)
         } else {
             None
         };
-        Entry::new(
+        Ok(Entry::new(
             version,
             entry_type.try_into().unwrap(),
             name,
             description,
             data,
-        )
+        ))
     }
 }
 
 impl CompactEncoding<NameDescription> for State {
-    fn preencode(&mut self, value: &NameDescription) {
-        self.preencode(&value.name);
+    fn preencode(&mut self, value: &NameDescription) -> Result<usize, EncodingError> {
+        self.preencode(&value.name)?;
         if let Some(description) = &value.description {
-            self.preencode(description);
+            self.preencode(description)?;
         } else {
-            self.preencode(&"".to_string());
+            self.preencode(&"".to_string())?;
         }
+        Ok(self.end())
     }
 
-    fn encode(&mut self, value: &NameDescription, buffer: &mut [u8]) {
-        self.encode(&value.name, buffer);
+    fn encode(
+        &mut self,
+        value: &NameDescription,
+        buffer: &mut [u8],
+    ) -> Result<usize, EncodingError> {
+        self.encode(&value.name, buffer)?;
         if let Some(description) = &value.description {
-            self.encode(description, buffer);
+            self.encode(description, buffer)?;
         } else {
-            self.encode(&"".to_string(), buffer);
+            self.encode(&"".to_string(), buffer)?;
         }
+        Ok(self.start())
     }
 
-    fn decode(&mut self, buffer: &[u8]) -> NameDescription {
-        let name: String = self.decode(buffer);
-        let description: String = self.decode(buffer);
+    fn decode(&mut self, buffer: &[u8]) -> Result<NameDescription, EncodingError> {
+        let name: String = self.decode(buffer)?;
+        let description: String = self.decode(buffer)?;
         let description: Option<String> = if description.is_empty() {
             None
         } else {
             Some(description)
         };
-        NameDescription { name, description }
+        Ok(NameDescription { name, description })
     }
 }
 
-pub(crate) fn serialize_entry(entry: &Entry) -> Vec<u8> {
+pub(crate) fn serialize_entry(entry: &Entry) -> Result<Vec<u8>, EncodingError> {
     let mut enc_state = State::new();
-    enc_state.preencode(entry);
+    enc_state.preencode(entry)?;
     let mut buffer = enc_state.create_buffer();
-    enc_state.encode(entry, &mut buffer);
-    buffer.to_vec()
+    enc_state.encode(entry, &mut buffer)?;
+    Ok(buffer.to_vec())
 }
 
-fn preencode_fixed_32_byte_vec(state: &mut State, entries: &Vec<[u8; 32]>) {
+fn preencode_fixed_32_byte_vec(
+    state: &mut State,
+    entries: &Vec<[u8; 32]>,
+) -> Result<usize, EncodingError> {
     let len = entries.len();
-    state.preencode(&len);
-    state.end += len * 32;
+    state.preencode(&len)?;
+    state.add_end(len * 32)?;
+    Ok(state.end())
 }
 
-fn encode_fixed_32_byte_vec(state: &mut State, entries: &Vec<[u8; 32]>, buffer: &mut [u8]) {
-    state.encode(&entries.len(), buffer);
+fn encode_fixed_32_byte_vec(
+    state: &mut State,
+    entries: &Vec<[u8; 32]>,
+    buffer: &mut [u8],
+) -> Result<usize, EncodingError> {
+    state.encode(&entries.len(), buffer)?;
     for entry in entries {
-        buffer[state.start..state.start + 32].copy_from_slice(entry);
-        state.start += 32;
+        buffer[state.start()..state.start() + 32].copy_from_slice(entry);
+        state.add_start(32)?;
     }
+    Ok(state.start())
 }
 
-fn decode_fixed_32_byte_vec(state: &mut State, buffer: &[u8]) -> Vec<[u8; 32]> {
-    let len: usize = state.decode(buffer);
+fn decode_fixed_32_byte_vec(
+    state: &mut State,
+    buffer: &[u8],
+) -> Result<Vec<[u8; 32]>, EncodingError> {
+    let len: usize = state.decode(buffer)?;
     let mut entries: Vec<[u8; 32]> = Vec::with_capacity(len);
     for _ in 0..len {
-        entries.push(buffer[state.start..state.start + 32].try_into().unwrap());
-        state.start += 32;
+        entries.push(
+            buffer[state.start()..state.start() + 32]
+                .try_into()
+                .unwrap(),
+        );
+        state.add_start(32)?;
     }
-    entries
+    Ok(entries)
 }

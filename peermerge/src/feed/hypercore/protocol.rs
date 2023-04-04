@@ -138,7 +138,7 @@ where
                     Event::LocalSignal((name, data)) => match name.as_str() {
                         NEW_PEERS_CREATED_LOCAL_SIGNAL_NAME => {
                             let mut dec_state = State::from_buffer(&data);
-                            let message: NewPeersCreatedMessage = dec_state.decode(&data);
+                            let message: NewPeersCreatedMessage = dec_state.decode(&data)?;
                             let discovery_keys_to_open: Vec<[u8; 32]> = message
                                 .public_keys
                                 .iter()

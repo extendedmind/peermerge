@@ -1,4 +1,5 @@
 use automerge::AutomergeError;
+use compact_encoding::EncodingError;
 use hypercore_protocol::{hypercore::HypercoreError, ChannelSendError};
 use thiserror::Error;
 
@@ -120,6 +121,14 @@ impl<T> From<ChannelSendError<T>> for PeermergeError {
     fn from(err: ChannelSendError<T>) -> Self {
         Self::InvalidOperation {
             context: format!("Unexpected hypercore protocol channel error, {:?}", err),
+        }
+    }
+}
+
+impl From<EncodingError> for PeermergeError {
+    fn from(err: EncodingError) -> Self {
+        Self::InvalidOperation {
+            context: format!("{}", err),
         }
     }
 }

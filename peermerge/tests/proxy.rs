@@ -37,7 +37,7 @@ async fn proxy_disk_encrypted() -> anyhow::Result<()> {
             vec![("version", 1)],
             true,
         )
-        .await;
+        .await?;
     peermerge_creator.watch(&creator_doc_id, vec![ROOT]).await;
     let doc_url = peermerge_creator.doc_url(&creator_doc_id).await;
     let proxy_doc_url = peermerge_creator.proxy_doc_url(&creator_doc_id).await;
@@ -102,7 +102,7 @@ async fn proxy_disk_encrypted() -> anyhow::Result<()> {
     let mut peermerge_joiner = Peermerge::new_memory(NameDescription::new("joiner")).await;
     let joiner_doc_id = peermerge_joiner
         .attach_writer_document_memory(&doc_url, &encryption_key)
-        .await;
+        .await?;
     let write_key_pair: String = peermerge_joiner.write_key_pair(&joiner_doc_id).await;
     let mut peermerge_joiner_for_task = peermerge_joiner.clone();
     let joiner_connect = task::spawn(async move {
@@ -155,7 +155,7 @@ async fn proxy_disk_encrypted() -> anyhow::Result<()> {
     let mut peermerge_joiner = Peermerge::new_memory(NameDescription::new("joiner")).await;
     let joiner_doc_id = peermerge_joiner
         .reattach_writer_document_memory(&doc_url, &encryption_key, &write_key_pair)
-        .await;
+        .await?;
     let mut peermerge_joiner_for_task = peermerge_joiner.clone();
     let joiner_connect = task::spawn(async move {
         peermerge_joiner_for_task

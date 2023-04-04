@@ -205,7 +205,7 @@ where
                 hypercore.get(i).await.unwrap().unwrap()
             };
             let mut dec_state = State::from_buffer(&data);
-            let entry: Entry = dec_state.decode(&data);
+            let entry: Entry = dec_state.decode(&data)?;
             entries.push(entry);
         }
         Ok(entries)

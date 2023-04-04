@@ -35,9 +35,13 @@ pub(super) fn create_broadcast_message(peer_state: &PeerState) -> Message {
         peer_public_keys: peer_state.peer_public_keys.clone(),
     };
     let mut enc_state = State::new();
-    enc_state.preencode(&broadcast_message);
+    enc_state
+        .preencode(&broadcast_message)
+        .expect("Pre-encoding broadcast message should not fail");
     let mut buffer = enc_state.create_buffer();
-    enc_state.encode(&broadcast_message, &mut buffer);
+    enc_state
+        .encode(&broadcast_message, &mut buffer)
+        .expect("Encoding broadcast message should not fail");
     Message::Extension(Extension {
         name: PEERMERGE_BROADCAST_MSG.to_string(),
         message: buffer.to_vec(),
@@ -46,18 +50,26 @@ pub(super) fn create_broadcast_message(peer_state: &PeerState) -> Message {
 
 pub(super) fn create_append_local_signal(length: u64) -> Message {
     let mut enc_state = State::new();
-    enc_state.preencode(&length);
+    enc_state
+        .preencode(&length)
+        .expect("Pre-encoding append local signal should not fail");
     let mut buffer = enc_state.create_buffer();
-    enc_state.encode(&length, &mut buffer);
+    enc_state
+        .encode(&length, &mut buffer)
+        .expect("Encoding append local signal should not fail");
     Message::LocalSignal((APPEND_LOCAL_SIGNAL_NAME.to_string(), buffer.to_vec()))
 }
 
 pub(super) fn create_peer_synced_local_signal(contiguous_length: u64) -> Message {
     let message = PeerSyncedMessage::new(contiguous_length);
     let mut enc_state = State::new();
-    enc_state.preencode(&message);
+    enc_state
+        .preencode(&message)
+        .expect("Pre-encoding peer synced local signal should not fail");
     let mut buffer = enc_state.create_buffer();
-    enc_state.encode(&message, &mut buffer);
+    enc_state
+        .encode(&message, &mut buffer)
+        .expect("Encoding peer synced local signal should not fail");
     Message::LocalSignal((PEER_SYNCED_LOCAL_SIGNAL_NAME.to_string(), buffer.to_vec()))
 }
 
@@ -70,9 +82,13 @@ pub(super) fn create_new_peers_created_local_signal(
         public_keys,
     };
     let mut enc_state = State::new();
-    enc_state.preencode(&message);
+    enc_state
+        .preencode(&message)
+        .expect("Pre-encoding new peers created local signal should not fail");
     let mut buffer = enc_state.create_buffer();
-    enc_state.encode(&message, &mut buffer);
+    enc_state
+        .encode(&message, &mut buffer)
+        .expect("Encoding new peers created local signal should not fail");
     Message::LocalSignal((
         NEW_PEERS_CREATED_LOCAL_SIGNAL_NAME.to_string(),
         buffer.to_vec(),
@@ -336,7 +352,7 @@ where
                     "Only doc peer should ever get broadcast messages"
                 );
                 let mut dec_state = State::from_buffer(&message.message);
-                let broadcast_message: BroadcastMessage = dec_state.decode(&message.message);
+                let broadcast_message: BroadcastMessage = dec_state.decode(&message.message)?;
                 let new_remote_public_keys = peer_state.filter_new_peer_public_keys(
                     &broadcast_message.write_public_key,
                     &broadcast_message.peer_public_keys,
@@ -369,7 +385,7 @@ where
         Message::LocalSignal((name, data)) => match name.as_str() {
             APPEND_LOCAL_SIGNAL_NAME => {
                 let mut dec_state = State::from_buffer(&data);
-                let length: u64 = dec_state.decode(&data);
+                let length: u64 = dec_state.decode(&data)?;
                 let info = {
                     let hypercore = hypercore.lock().await;
                     hypercore.info()
@@ -389,7 +405,7 @@ where
             }
             PEER_SYNCED_LOCAL_SIGNAL_NAME => {
                 let mut dec_state = State::from_buffer(&data);
-                let message: PeerSyncedMessage = dec_state.decode(&data);
+                let message: PeerSyncedMessage = dec_state.decode(&data)?;
                 if message.contiguous_length > peer_state.synced_contiguous_length
                     && peer_state.contiguous_range_sent < message.contiguous_length
                 {
@@ -415,7 +431,7 @@ where
                     "Only doc peer should ever get new peers created messages"
                 );
                 let mut dec_state = State::from_buffer(&data);
-                let new_peers: NewPeersCreatedMessage = dec_state.decode(&data);
+                let new_peers: NewPeersCreatedMessage = dec_state.decode(&data)?;
 
                 // Save new peers to the peer state
                 peer_state.peer_public_keys.extend(new_peers.public_keys);

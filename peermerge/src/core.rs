@@ -277,29 +277,29 @@ impl Peermerge<RandomAccessMemory, FeedMemoryPersistence> {
         document_header: NameDescription,
         doc_root_scalars: Vec<(P, V)>,
         encrypted: bool,
-    ) -> DocumentId {
+    ) -> Result<DocumentId, PeermergeError> {
         let document = Document::create_new_memory(
             &self.peer_header,
             document_header,
             doc_root_scalars,
             encrypted,
         )
-        .await;
-        self.add_document(document).await
+        .await?;
+        Ok(self.add_document(document).await)
     }
 
     pub async fn attach_writer_document_memory(
         &mut self,
         doc_url: &str,
         encryption_key: &Option<String>,
-    ) -> DocumentId {
+    ) -> Result<DocumentId, PeermergeError> {
         let document = Document::attach_writer_memory(
             &self.peer_header,
             doc_url,
             &decode_encryption_key(encryption_key),
         )
-        .await;
-        self.add_document(document).await
+        .await?;
+        Ok(self.add_document(document).await)
     }
 
     /// Reattaches a writer based on given write_key_pair and peer name
@@ -308,15 +308,15 @@ impl Peermerge<RandomAccessMemory, FeedMemoryPersistence> {
         doc_url: &str,
         encryption_key: &Option<String>,
         write_key_pair: &str,
-    ) -> DocumentId {
+    ) -> Result<DocumentId, PeermergeError> {
         let document = Document::reattach_writer_memory(
             key_pair_from_bytes(&decode_key_pair(write_key_pair)),
             &self.peer_header.name,
             doc_url,
             &decode_encryption_key(encryption_key),
         )
-        .await;
-        self.add_document(document).await
+        .await?;
+        Ok(self.add_document(document).await)
     }
 
     pub async fn attach_proxy_document_memory(&mut self, doc_url: &str) -> DocumentId {
@@ -433,26 +433,28 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
         }
     }
 
-    pub async fn document_infos_disk(data_root_dir: &PathBuf) -> Option<Vec<DocumentInfo>> {
-        if let Some(state_wrapper) = PeermergeStateWrapper::open_disk(data_root_dir).await {
+    pub async fn document_infos_disk(
+        data_root_dir: &PathBuf,
+    ) -> Result<Option<Vec<DocumentInfo>>, PeermergeError> {
+        if let Some(state_wrapper) = PeermergeStateWrapper::open_disk(data_root_dir).await? {
             let mut document_infos: Vec<DocumentInfo> = vec![];
             for document_id in &state_wrapper.state.document_ids {
                 let postfix = encode_document_id(&document_id);
                 let document_data_root_dir = data_root_dir.join(postfix);
-                document_infos.push(Document::info_disk(&document_data_root_dir).await);
+                document_infos.push(Document::info_disk(&document_data_root_dir).await?);
             }
-            Some(document_infos)
+            Ok(Some(document_infos))
         } else {
-            None
+            Ok(None)
         }
     }
 
     pub async fn open_disk(
         encryption_keys: HashMap<DocumentId, String>,
         data_root_dir: &PathBuf,
-    ) -> Self {
+    ) -> Result<Self, PeermergeError> {
         let state_wrapper = PeermergeStateWrapper::open_disk(data_root_dir)
-            .await
+            .await?
             .expect("Not a valid peermerge directory");
         let state = state_wrapper.state();
         let peer_header = state.peer_header.clone();
@@ -464,17 +466,17 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
             let postfix = encode_document_id(&document_id);
             let document_data_root_dir = data_root_dir.join(postfix);
             let document =
-                Document::open_disk(&peer_header, &encryption_key, &document_data_root_dir).await;
+                Document::open_disk(&peer_header, &encryption_key, &document_data_root_dir).await?;
             documents.insert(document_id.clone(), document);
         }
 
-        Self {
+        Ok(Self {
             peer_header,
             prefix: data_root_dir.clone(),
             peermerge_state: Arc::new(Mutex::new(state_wrapper)),
             documents: Arc::new(documents),
             state_event_sender: Arc::new(Mutex::new(None)),
-        }
+        })
     }
 
     pub async fn create_new_document_disk<P: Into<Prop>, V: Into<ScalarValue>>(
@@ -482,7 +484,7 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
         document_header: NameDescription,
         doc_root_scalars: Vec<(P, V)>,
         encrypted: bool,
-    ) -> DocumentId {
+    ) -> Result<DocumentId, PeermergeError> {
         let document = Document::create_new_disk(
             &self.peer_header,
             document_header,
@@ -490,23 +492,23 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
             encrypted,
             &self.prefix,
         )
-        .await;
-        self.add_document(document).await
+        .await?;
+        Ok(self.add_document(document).await)
     }
 
     pub async fn attach_writer_document_disk(
         &mut self,
         doc_url: &str,
         encryption_key: &Option<String>,
-    ) -> DocumentId {
+    ) -> Result<DocumentId, PeermergeError> {
         let document = Document::attach_writer_disk(
             &self.peer_header,
             doc_url,
             &decode_encryption_key(encryption_key),
             &self.prefix,
         )
-        .await;
-        self.add_document(document).await
+        .await?;
+        Ok(self.add_document(document).await)
     }
 
     pub async fn attach_proxy_document_disk(&mut self, doc_url: &str) -> DocumentId {

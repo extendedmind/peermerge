@@ -69,9 +69,13 @@ pub(crate) fn encode_doc_url(
 ) -> String {
     let encoded_domain = encode_domain(root_public_key);
     let mut enc_state = State::new();
-    enc_state.preencode(document_header);
+    enc_state
+        .preencode(document_header)
+        .expect("Pre-encoding doc url should not fail");
     let mut document_header_buffer = enc_state.create_buffer();
-    enc_state.encode(document_header, &mut document_header_buffer);
+    enc_state
+        .encode(document_header, &mut document_header_buffer)
+        .expect("Encoding doc url should not fail");
 
     let postfix: String = if let Some(encryption_key) = encryption_key {
         let nonce = generate_nonce(&root_public_key, 0);
@@ -152,7 +156,9 @@ pub(crate) fn decode_doc_url(doc_url: &str, encryption_key: &Option<Vec<u8>>) ->
         };
         if let Some(header_buffer) = header_buffer {
             let mut dec_state = State::from_buffer(&header_buffer);
-            let document_header: NameDescription = dec_state.decode(&header_buffer);
+            let document_header: NameDescription = dec_state
+                .decode(&header_buffer)
+                .expect("Invalid url name description");
             let plain_doc_url = encode_doc_url(&root_public_key, &document_header, &None);
             (Some(document_header), plain_doc_url, Some(encrypted))
         } else {

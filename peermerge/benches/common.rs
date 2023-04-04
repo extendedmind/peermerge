@@ -31,7 +31,8 @@ pub async fn setup_peermerge_mesh_memory(
             vec![("version", 1)],
             encrypted,
         )
-        .await;
+        .await
+        .unwrap();
     let encryption_key = peermerge_creator.encryption_key(&doc_id).await;
     peermerge_creator.watch(&doc_id, vec![ROOT]).await;
     let (state_event_sender, mut state_event_receiver): (
@@ -58,7 +59,8 @@ pub async fn setup_peermerge_mesh_memory(
         let mut peermerge_peer = Peermerge::new_memory(NameDescription::new(&peer_name)).await;
         let doc_id = peermerge_peer
             .attach_writer_document_memory(&doc_url, &encryption_key)
-            .await;
+            .await
+            .unwrap();
         peermerge_peer.watch(&doc_id, vec![ROOT]).await;
 
         let peermerge_peer_for_task = peermerge_peer.clone();
@@ -114,7 +116,8 @@ pub async fn setup_peermerge_mesh_disk(
             vec![("version", 1)],
             encrypted,
         )
-        .await;
+        .await
+        .unwrap();
     let encryption_key = peermerge_creator.encryption_key(&doc_id).await;
     peermerge_creator.watch(&doc_id, vec![ROOT]).await;
     let (state_event_sender, mut state_event_receiver): (
@@ -151,7 +154,8 @@ pub async fn setup_peermerge_mesh_disk(
             Peermerge::create_new_disk(NameDescription::new(&peer_name), &peer_dir).await;
         let doc_id = peermerge_peer
             .attach_writer_document_disk(&doc_url, &encryption_key)
-            .await;
+            .await
+            .unwrap();
         peermerge_peer.watch(&doc_id, vec![ROOT]).await;
 
         let peermerge_peer_for_task = peermerge_peer.clone();

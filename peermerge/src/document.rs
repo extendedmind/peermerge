@@ -304,7 +304,7 @@ where
             let length = {
                 let write_feed = get_feed(&self.feeds, &write_discovery_key).await.unwrap();
                 let mut write_feed = write_feed.lock().await;
-                write_feed.append(&serialize_entry(&entry)).await?
+                write_feed.append(&serialize_entry(&entry)?).await?
             };
             document_state
                 .set_cursor(&write_discovery_key, length)
@@ -341,7 +341,7 @@ where
             let length = {
                 let write_feed = get_feed(&self.feeds, &write_discovery_key).await.unwrap();
                 let mut write_feed = write_feed.lock().await;
-                write_feed.append(&serialize_entry(&entry)).await?
+                write_feed.append(&serialize_entry(&entry)?).await?
             };
             document_state
                 .set_cursor(&write_discovery_key, length)
@@ -377,7 +377,7 @@ where
             let length = {
                 let write_feed_wrapper = get_feed(&self.feeds, &write_discovery_key).await.unwrap();
                 let mut write_feed = write_feed_wrapper.lock().await;
-                write_feed.append(&serialize_entry(&entry)).await?
+                write_feed.append(&serialize_entry(&entry)?).await?
             };
             document_state
                 .set_cursor(&write_discovery_key, length)
@@ -759,7 +759,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
         document_header: NameDescription,
         doc_root_scalars: Vec<(P, V)>,
         encrypted: bool,
-    ) -> Self {
+    ) -> Result<Self, PeermergeError> {
         let result =
             prepare_create(peer_header, &document_header, doc_root_scalars, encrypted).await;
 
@@ -769,7 +769,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
             Some(serialize_entry(&Entry::new_init_doc(
                 document_header.clone(),
                 result.data.clone(),
-            ))),
+            ))?),
             encrypted,
             &None,
         )
@@ -786,7 +786,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
             Some(serialize_entry(&Entry::new_init_peer(
                 peer_header.clone(),
                 result.root_discovery_key,
-            ))),
+            ))?),
             encrypted,
             &root_encryption_key,
         )
@@ -804,7 +804,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
         let mut state = result.state;
         state.content = Some(content);
 
-        Self::new_memory(
+        Ok(Self::new_memory(
             (result.root_discovery_key.clone(), root_feed),
             Some((result.write_discovery_key.clone(), write_feed)),
             peer_header,
@@ -813,14 +813,14 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
             &doc_url,
             root_encryption_key,
         )
-        .await
+        .await)
     }
 
     pub(crate) async fn attach_writer_memory(
         peer_header: &NameDescription,
         doc_url: &str,
         encryption_key: &Option<Vec<u8>>,
-    ) -> Self {
+    ) -> Result<Self, PeermergeError> {
         Self::do_attach_writer_memory(peer_header, doc_url, encryption_key, None).await
     }
 
@@ -829,7 +829,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
         peer_name: &str,
         doc_url: &str,
         encryption_key: &Option<Vec<u8>>,
-    ) -> Self {
+    ) -> Result<Self, PeermergeError> {
         Self::do_attach_writer_memory(
             &NameDescription::new(peer_name),
             doc_url,
@@ -897,7 +897,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
         doc_url: &str,
         encryption_key: &Option<Vec<u8>>,
         mut write_key_pair: Option<Keypair>,
-    ) -> Self {
+    ) -> Result<Self, PeermergeError> {
         let proxy = false;
 
         // Process keys from doc URL
@@ -938,7 +938,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
                     Some(serialize_entry(&Entry::new_init_peer(
                         peer_header.clone(),
                         root_discovery_key,
-                    ))),
+                    ))?),
                     encrypted,
                     &encryption_key,
                 )
@@ -950,7 +950,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
         let state =
             DocumentState::new(decoded_doc_url, proxy, vec![], Some(write_public_key), None);
 
-        Self::new_memory(
+        Ok(Self::new_memory(
             (root_discovery_key, root_feed),
             Some((write_discovery_key, write_feed)),
             peer_header,
@@ -959,7 +959,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
             doc_url,
             encryption_key.clone(),
         )
-        .await
+        .await)
     }
 
     async fn new_memory(
@@ -1047,7 +1047,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
         doc_root_scalars: Vec<(P, V)>,
         encrypted: bool,
         data_root_dir: &PathBuf,
-    ) -> Self {
+    ) -> Result<Self, PeermergeError> {
         let result =
             prepare_create(peer_header, &document_header, doc_root_scalars, encrypted).await;
         let postfix = encode_document_id(&result.root_discovery_key);
@@ -1061,7 +1061,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
             serialize_entry(&Entry::new_init_doc(
                 document_header.clone(),
                 result.data.clone(),
-            )),
+            ))?,
             encrypted,
             &None,
         )
@@ -1080,7 +1080,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
             serialize_entry(&Entry::new_init_peer(
                 peer_header.clone(),
                 result.root_discovery_key,
-            )),
+            ))?,
             encrypted,
             &root_encryption_key,
         )
@@ -1098,7 +1098,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
         let mut state = result.state;
         state.content = Some(content);
 
-        Self::new_disk(
+        Ok(Self::new_disk(
             (result.root_discovery_key.clone(), root_feed),
             Some((result.write_discovery_key.clone(), write_feed)),
             peer_header,
@@ -1108,7 +1108,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
             root_encryption_key,
             &data_root_dir,
         )
-        .await
+        .await)
     }
 
     pub(crate) async fn attach_writer_disk(
@@ -1116,7 +1116,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
         doc_url: &str,
         encryption_key: &Option<Vec<u8>>,
         data_root_dir: &PathBuf,
-    ) -> Self {
+    ) -> Result<Self, PeermergeError> {
         let proxy = false;
 
         // Process keys from doc URL
@@ -1154,7 +1154,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
             serialize_entry(&Entry::new_init_peer(
                 peer_header.clone(),
                 root_discovery_key,
-            )),
+            ))?,
             encrypted,
             &encryption_key,
         )
@@ -1164,7 +1164,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
         let state =
             DocumentState::new(decoded_doc_url, proxy, vec![], Some(write_public_key), None);
 
-        Self::new_disk(
+        Ok(Self::new_disk(
             (root_discovery_key, root_feed),
             Some((write_discovery_key, write_feed)),
             peer_header,
@@ -1174,7 +1174,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
             encryption_key.clone(),
             &data_root_dir,
         )
-        .await
+        .await)
     }
 
     pub(crate) async fn attach_proxy_disk(
@@ -1219,23 +1219,23 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
         .await
     }
 
-    pub(crate) async fn info_disk(data_root_dir: &PathBuf) -> DocumentInfo {
-        let document_state_wrapper = DocStateWrapper::open_disk(data_root_dir).await;
+    pub(crate) async fn info_disk(data_root_dir: &PathBuf) -> Result<DocumentInfo, PeermergeError> {
+        let document_state_wrapper = DocStateWrapper::open_disk(data_root_dir).await?;
         let state = document_state_wrapper.state();
-        DocumentInfo {
+        Ok(DocumentInfo {
             document_id: state.root_discovery_key,
             doc_url_info: state.doc_url_info(),
             document_header: state.document_header.clone(),
             parent_document_id: None, // TODO: Support for document hierarchies
-        }
+        })
     }
 
     pub(crate) async fn open_disk(
         peer_header: &NameDescription,
         encryption_key: &Option<Vec<u8>>,
         data_root_dir: &PathBuf,
-    ) -> Self {
-        let mut document_state_wrapper = DocStateWrapper::open_disk(data_root_dir).await;
+    ) -> Result<Self, PeermergeError> {
+        let mut document_state_wrapper = DocStateWrapper::open_disk(data_root_dir).await?;
         let state = document_state_wrapper.state();
         let proxy = state.proxy;
         let encrypted = if let Some(encrypted) = state.encrypted {
@@ -1328,7 +1328,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
         };
 
         // Create Document
-        Self {
+        Ok(Self {
             feeds,
             document_state: Arc::new(Mutex::new(document_state_wrapper)),
             state_event_sender: Arc::new(Mutex::new(None)),
@@ -1341,7 +1341,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
             proxy,
             encrypted,
             encryption_key: encryption_key.clone(),
-        }
+        })
     }
 
     #[instrument(level = "debug", skip_all, fields(doc_name = self.document_name))]

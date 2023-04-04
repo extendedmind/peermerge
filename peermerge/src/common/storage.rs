@@ -9,7 +9,7 @@ use std::{fmt::Debug, path::PathBuf};
 use crate::{
     automerge::{AutomergeDoc, UnappliedEntries},
     common::state::{DocumentState, PeermergeState},
-    DocumentId, NameDescription,
+    DocumentId, NameDescription, PeermergeError,
 };
 
 use super::{
@@ -58,7 +58,7 @@ impl PeermergeStateWrapper<RandomAccessDisk> {
         Self { state, storage }
     }
 
-    pub(crate) async fn open_disk(data_root_dir: &PathBuf) -> Option<Self> {
+    pub(crate) async fn open_disk(data_root_dir: &PathBuf) -> Result<Option<Self>, PeermergeError> {
         let state_path = get_peermerge_state_path(data_root_dir);
         if state_path.exists() {
             let mut storage = RandomAccessDisk::builder(state_path).build().await.unwrap();
@@ -68,10 +68,10 @@ impl PeermergeStateWrapper<RandomAccessDisk> {
                 .await
                 .expect("Could not read file content");
             let mut dec_state = State::from_buffer(&buffer);
-            let state: PeermergeState = dec_state.decode(&buffer);
-            Some(Self { state, storage })
+            let state: PeermergeState = dec_state.decode(&buffer)?;
+            Ok(Some(Self { state, storage }))
         } else {
-            None
+            Ok(None)
         }
     }
 }
@@ -241,7 +241,7 @@ impl DocStateWrapper<RandomAccessDisk> {
         }
     }
 
-    pub(crate) async fn open_disk(data_root_dir: &PathBuf) -> Self {
+    pub(crate) async fn open_disk(data_root_dir: &PathBuf) -> Result<Self, PeermergeError> {
         let state_path = get_document_state_path(data_root_dir);
         let mut storage = RandomAccessDisk::builder(state_path).build().await.unwrap();
         let len = storage.len().await.expect("Could not get file length");
@@ -250,12 +250,12 @@ impl DocStateWrapper<RandomAccessDisk> {
             .await
             .expect("Could not read file content");
         let mut dec_state = State::from_buffer(&buffer);
-        let state: DocumentState = dec_state.decode(&buffer);
-        Self {
+        let state: DocumentState = dec_state.decode(&buffer)?;
+        Ok(Self {
             state,
             storage,
             unapplied_entries: UnappliedEntries::new(),
-        }
+        })
     }
 }
 
@@ -268,9 +268,13 @@ where
     T: RandomAccess + Debug + Send,
 {
     let mut enc_state = State::new();
-    enc_state.preencode(repo_state);
+    enc_state
+        .preencode(repo_state)
+        .expect("Pre-encoding repo state should not fail");
     let mut buffer = enc_state.create_buffer();
-    enc_state.encode(repo_state, &mut buffer);
+    enc_state
+        .encode(repo_state, &mut buffer)
+        .expect("Encoding repo state should not fail");
     storage.write(0, &buffer).await.unwrap();
 }
 
@@ -300,8 +304,12 @@ where
     T: RandomAccess + Debug + Send,
 {
     let mut enc_state = State::new();
-    enc_state.preencode(document_state);
+    enc_state
+        .preencode(document_state)
+        .expect("Pre-encoding document state should not fail");
     let mut buffer = enc_state.create_buffer();
-    enc_state.encode(document_state, &mut buffer);
+    enc_state
+        .encode(document_state, &mut buffer)
+        .expect("Encoding document state should not fail");
     storage.write(0, &buffer).await.unwrap();
 }
