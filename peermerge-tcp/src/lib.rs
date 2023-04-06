@@ -1,10 +1,8 @@
 use futures::channel::mpsc::UnboundedSender;
 use peermerge::{
     FeedDiskPersistence, FeedMemoryPersistence, Peermerge, PeermergeError, ProtocolBuilder,
-    StateEvent,
+    RandomAccessDisk, RandomAccessMemory, StateEvent,
 };
-use random_access_disk::RandomAccessDisk;
-use random_access_memory::RandomAccessMemory;
 use tracing::instrument;
 
 #[cfg(feature = "tokio")]

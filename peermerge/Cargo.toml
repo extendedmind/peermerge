@@ -10,7 +10,7 @@ authors = ["Timo Tiuraniemi <timo.tiuraniemi@iki.fi>"]
 
 [dependencies]
 automerge = { version = "0.3.0", features = ["wasm"] }
-hypercore-protocol = { git = "https://github.com/ttiurani/hypercore-protocol-rs", branch = "v10", default-features = false, features = ["cache"] }
+hypercore-protocol = { git = "https://github.com/ttiurani/hypercore-protocol-rs", branch = "v10", default-features = false, features = ["cache", "sparse"] }
 random-access-storage = { git = "https://github.com/ttiurani/random-access-storage", branch = "thiserror" }
 random-access-memory = { git = "https://github.com/ttiurani/random-access-memory", branch = "thiserror" }
 thiserror = "1"
@@ -24,7 +24,7 @@ chacha20poly1305 = "0.10.1"
 compact-encoding = "1"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-random-access-disk = { git = "https://github.com/ttiurani/random-access-disk", branch = "thiserror" }
+random-access-disk = { git = "https://github.com/ttiurani/random-access-disk", branch = "thiserror", default-features = false, features = ["sparse"] }
 tokio = { version = "1.25.0", features = ["rt", "sync"], optional = true }
 async-std = { version = "1.9.0", features = ["attributes", "unstable"], optional = true }
 
