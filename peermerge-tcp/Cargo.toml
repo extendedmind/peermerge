@@ -13,13 +13,13 @@ peermerge = { path = "../peermerge", default-features = false }
 futures = "0.3.25"
 tracing = "0.1.37"
 async-std = { version = "1.9.0", features = ["attributes", "unstable"], optional = true }
-tokio = { version = "1.25.0", features = ["net"], optional = true }
+tokio = { version = "1.27.0", features = ["net"], optional = true }
 async-compat = { version = "0.2.1", optional = true }
 
 [dev-dependencies]
 test-log = { version = "0.2.11", default-features = false, features = ["trace"] }
 tracing-subscriber = { version = "0.3.16", features = ["env-filter", "fmt"] }
-tokio = { version = "1.25.0", features = ["macros"] }
+tokio = { version = "1.27.0", features = ["macros"] }
 tempfile = "3.1.0"
 anyhow = "1.0.28"
 
