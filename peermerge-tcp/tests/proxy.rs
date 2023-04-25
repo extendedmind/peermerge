@@ -22,11 +22,11 @@ use tokio::{task, test as async_test};
 async fn tcp_proxy_disk_encrypted() -> anyhow::Result<()> {
     let host = "localhost";
     let port: u16 = 8101;
-    let (mut creator_state_event_sender, creator_state_event_receiver): (
+    let (creator_state_event_sender, creator_state_event_receiver): (
         UnboundedSender<StateEvent>,
         UnboundedReceiver<StateEvent>,
     ) = unbounded();
-    let (mut proxy_state_event_sender, proxy_state_event_receiver): (
+    let (proxy_state_event_sender, proxy_state_event_receiver): (
         UnboundedSender<StateEvent>,
         UnboundedReceiver<StateEvent>,
     ) = unbounded();
@@ -35,8 +35,12 @@ async fn tcp_proxy_disk_encrypted() -> anyhow::Result<()> {
         .tempdir()
         .unwrap()
         .into_path();
-    let mut peermerge_creator =
-        Peermerge::create_new_disk(NameDescription::new("creator"), &creator_dir).await;
+    let mut peermerge_creator = Peermerge::create_new_disk(
+        NameDescription::new("creator"),
+        Some(creator_state_event_sender),
+        &creator_dir,
+    )
+    .await;
     let creator_doc_id = peermerge_creator
         .create_new_document_disk(
             NameDescription::new("proxy_test"),
@@ -49,7 +53,7 @@ async fn tcp_proxy_disk_encrypted() -> anyhow::Result<()> {
     let doc_url = peermerge_creator.doc_url(&creator_doc_id).await;
     let encryption_key = peermerge_creator.encryption_key(&creator_doc_id).await;
     assert_eq!(get_doc_url_info(&doc_url).encrypted, Some(true));
-    assert_eq!(encryption_key.is_some(), true);
+    assert!(encryption_key.is_some());
 
     let proxy_dir = Builder::new()
         .prefix("proxy_disk_encrypted")
@@ -57,25 +61,24 @@ async fn tcp_proxy_disk_encrypted() -> anyhow::Result<()> {
         .unwrap()
         .into_path();
 
-    let mut peermerge_proxy =
-        Peermerge::create_new_disk(NameDescription::new("proxy"), &proxy_dir).await;
+    let mut peermerge_proxy = Peermerge::create_new_disk(
+        NameDescription::new("proxy"),
+        Some(proxy_state_event_sender),
+        &proxy_dir,
+    )
+    .await;
     let peermerge_proxy_for_task = peermerge_proxy.clone();
     task::spawn(async move {
-        connect_tcp_server_disk(
-            peermerge_proxy_for_task,
-            host,
-            port,
-            &mut proxy_state_event_sender,
-        )
-        .await
-        .unwrap();
+        connect_tcp_server_disk(peermerge_proxy_for_task, host, port)
+            .await
+            .unwrap();
     });
 
     // Reopen peermerge_creator
     drop(peermerge_creator);
     let mut creator_encryption_keys = HashMap::new();
     if let Some(encryption_key) = encryption_key.as_ref() {
-        creator_encryption_keys.insert(creator_doc_id.clone(), encryption_key.clone());
+        creator_encryption_keys.insert(creator_doc_id, encryption_key.clone());
     }
     let peermerge_creator = Peermerge::open_disk(creator_encryption_keys, &creator_dir).await?;
 
@@ -85,14 +88,9 @@ async fn tcp_proxy_disk_encrypted() -> anyhow::Result<()> {
     // Now ready to start client
     let peermerge_creator_for_task = peermerge_creator.clone();
     task::spawn(async move {
-        connect_tcp_client_disk(
-            peermerge_creator_for_task,
-            host,
-            port,
-            &mut creator_state_event_sender,
-        )
-        .await
-        .unwrap();
+        connect_tcp_client_disk(peermerge_creator_for_task, host, port)
+            .await
+            .unwrap();
     });
 
     task::spawn(async move {
@@ -130,13 +128,13 @@ async fn process_proxy_state_event(
                 }
             }
             RemotePeerSynced(_) => {
-                panic!("Should not get remote peer synced events {:?}", event);
+                panic!("Should not get remote peer synced events {event:?}");
             }
             DocumentChanged(_) => {
-                panic!("Should not get document changed event {:?}", event);
+                panic!("Should not get document changed event {event:?}");
             }
             _ => {
-                panic!("Unkown event {:?}", event);
+                panic!("Unkown event {event:?}");
             }
         }
     }
@@ -158,7 +156,7 @@ async fn process_creator_state_events(
         );
         match event.content {
             PeerSynced(_) => {
-                panic!("Should not get remote peer synced events {:?}", event);
+                panic!("Should not get remote peer synced events {event:?}");
             }
             DocumentInitialized() => {
                 // Skip

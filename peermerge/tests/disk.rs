@@ -49,7 +49,7 @@ async fn disk_two_peers(encrypted: bool) -> anyhow::Result<()> {
     // let creator_dir = std::path::Path::new(&debug).to_path_buf();
 
     let mut peermerge_creator =
-        Peermerge::create_new_disk(NameDescription::new("creator"), &creator_dir).await;
+        Peermerge::create_new_disk(NameDescription::new("creator"), None, &creator_dir).await;
     let document_name = "disk_test";
     let creator_doc_id = peermerge_creator
         .create_new_document_disk(
@@ -77,7 +77,7 @@ async fn disk_two_peers(encrypted: bool) -> anyhow::Result<()> {
     // let joiner_dir = std::path::Path::new(&debug).to_path_buf();
 
     let mut peermerge_joiner =
-        Peermerge::create_new_disk(NameDescription::new("joiner"), &joiner_dir).await;
+        Peermerge::create_new_disk(NameDescription::new("joiner"), None, &joiner_dir).await;
     let joiner_doc_id = peermerge_joiner
         .attach_writer_document_disk(&doc_url, &encryption_key)
         .await?;
@@ -152,21 +152,27 @@ async fn disk_two_peers(encrypted: bool) -> anyhow::Result<()> {
 }
 
 async fn run_disk_two_peers(
-    peermerge_creator: Peermerge<RandomAccessDisk, FeedDiskPersistence>,
+    mut peermerge_creator: Peermerge<RandomAccessDisk, FeedDiskPersistence>,
     creator_doc_id: DocumentId,
-    peermerge_joiner: Peermerge<RandomAccessDisk, FeedDiskPersistence>,
+    mut peermerge_joiner: Peermerge<RandomAccessDisk, FeedDiskPersistence>,
     joiner_doc_id: DocumentId,
     expected_scalars: Vec<(String, u64)>,
 ) -> anyhow::Result<()> {
     let (mut proto_responder, mut proto_initiator) = create_pair_memory().await;
-    let (mut creator_state_event_sender, creator_state_event_receiver): (
+    let (creator_state_event_sender, creator_state_event_receiver): (
         UnboundedSender<StateEvent>,
         UnboundedReceiver<StateEvent>,
     ) = unbounded();
-    let (mut joiner_state_event_sender, joiner_state_event_receiver): (
+    peermerge_creator
+        .set_state_event_sender(Some(creator_state_event_sender))
+        .await;
+    let (joiner_state_event_sender, joiner_state_event_receiver): (
         UnboundedSender<StateEvent>,
         UnboundedReceiver<StateEvent>,
     ) = unbounded();
+    peermerge_joiner
+        .set_state_event_sender(Some(joiner_state_event_sender))
+        .await;
 
     let assert_sync_creator = init_condvar();
     let assert_sync_joiner = Arc::clone(&assert_sync_creator);
@@ -174,7 +180,7 @@ async fn run_disk_two_peers(
     let mut peermerge_creator_for_task = peermerge_creator.clone();
     task::spawn(async move {
         peermerge_creator_for_task
-            .connect_protocol_disk(&mut proto_responder, &mut creator_state_event_sender)
+            .connect_protocol_disk(&mut proto_responder)
             .await
             .unwrap();
     });
@@ -182,7 +188,7 @@ async fn run_disk_two_peers(
     let mut peermerge_joiner_for_task = peermerge_joiner.clone();
     task::spawn(async move {
         peermerge_joiner_for_task
-            .connect_protocol_disk(&mut proto_initiator, &mut joiner_state_event_sender)
+            .connect_protocol_disk(&mut proto_initiator)
             .await
             .unwrap();
     });

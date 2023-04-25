@@ -23,8 +23,16 @@ pub async fn setup_peermerge_mesh_memory(
     encrypted: bool,
 ) -> (Vec<Sender<u64>>, UnboundedReceiver<StateEvent>) {
     let creator_name = "p1";
+    let (state_event_sender, mut state_event_receiver): (
+        UnboundedSender<StateEvent>,
+        UnboundedReceiver<StateEvent>,
+    ) = unbounded();
     let mut peermerge_creator: Peermerge<RandomAccessMemory, FeedMemoryPersistence> =
-        Peermerge::new_memory(NameDescription::new(creator_name)).await;
+        Peermerge::new_memory(
+            NameDescription::new(creator_name),
+            Some(state_event_sender.clone()),
+        )
+        .await;
     let doc_id = peermerge_creator
         .create_new_document_memory(
             NameDescription::new("bench"),
@@ -35,28 +43,23 @@ pub async fn setup_peermerge_mesh_memory(
         .unwrap();
     let encryption_key = peermerge_creator.encryption_key(&doc_id).await;
     peermerge_creator.watch(&doc_id, vec![ROOT]).await;
-    let (state_event_sender, mut state_event_receiver): (
-        UnboundedSender<StateEvent>,
-        UnboundedReceiver<StateEvent>,
-    ) = unbounded();
+
     let mut senders = Vec::with_capacity(peers);
     let doc_url = peermerge_creator.doc_url(&doc_id).await;
 
     for i in 1..peers {
         let (proto_responder, proto_initiator) = create_pair_memory().await;
         let peermerge_creator_for_task = peermerge_creator.clone();
-        let state_event_sender_for_task = state_event_sender.clone();
         task::spawn(async move {
-            connect_memory(
-                peermerge_creator_for_task,
-                proto_responder,
-                state_event_sender_for_task,
-            )
-            .await;
+            connect_memory(peermerge_creator_for_task, proto_responder).await;
         });
 
         let peer_name = format!("p{}", i + 1);
-        let mut peermerge_peer = Peermerge::new_memory(NameDescription::new(&peer_name)).await;
+        let mut peermerge_peer = Peermerge::new_memory(
+            NameDescription::new(&peer_name),
+            Some(state_event_sender.clone()),
+        )
+        .await;
         let doc_id = peermerge_peer
             .attach_writer_document_memory(&doc_url, &encryption_key)
             .await
@@ -64,16 +67,10 @@ pub async fn setup_peermerge_mesh_memory(
         peermerge_peer.watch(&doc_id, vec![ROOT]).await;
 
         let peermerge_peer_for_task = peermerge_peer.clone();
-        let state_event_sender_for_task = state_event_sender.clone();
         let task_span = tracing::debug_span!("call_connect").or_current();
         task::spawn(async move {
             let _entered = task_span.enter();
-            connect_memory(
-                peermerge_peer_for_task,
-                proto_initiator,
-                state_event_sender_for_task,
-            )
-            .await;
+            connect_memory(peermerge_peer_for_task, proto_initiator).await;
         });
 
         let append_index_sender = append_and_process_events(
@@ -108,8 +105,17 @@ pub async fn setup_peermerge_mesh_disk(
         .tempdir()
         .unwrap()
         .into_path();
+    let (state_event_sender, mut state_event_receiver): (
+        UnboundedSender<StateEvent>,
+        UnboundedReceiver<StateEvent>,
+    ) = unbounded();
     let mut peermerge_creator: Peermerge<RandomAccessDisk, FeedDiskPersistence> =
-        Peermerge::create_new_disk(NameDescription::new(creator_name), &creator_dir).await;
+        Peermerge::create_new_disk(
+            NameDescription::new(creator_name),
+            Some(state_event_sender.clone()),
+            &creator_dir,
+        )
+        .await;
     let doc_id = peermerge_creator
         .create_new_document_disk(
             NameDescription::new("bench"),
@@ -120,24 +126,15 @@ pub async fn setup_peermerge_mesh_disk(
         .unwrap();
     let encryption_key = peermerge_creator.encryption_key(&doc_id).await;
     peermerge_creator.watch(&doc_id, vec![ROOT]).await;
-    let (state_event_sender, mut state_event_receiver): (
-        UnboundedSender<StateEvent>,
-        UnboundedReceiver<StateEvent>,
-    ) = unbounded();
+
     let mut senders = Vec::with_capacity(peers);
     let doc_url = peermerge_creator.doc_url(&doc_id).await;
 
     for i in 1..peers {
         let (proto_responder, proto_initiator) = create_pair_memory().await;
         let peermerge_creator_for_task = peermerge_creator.clone();
-        let state_event_sender_for_task = state_event_sender.clone();
         task::spawn(async move {
-            connect_disk(
-                peermerge_creator_for_task,
-                proto_responder,
-                state_event_sender_for_task,
-            )
-            .await;
+            connect_disk(peermerge_creator_for_task, proto_responder).await;
         });
 
         let peer_name = format!("p{}", i + 1);
@@ -150,8 +147,12 @@ pub async fn setup_peermerge_mesh_disk(
             .tempdir()
             .unwrap()
             .into_path();
-        let mut peermerge_peer =
-            Peermerge::create_new_disk(NameDescription::new(&peer_name), &peer_dir).await;
+        let mut peermerge_peer = Peermerge::create_new_disk(
+            NameDescription::new(&peer_name),
+            Some(state_event_sender.clone()),
+            &peer_dir,
+        )
+        .await;
         let doc_id = peermerge_peer
             .attach_writer_document_disk(&doc_url, &encryption_key)
             .await
@@ -159,16 +160,10 @@ pub async fn setup_peermerge_mesh_disk(
         peermerge_peer.watch(&doc_id, vec![ROOT]).await;
 
         let peermerge_peer_for_task = peermerge_peer.clone();
-        let state_event_sender_for_task = state_event_sender.clone();
         let task_span = tracing::debug_span!("call_connect").or_current();
         task::spawn(async move {
             let _entered = task_span.enter();
-            connect_disk(
-                peermerge_peer_for_task,
-                proto_initiator,
-                state_event_sender_for_task,
-            )
-            .await;
+            connect_disk(peermerge_peer_for_task, proto_initiator).await;
         });
 
         let append_index_sender = append_and_process_events(
@@ -204,10 +199,9 @@ async fn create_pair_memory() -> (MemoryProtocol, MemoryProtocol) {
 async fn connect_memory(
     mut peermerge: Peermerge<RandomAccessMemory, FeedMemoryPersistence>,
     mut protocol: MemoryProtocol,
-    mut state_event_sender: UnboundedSender<StateEvent>,
 ) {
     peermerge
-        .connect_protocol_memory(&mut protocol, &mut state_event_sender)
+        .connect_protocol_memory(&mut protocol)
         .await
         .expect("connect_protocol_memory should not throw error");
 }
@@ -215,10 +209,9 @@ async fn connect_memory(
 async fn connect_disk(
     mut peermerge: Peermerge<RandomAccessDisk, FeedDiskPersistence>,
     mut protocol: MemoryProtocol,
-    mut state_event_sender: UnboundedSender<StateEvent>,
 ) {
     peermerge
-        .connect_protocol_disk(&mut protocol, &mut state_event_sender)
+        .connect_protocol_disk(&mut protocol)
         .await
         .expect("connect_protocol_disk should not throw error");
 }
@@ -226,7 +219,7 @@ async fn connect_disk(
 async fn append_and_process_events<T, U>(
     i: usize,
     peer_name: String,
-    mut peermerge_peer: Peermerge<T, U>,
+    peermerge_peer: Peermerge<T, U>,
     doc_id: DocumentId,
     state_event_receiver: &mut UnboundedReceiver<StateEvent>,
 ) -> Sender<u64>
@@ -270,7 +263,7 @@ where
 
 fn append_value_in_task<T, U>(
     peer_name: String,
-    mut peermerge_peer: Peermerge<T, U>,
+    peermerge_peer: Peermerge<T, U>,
     doc_id: DocumentId,
 ) -> Sender<u64>
 where
@@ -297,7 +290,7 @@ async fn append_value<T, U>(
 {
     while let Some(i) = append_index_receiver.next().await {
         peermerge
-            .put_scalar(&doc_id, ROOT, format!("{}_{}", peer_name, i), i)
+            .put_scalar(&doc_id, ROOT, format!("{peer_name}_{i}"), i)
             .await
             .unwrap();
     }

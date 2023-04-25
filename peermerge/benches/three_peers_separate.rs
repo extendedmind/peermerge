@@ -69,8 +69,7 @@ async fn append_three(
         }
         if sync_remaining < 0 && remote_sync_remaining < 0 && patches_remaining < 0 {
             panic!(
-                "Too many events: i={} sr={}, rsr={}, pr={}",
-                i, sync_remaining, remote_sync_remaining, patches_remaining
+                "Too many events: i={i} sr={sync_remaining}, rsr={remote_sync_remaining}, pr={patches_remaining}",
             );
         }
     }

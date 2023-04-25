@@ -74,6 +74,23 @@ where
         self.peer_header.name.clone()
     }
 
+    pub async fn set_state_event_sender(
+        &mut self,
+        state_event_sender: Option<UnboundedSender<StateEvent>>,
+    ) {
+        let not_empty = state_event_sender.is_some();
+
+        {
+            *self.state_event_sender.lock().await = state_event_sender;
+        }
+        if not_empty {
+            // Let's drain any patches that are not yet sent out, and push them out. These can
+            // be created by scalar values inserted with peermerge.create_doc_memory() or other
+            // mutating calls executed before this call without a state_event_sender.
+            self.notify_of_document_changes().await;
+        }
+    }
+
     #[instrument(skip(self))]
     pub async fn watch(&mut self, document_id: &DocumentId, ids: Vec<ObjId>) {
         let mut document = get_document(&self.documents, document_id).await.unwrap();
@@ -261,14 +278,17 @@ where
 // Memory
 
 impl Peermerge<RandomAccessMemory, FeedMemoryPersistence> {
-    pub async fn new_memory(peer_header: NameDescription) -> Self {
+    pub async fn new_memory(
+        peer_header: NameDescription,
+        state_event_sender: Option<UnboundedSender<StateEvent>>,
+    ) -> Self {
         let state = PeermergeStateWrapper::new_memory(&peer_header).await;
         Self {
             peer_header,
             prefix: PathBuf::new(),
             peermerge_state: Arc::new(Mutex::new(state)),
             documents: Arc::new(DashMap::new()),
-            state_event_sender: Arc::new(Mutex::new(None)),
+            state_event_sender: Arc::new(Mutex::new(state_event_sender)),
         }
     }
 
@@ -328,26 +348,23 @@ impl Peermerge<RandomAccessMemory, FeedMemoryPersistence> {
     pub async fn connect_protocol_memory<T>(
         &mut self,
         protocol: &mut Protocol<T>,
-        state_event_sender: &mut UnboundedSender<StateEvent>,
     ) -> Result<(), PeermergeError>
     where
         T: IO,
     {
-        // First let's drain any patches that are not yet sent out, and push them out. These can
-        // be created by scalar values inserted with peermerge.create_doc_memory() or other
-        // mutating calls executed before this call.
-        {
-            *self.state_event_sender.lock().await = Some(state_event_sender.clone());
-        }
-        {
-            self.notify_of_document_changes().await;
-        }
         let (mut peer_event_sender, peer_event_receiver): (
             UnboundedSender<PeerEvent>,
             UnboundedReceiver<PeerEvent>,
         ) = unbounded();
-
-        let state_event_sender_for_task = state_event_sender.clone();
+        let state_event_sender_for_task =
+            self.state_event_sender
+                .lock()
+                .await
+                .clone()
+                .ok_or_else(|| PeermergeError::BadArgument {
+                    context: "State event sender must be set before connecting protocol"
+                        .to_string(),
+                })?;
         let peermerge_state = self.peermerge_state.clone();
         let documents_for_task = self.documents.clone();
         let peer_name_for_task = self.peer_header.name.clone();
@@ -422,14 +439,18 @@ async fn on_peer_event_memory(
 
 #[cfg(not(target_arch = "wasm32"))]
 impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
-    pub async fn create_new_disk(peer_header: NameDescription, data_root_dir: &PathBuf) -> Self {
+    pub async fn create_new_disk(
+        peer_header: NameDescription,
+        state_event_sender: Option<UnboundedSender<StateEvent>>,
+        data_root_dir: &PathBuf,
+    ) -> Self {
         let state = PeermergeStateWrapper::new_disk(&peer_header, data_root_dir).await;
         Self {
             peer_header,
             prefix: data_root_dir.clone(),
             peermerge_state: Arc::new(Mutex::new(state)),
             documents: Arc::new(DashMap::new()),
-            state_event_sender: Arc::new(Mutex::new(None)),
+            state_event_sender: Arc::new(Mutex::new(state_event_sender)),
         }
     }
 
@@ -520,26 +541,23 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
     pub async fn connect_protocol_disk<T>(
         &mut self,
         protocol: &mut Protocol<T>,
-        state_event_sender: &mut UnboundedSender<StateEvent>,
     ) -> Result<(), PeermergeError>
     where
         T: IO,
     {
-        // First let's drain any patches that are not yet sent out, and push them out. These can
-        // be created by scalar values inserted with peermerge.create_doc_memory() or other
-        // mutating calls executed before this call.
-        {
-            *self.state_event_sender.lock().await = Some(state_event_sender.clone());
-        }
-        {
-            self.notify_of_document_changes().await;
-        }
         let (mut peer_event_sender, peer_event_receiver): (
             UnboundedSender<PeerEvent>,
             UnboundedReceiver<PeerEvent>,
         ) = unbounded();
-
-        let state_event_sender_for_task = state_event_sender.clone();
+        let state_event_sender_for_task =
+            self.state_event_sender
+                .lock()
+                .await
+                .clone()
+                .ok_or_else(|| PeermergeError::BadArgument {
+                    context: "State event sender must be set before connecting protocol"
+                        .to_string(),
+                })?;
         let peermerge_state = self.peermerge_state.clone();
         let documents_for_task = self.documents.clone();
         let peer_name_for_task = self.peer_header.name.clone();

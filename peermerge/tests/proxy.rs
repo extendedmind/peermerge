@@ -22,15 +22,19 @@ use common::*;
 #[test(async_test)]
 async fn proxy_disk_encrypted() -> anyhow::Result<()> {
     let (mut proto_responder, mut proto_initiator) = create_pair_memory().await;
-    let (mut creator_state_event_sender, creator_state_event_receiver): (
+    let (creator_state_event_sender, creator_state_event_receiver): (
         UnboundedSender<StateEvent>,
         UnboundedReceiver<StateEvent>,
     ) = unbounded();
-    let (mut proxy_state_event_sender, proxy_state_event_receiver): (
+    let (proxy_state_event_sender, proxy_state_event_receiver): (
         UnboundedSender<StateEvent>,
         UnboundedReceiver<StateEvent>,
     ) = unbounded();
-    let mut peermerge_creator = Peermerge::new_memory(NameDescription::new("creator")).await;
+    let mut peermerge_creator = Peermerge::new_memory(
+        NameDescription::new("creator"),
+        Some(creator_state_event_sender),
+    )
+    .await;
     let creator_doc_id = peermerge_creator
         .create_new_document_memory(
             NameDescription::new("proxy_test"),
@@ -48,7 +52,7 @@ async fn proxy_disk_encrypted() -> anyhow::Result<()> {
     let mut peermerge_creator_for_task = peermerge_creator.clone();
     let creator_connect = task::spawn(async move {
         peermerge_creator_for_task
-            .connect_protocol_memory(&mut proto_responder, &mut creator_state_event_sender)
+            .connect_protocol_memory(&mut proto_responder)
             .await
             .unwrap();
     });
@@ -59,15 +63,19 @@ async fn proxy_disk_encrypted() -> anyhow::Result<()> {
         .unwrap()
         .into_path();
 
-    let mut peermerge_proxy =
-        Peermerge::create_new_disk(NameDescription::new("proxy"), &proxy_dir).await;
+    let mut peermerge_proxy = Peermerge::create_new_disk(
+        NameDescription::new("proxy"),
+        Some(proxy_state_event_sender),
+        &proxy_dir,
+    )
+    .await;
     let _proxy_doc_id = peermerge_proxy
         .attach_proxy_document_disk(&proxy_doc_url)
         .await;
     let mut peermerge_proxy_for_task = peermerge_proxy.clone();
     let proxy_connect = task::spawn(async move {
         peermerge_proxy_for_task
-            .connect_protocol_disk(&mut proto_initiator, &mut proxy_state_event_sender)
+            .connect_protocol_disk(&mut proto_initiator)
             .await
             .unwrap();
     });
@@ -91,15 +99,22 @@ async fn proxy_disk_encrypted() -> anyhow::Result<()> {
 
     // Create an in-memory write peer, storing the write keypair in between
     let (mut proto_responder, mut proto_initiator) = create_pair_memory().await;
-    let (mut joiner_state_event_sender, joiner_state_event_receiver): (
+    let (joiner_state_event_sender, joiner_state_event_receiver): (
         UnboundedSender<StateEvent>,
         UnboundedReceiver<StateEvent>,
     ) = unbounded();
-    let (mut proxy_state_event_sender, proxy_state_event_receiver): (
+    let (proxy_state_event_sender, proxy_state_event_receiver): (
         UnboundedSender<StateEvent>,
         UnboundedReceiver<StateEvent>,
     ) = unbounded();
-    let mut peermerge_joiner = Peermerge::new_memory(NameDescription::new("joiner")).await;
+    let mut peermerge_joiner = Peermerge::new_memory(
+        NameDescription::new("joiner"),
+        Some(joiner_state_event_sender),
+    )
+    .await;
+    peermerge_proxy
+        .set_state_event_sender(Some(proxy_state_event_sender))
+        .await;
     let joiner_doc_id = peermerge_joiner
         .attach_writer_document_memory(&doc_url, &encryption_key)
         .await?;
@@ -107,7 +122,7 @@ async fn proxy_disk_encrypted() -> anyhow::Result<()> {
     let mut peermerge_joiner_for_task = peermerge_joiner.clone();
     let joiner_connect = task::spawn(async move {
         peermerge_joiner_for_task
-            .connect_protocol_memory(&mut proto_responder, &mut joiner_state_event_sender)
+            .connect_protocol_memory(&mut proto_responder)
             .await
             .unwrap();
     });
@@ -115,7 +130,7 @@ async fn proxy_disk_encrypted() -> anyhow::Result<()> {
     let mut peermerge_proxy_for_task = peermerge_proxy.clone();
     let proxy_connect = task::spawn(async move {
         peermerge_proxy_for_task
-            .connect_protocol_disk(&mut proto_initiator, &mut proxy_state_event_sender)
+            .connect_protocol_disk(&mut proto_initiator)
             .await
             .unwrap();
     });
@@ -144,22 +159,29 @@ async fn proxy_disk_encrypted() -> anyhow::Result<()> {
 
     // Open again using stored keypair
     let (mut proto_responder, mut proto_initiator) = create_pair_memory().await;
-    let (mut joiner_state_event_sender, joiner_state_event_receiver): (
+    let (joiner_state_event_sender, joiner_state_event_receiver): (
         UnboundedSender<StateEvent>,
         UnboundedReceiver<StateEvent>,
     ) = unbounded();
-    let (mut proxy_state_event_sender, proxy_state_event_receiver): (
+    let (proxy_state_event_sender, proxy_state_event_receiver): (
         UnboundedSender<StateEvent>,
         UnboundedReceiver<StateEvent>,
     ) = unbounded();
-    let mut peermerge_joiner = Peermerge::new_memory(NameDescription::new("joiner")).await;
+    let mut peermerge_joiner = Peermerge::new_memory(
+        NameDescription::new("joiner"),
+        Some(joiner_state_event_sender),
+    )
+    .await;
+    peermerge_proxy
+        .set_state_event_sender(Some(proxy_state_event_sender))
+        .await;
     let joiner_doc_id = peermerge_joiner
         .reattach_writer_document_memory(&doc_url, &encryption_key, &write_key_pair)
         .await?;
     let mut peermerge_joiner_for_task = peermerge_joiner.clone();
     let joiner_connect = task::spawn(async move {
         peermerge_joiner_for_task
-            .connect_protocol_memory(&mut proto_responder, &mut joiner_state_event_sender)
+            .connect_protocol_memory(&mut proto_responder)
             .await
             .unwrap();
     });
@@ -167,7 +189,7 @@ async fn proxy_disk_encrypted() -> anyhow::Result<()> {
     let mut peermerge_proxy_for_task = peermerge_proxy.clone();
     let proxy_connect = task::spawn(async move {
         peermerge_proxy_for_task
-            .connect_protocol_disk(&mut proto_initiator, &mut proxy_state_event_sender)
+            .connect_protocol_disk(&mut proto_initiator)
             .await
             .unwrap();
     });
