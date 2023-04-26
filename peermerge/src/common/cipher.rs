@@ -6,7 +6,9 @@ use compact_encoding::{CompactEncoding, State};
 use std::convert::TryInto;
 use std::fmt::Debug;
 
-use crate::{DocUrlInfo, DocumentId, FeedType, NameDescription};
+use crate::{
+    common::keys::discovery_key_from_public_key, DocUrlInfo, DocumentId, FeedType, NameDescription,
+};
 
 const DOC_URL_PREFIX: &str = "peermerge:/";
 const DOC_URL_VERSION: u8 = 1;
@@ -16,13 +18,19 @@ const CIPHERTEXT_PARAM: &str = "?ct=";
 /// Get public information about a document URL.
 pub fn get_doc_url_info(doc_url: &str) -> DocUrlInfo {
     let (domain_end, header_info) = get_domain_end_and_document_header_start_end_encrypted(doc_url);
-    let (domain, _) = decode_domain(doc_url, domain_end);
-    let version = domain[0];
-    let feed_type: FeedType = domain[1].try_into().unwrap();
+    let (version, parent, feed_type, root_public_key, document_id) =
+        decode_domain(doc_url, domain_end);
     if let Some((_, _, encrypted)) = header_info {
-        DocUrlInfo::new(version, feed_type, encrypted)
+        DocUrlInfo::new(
+            version,
+            parent,
+            feed_type,
+            root_public_key,
+            document_id,
+            encrypted,
+        )
     } else {
-        DocUrlInfo::new_proxy_only(version, feed_type)
+        DocUrlInfo::new_proxy_only(version, parent, feed_type, root_public_key, document_id)
     }
 }
 
@@ -97,6 +105,7 @@ pub(crate) fn encode_proxy_doc_url(doc_url: &str) -> String {
 
 pub(crate) struct DecodedDocUrl {
     pub(crate) root_public_key: [u8; 32],
+    pub(crate) document_id: DocumentId,
     pub(crate) document_header: Option<NameDescription>,
     pub(crate) encrypted: Option<bool>,
     pub(crate) plain_doc_url: String,
@@ -105,12 +114,14 @@ pub(crate) struct DecodedDocUrl {
 impl DecodedDocUrl {
     pub(crate) fn new(
         root_public_key: [u8; 32],
+        document_id: DocumentId,
         document_header: NameDescription,
         encrypted: bool,
     ) -> Self {
         let plain_doc_url = encode_doc_url(&root_public_key, &document_header, &None);
         Self {
             root_public_key,
+            document_id,
             document_header: Some(document_header),
             encrypted: Some(encrypted),
             plain_doc_url,
@@ -121,11 +132,7 @@ impl DecodedDocUrl {
 pub(crate) fn decode_doc_url(doc_url: &str, encryption_key: &Option<Vec<u8>>) -> DecodedDocUrl {
     assert_eq!(&doc_url[..DOC_URL_PREFIX.len()], DOC_URL_PREFIX);
     let (domain_end, header_info) = get_domain_end_and_document_header_start_end_encrypted(doc_url);
-    let (domain, decoded_len) = decode_domain(doc_url, domain_end);
-    assert_eq!(domain[0], DOC_URL_VERSION);
-    assert_eq!(domain[1], FeedType::Hypercore as u8);
-    assert_eq!(decoded_len, 32 + 2);
-    let root_public_key: [u8; 32] = domain[2..].to_vec().try_into().unwrap();
+    let (_, _, _, root_public_key, document_id) = decode_domain(doc_url, domain_end);
 
     let (document_header, plain_doc_url, encrypted): (
         Option<NameDescription>,
@@ -169,6 +176,7 @@ pub(crate) fn decode_doc_url(doc_url: &str, encryption_key: &Option<Vec<u8>>) ->
     };
     DecodedDocUrl {
         root_public_key,
+        document_id,
         document_header,
         plain_doc_url,
         encrypted,
@@ -213,12 +221,14 @@ fn decode_keys(keys: &str, expected_len: usize) -> Vec<u8> {
 fn encode_domain(root_public_key: &[u8; 32]) -> String {
     let mut domain: Vec<u8> = Vec::with_capacity(32 + 2);
     domain.push(DOC_URL_VERSION);
-    domain.push(FeedType::Hypercore as u8);
+    let feed_type = FeedType::Hypercore as u8;
+    let header: u8 = feed_type | 0x80; // TODO: child documents
+    domain.push(header);
     domain.extend(root_public_key);
     data_encoding::BASE32_NOPAD.encode(&domain)
 }
 
-fn decode_domain(doc_url: &str, domain_end: usize) -> (Vec<u8>, usize) {
+fn decode_domain(doc_url: &str, domain_end: usize) -> (u8, bool, FeedType, [u8; 32], DocumentId) {
     let domain_base32 = doc_url[DOC_URL_PREFIX.len()..domain_end].as_bytes();
     let mut domain = vec![
         0;
@@ -229,7 +239,21 @@ fn decode_domain(doc_url: &str, domain_end: usize) -> (Vec<u8>, usize) {
     let decoded_len = data_encoding::BASE32_NOPAD
         .decode_mut(domain_base32, &mut domain)
         .unwrap();
-    (domain, decoded_len)
+    assert_eq!(decoded_len, 32 + 2);
+    let version = domain[0];
+    assert_eq!(domain[0], DOC_URL_VERSION);
+    let header = domain[1];
+    // The highest bit is the parent bit, the rest feed type.
+    // NB: Other info can be encoded later in between because
+    // 7 bits for feed type is a lot, two bits should do.
+    let parent = header & 0x80 == 0x80;
+    let feed_type: FeedType = (header & 0x7F).try_into().unwrap();
+    assert_eq!(feed_type, FeedType::Hypercore);
+    // URL contains the document's root public key, document id is
+    // the discovery key
+    let root_public_key: [u8; 32] = domain[2..].try_into().unwrap();
+    let document_id: DocumentId = discovery_key_from_public_key(&root_public_key);
+    (version, parent, feed_type, root_public_key, document_id)
 }
 
 fn get_domain_end_and_document_header_start_end_encrypted(

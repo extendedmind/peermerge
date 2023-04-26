@@ -846,9 +846,9 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
 
         // Process keys from doc URL
         let decoded_doc_url = decode_doc_url(&doc_url, &None);
+        let document_id = decoded_doc_url.document_id;
 
         // Create the root feed
-        let root_discovery_key = discovery_key_from_public_key(&decoded_doc_url.root_public_key);
         let (_, root_feed) =
             create_new_read_memory_feed(&decoded_doc_url.root_public_key, proxy, encrypted, &None)
                 .await;
@@ -857,7 +857,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
         let state = DocumentState::new(decoded_doc_url, proxy, vec![], None, None);
 
         Self::new_memory(
-            (root_discovery_key, root_feed),
+            (document_id, root_feed),
             None,
             peer_header,
             state,
@@ -902,6 +902,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
 
         // Process keys from doc URL
         let decoded_doc_url = decode_doc_url(doc_url, &encryption_key);
+        let document_id = decoded_doc_url.document_id;
         let encrypted = if let Some(encrypted) = decoded_doc_url.encrypted {
             if encrypted && encryption_key.is_none() {
                 panic!("Can not attach a peer to an encrypted document without an encryption key");
@@ -912,7 +913,6 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
         };
 
         // Create the root feed
-        let root_discovery_key = discovery_key_from_public_key(&decoded_doc_url.root_public_key);
         let (_, root_feed) = create_new_read_memory_feed(
             &decoded_doc_url.root_public_key,
             proxy,
@@ -937,7 +937,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
                     write_key_pair,
                     Some(serialize_entry(&Entry::new_init_peer(
                         peer_header.clone(),
-                        root_discovery_key,
+                        document_id,
                     ))?),
                     encrypted,
                     &encryption_key,
@@ -951,7 +951,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
             DocumentState::new(decoded_doc_url, proxy, vec![], Some(write_public_key), None);
 
         Ok(Self::new_memory(
-            (root_discovery_key, root_feed),
+            (document_id, root_feed),
             Some((write_discovery_key, write_feed)),
             peer_header,
             state,
@@ -1121,6 +1121,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
 
         // Process keys from doc URL
         let decoded_doc_url = decode_doc_url(doc_url, &encryption_key);
+        let document_id = decoded_doc_url.document_id;
         let encrypted = if let Some(encrypted) = decoded_doc_url.encrypted {
             if encrypted && encryption_key.is_none() {
                 panic!("Can not attach a peer to an encrypted document without an encryption key");
@@ -1131,13 +1132,12 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
         };
 
         // Create the root feed
-        let root_discovery_key = discovery_key_from_public_key(&decoded_doc_url.root_public_key);
-        let postfix = encode_document_id(&root_discovery_key);
+        let postfix = encode_document_id(&decoded_doc_url.document_id);
         let data_root_dir = data_root_dir.join(postfix);
         let (_, root_feed) = create_new_read_disk_feed(
             &data_root_dir,
             &decoded_doc_url.root_public_key,
-            &root_discovery_key,
+            &decoded_doc_url.document_id,
             proxy,
             encrypted,
             encryption_key,
@@ -1151,10 +1151,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
             &data_root_dir,
             write_key_pair,
             &write_discovery_key,
-            serialize_entry(&Entry::new_init_peer(
-                peer_header.clone(),
-                root_discovery_key,
-            ))?,
+            serialize_entry(&Entry::new_init_peer(peer_header.clone(), document_id))?,
             encrypted,
             &encryption_key,
         )
@@ -1165,7 +1162,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
             DocumentState::new(decoded_doc_url, proxy, vec![], Some(write_public_key), None);
 
         Ok(Self::new_disk(
-            (root_discovery_key, root_feed),
+            (document_id, root_feed),
             Some((write_discovery_key, write_feed)),
             peer_header,
             state,
@@ -1188,15 +1185,15 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
 
         // Process keys from doc URL
         let decoded_doc_url = decode_doc_url(&doc_url, &None);
+        let document_id = decoded_doc_url.document_id;
 
         // Create the root feed
-        let root_discovery_key = discovery_key_from_public_key(&decoded_doc_url.root_public_key);
-        let postfix = encode_document_id(&root_discovery_key);
+        let postfix = encode_document_id(&decoded_doc_url.document_id);
         let data_root_dir = data_root_dir.join(postfix);
         let (_, root_feed) = create_new_read_disk_feed(
             &data_root_dir,
             &decoded_doc_url.root_public_key,
-            &root_discovery_key,
+            &decoded_doc_url.document_id,
             proxy,
             encrypted,
             &None,
@@ -1207,7 +1204,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
         let state = DocumentState::new(decoded_doc_url, proxy, vec![], None, None);
 
         Self::new_disk(
-            (root_discovery_key, root_feed),
+            (document_id, root_feed),
             None,
             peer_header,
             state,
@@ -1520,8 +1517,12 @@ async fn prepare_create<P: Into<Prop>, V: Into<ScalarValue>>(
     );
 
     // Initialize document state, will be filled later with content
-    let decoded_doc_url =
-        DecodedDocUrl::new(root_public_key.clone(), document_header.clone(), encrypted);
+    let decoded_doc_url = DecodedDocUrl::new(
+        root_public_key,
+        root_discovery_key,
+        document_header.clone(),
+        encrypted,
+    );
     let state = DocumentState::new(decoded_doc_url, false, vec![], Some(write_public_key), None);
 
     PrepareCreateResult {

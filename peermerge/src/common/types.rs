@@ -23,26 +23,48 @@ impl TryFrom<u8> for FeedType {
 pub struct DocUrlInfo {
     pub version: u8,
     pub feed_type: FeedType,
+    pub parent: bool,
+    pub root_public_key: [u8; 32],
+    pub document_id: DocumentId,
     pub proxy_only: bool,
     pub encrypted: Option<bool>,
     pub compatible: bool,
 }
 
 impl DocUrlInfo {
-    pub(crate) fn new(version: u8, feed_type: FeedType, encrypted: bool) -> Self {
+    pub(crate) fn new(
+        version: u8,
+        parent: bool,
+        feed_type: FeedType,
+        root_public_key: [u8; 32],
+        document_id: DocumentId,
+        encrypted: bool,
+    ) -> Self {
         Self {
             version,
+            parent,
             feed_type,
+            root_public_key,
+            document_id,
             proxy_only: false,
             encrypted: Some(encrypted),
             compatible: feed_type == FeedType::Hypercore && version == 1,
         }
     }
 
-    pub(crate) fn new_proxy_only(version: u8, feed_type: FeedType) -> Self {
+    pub(crate) fn new_proxy_only(
+        version: u8,
+        parent: bool,
+        feed_type: FeedType,
+        root_public_key: [u8; 32],
+        document_id: DocumentId,
+    ) -> Self {
         Self {
             version,
             feed_type,
+            parent,
+            root_public_key,
+            document_id,
             proxy_only: true,
             encrypted: None,
             compatible: feed_type == FeedType::Hypercore && version == 1,

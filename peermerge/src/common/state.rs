@@ -128,11 +128,20 @@ impl DocumentState {
 
     pub(crate) fn doc_url_info(&self) -> DocUrlInfo {
         if self.proxy {
-            DocUrlInfo::new_proxy_only(self.version, crate::FeedType::Hypercore)
+            DocUrlInfo::new_proxy_only(
+                self.version,
+                true, // TODO: Child documents
+                crate::FeedType::Hypercore,
+                self.root_public_key,
+                self.root_discovery_key,
+            )
         } else {
             DocUrlInfo::new(
                 self.version,
+                true, // TODO: child documents
                 crate::FeedType::Hypercore,
+                self.root_public_key,
+                self.root_discovery_key,
                 self.encrypted.unwrap(),
             )
         }
