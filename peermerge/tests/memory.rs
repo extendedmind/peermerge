@@ -190,7 +190,7 @@ async fn process_joiner_state_event(
             RemotePeerSynced((discovery_key, len)) => {
                 remote_peer_synced.insert(discovery_key, len);
             }
-            DocumentInitialized() => {
+            DocumentInitialized(_parent_document_id) => {
                 // Skip
             }
             DocumentChanged(patches) => {
@@ -494,7 +494,7 @@ async fn process_latecomer_state_event(
             RemotePeerSynced((discovery_key, len)) => {
                 remote_peer_synced.insert(discovery_key, len);
             }
-            DocumentInitialized() => {
+            DocumentInitialized(_parent_document_id) => {
                 // Ignore, this happens with the root hypercore
             }
             DocumentChanged(patches) => {

@@ -381,7 +381,7 @@ async fn process_joiner_state_events_initial(
             DocumentChanged(patches) => {
                 document_changes.push(patches);
             }
-            DocumentInitialized() => {
+            DocumentInitialized(_parent_document_id) => {
                 document_initialized = true;
                 if creator_synced {
                     peermerge
@@ -485,7 +485,7 @@ async fn process_joiner_state_events_reopen(
             DocumentChanged(patches) => {
                 document_changes.push(patches);
             }
-            DocumentInitialized() => {
+            DocumentInitialized(_parent_document_id) => {
                 document_initialized = true;
                 if creator_and_joiner_synced {
                     let value = peermerge

@@ -162,7 +162,7 @@ async fn process_creator_state_events(
             PeerSynced(_) => {
                 panic!("Should not get remote peer synced events {event:?}");
             }
-            DocumentInitialized() => {
+            DocumentInitialized(_parent_document_id) => {
                 // Skip
             }
             RemotePeerSynced((discovery_key, len)) => {

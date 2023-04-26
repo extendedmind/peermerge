@@ -60,7 +60,7 @@ async fn append_three(
                     break;
                 }
             }
-            DocumentInitialized() => {
+            DocumentInitialized(..) => {
                 panic!("Should not get document initialized");
             }
             Reattached(_) => {

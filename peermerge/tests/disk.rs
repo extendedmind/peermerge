@@ -244,7 +244,7 @@ async fn process_joiner_state_event(
                 break;
             }
             RemotePeerSynced(_) => {}
-            DocumentInitialized() => {
+            DocumentInitialized(_parent_document_id) => {
                 // Just ignore for now
             }
             DocumentChanged(patches) => {

@@ -505,7 +505,7 @@ where
                     document_state
                         .persist_content_and_new_peer_headers(new_peer_headers)
                         .await;
-                    (false, patches, peer_syncs, reattached_peer_header)
+                    (None, patches, peer_syncs, reattached_peer_header)
                 } else {
                     let write_discovery_key = document_state.write_discovery_key();
                     let unapplied_entries = document_state.unappliend_entries_mut();
@@ -522,10 +522,15 @@ where
                         document_state
                             .set_content_and_new_peer_headers(content, new_peer_headers)
                             .await;
-                        (true, vec![], peer_syncs, reattached_peer_header)
+                        (
+                            Some(DocumentInitialized(None)), // TODO: Parent document id
+                            vec![],
+                            peer_syncs,
+                            reattached_peer_header,
+                        )
                     } else {
                         // Could not create content from this peer's data, needs more peers
-                        (false, vec![], vec![], None)
+                        (None, vec![], vec![], None)
                     }
                 };
 
@@ -562,8 +567,8 @@ where
                 })
                 .collect();
             state_events.extend(peer_synced_state_events);
-            if document_initialized {
-                state_events.push(StateEvent::new(self.id(), DocumentInitialized()));
+            if let Some(event) = document_initialized {
+                state_events.push(StateEvent::new(self.id(), event));
             }
             if patches.len() > 0 {
                 state_events.push(StateEvent::new(self.id(), DocumentChanged(patches)));

@@ -28,7 +28,6 @@ pub struct DocUrlInfo {
     pub document_id: DocumentId,
     pub proxy_only: bool,
     pub encrypted: Option<bool>,
-    pub compatible: bool,
 }
 
 impl DocUrlInfo {
@@ -48,7 +47,6 @@ impl DocUrlInfo {
             document_id,
             proxy_only: false,
             encrypted: Some(encrypted),
-            compatible: feed_type == FeedType::Hypercore && version == 1,
         }
     }
 
@@ -67,7 +65,6 @@ impl DocUrlInfo {
             document_id,
             proxy_only: true,
             encrypted: None,
-            compatible: feed_type == FeedType::Hypercore && version == 1,
         }
     }
 }

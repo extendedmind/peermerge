@@ -33,7 +33,7 @@ pub async fn setup_peermerge_mesh_memory(
             Some(state_event_sender.clone()),
         )
         .await;
-    let doc_id = peermerge_creator
+    let doc_info = peermerge_creator
         .create_new_document_memory(
             NameDescription::new("bench"),
             vec![("version", 1)],
@@ -41,11 +41,11 @@ pub async fn setup_peermerge_mesh_memory(
         )
         .await
         .unwrap();
-    let encryption_key = peermerge_creator.encryption_key(&doc_id).await;
-    peermerge_creator.watch(&doc_id, vec![ROOT]).await;
+    let encryption_key = peermerge_creator.encryption_key(&doc_info.id()).await;
+    peermerge_creator.watch(&doc_info.id(), vec![ROOT]).await;
 
     let mut senders = Vec::with_capacity(peers);
-    let doc_url = peermerge_creator.doc_url(&doc_id).await;
+    let doc_url = peermerge_creator.doc_url(&doc_info.id()).await;
 
     for i in 1..peers {
         let (proto_responder, proto_initiator) = create_pair_memory().await;
@@ -60,11 +60,11 @@ pub async fn setup_peermerge_mesh_memory(
             Some(state_event_sender.clone()),
         )
         .await;
-        let doc_id = peermerge_peer
+        let _doc_info = peermerge_peer
             .attach_writer_document_memory(&doc_url, &encryption_key)
             .await
             .unwrap();
-        peermerge_peer.watch(&doc_id, vec![ROOT]).await;
+        peermerge_peer.watch(&doc_info.id(), vec![ROOT]).await;
 
         let peermerge_peer_for_task = peermerge_peer.clone();
         let task_span = tracing::debug_span!("call_connect").or_current();
@@ -77,7 +77,7 @@ pub async fn setup_peermerge_mesh_memory(
             i,
             peer_name,
             peermerge_peer,
-            doc_id,
+            doc_info.id(),
             &mut state_event_receiver,
         )
         .await;
@@ -85,7 +85,7 @@ pub async fn setup_peermerge_mesh_memory(
     }
 
     let append_index_sender =
-        append_value_in_task(creator_name.to_string(), peermerge_creator, doc_id);
+        append_value_in_task(creator_name.to_string(), peermerge_creator, doc_info.id());
     senders.push(append_index_sender);
 
     (senders, state_event_receiver)
@@ -116,7 +116,7 @@ pub async fn setup_peermerge_mesh_disk(
             &creator_dir,
         )
         .await;
-    let doc_id = peermerge_creator
+    let doc_info = peermerge_creator
         .create_new_document_disk(
             NameDescription::new("bench"),
             vec![("version", 1)],
@@ -124,11 +124,11 @@ pub async fn setup_peermerge_mesh_disk(
         )
         .await
         .unwrap();
-    let encryption_key = peermerge_creator.encryption_key(&doc_id).await;
-    peermerge_creator.watch(&doc_id, vec![ROOT]).await;
+    let encryption_key = peermerge_creator.encryption_key(&doc_info.id()).await;
+    peermerge_creator.watch(&doc_info.id(), vec![ROOT]).await;
 
     let mut senders = Vec::with_capacity(peers);
-    let doc_url = peermerge_creator.doc_url(&doc_id).await;
+    let doc_url = peermerge_creator.doc_url(&doc_info.id()).await;
 
     for i in 1..peers {
         let (proto_responder, proto_initiator) = create_pair_memory().await;
@@ -153,11 +153,11 @@ pub async fn setup_peermerge_mesh_disk(
             &peer_dir,
         )
         .await;
-        let doc_id = peermerge_peer
+        let doc_info = peermerge_peer
             .attach_writer_document_disk(&doc_url, &encryption_key)
             .await
             .unwrap();
-        peermerge_peer.watch(&doc_id, vec![ROOT]).await;
+        peermerge_peer.watch(&doc_info.id(), vec![ROOT]).await;
 
         let peermerge_peer_for_task = peermerge_peer.clone();
         let task_span = tracing::debug_span!("call_connect").or_current();
@@ -170,7 +170,7 @@ pub async fn setup_peermerge_mesh_disk(
             i,
             peer_name,
             peermerge_peer,
-            doc_id,
+            doc_info.id(),
             &mut state_event_receiver,
         )
         .await;
@@ -178,7 +178,7 @@ pub async fn setup_peermerge_mesh_disk(
     }
 
     let append_index_sender =
-        append_value_in_task(creator_name.to_string(), peermerge_creator, doc_id);
+        append_value_in_task(creator_name.to_string(), peermerge_creator, doc_info.id());
     senders.push(append_index_sender);
 
     (senders, state_event_receiver)
