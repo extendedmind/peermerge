@@ -85,6 +85,11 @@ where
         self.root_discovery_key.clone()
     }
 
+    pub(crate) async fn info(&self) -> DocumentInfo {
+        let document_state_wrapper = self.document_state.lock().await;
+        document_state_wrapper.state().info()
+    }
+
     pub(crate) async fn root_feed(&self) -> Arc<Mutex<Feed<U>>> {
         get_feed(&self.feeds, &self.root_discovery_key)
             .await
@@ -1218,13 +1223,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
 
     pub(crate) async fn info_disk(data_root_dir: &PathBuf) -> Result<DocumentInfo, PeermergeError> {
         let document_state_wrapper = DocStateWrapper::open_disk(data_root_dir).await?;
-        let state = document_state_wrapper.state();
-        Ok(DocumentInfo {
-            document_id: state.root_discovery_key,
-            doc_url_info: state.doc_url_info(),
-            document_header: state.document_header.clone(),
-            parent_document_id: None, // TODO: Support for document hierarchies
-        })
+        Ok(document_state_wrapper.state().info())
     }
 
     pub(crate) async fn open_disk(

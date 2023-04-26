@@ -16,7 +16,7 @@ use async_std::{task, test as async_test};
 #[cfg(feature = "tokio")]
 use tokio::{task, test as async_test};
 
-mod common;
+pub mod common;
 use common::*;
 
 #[test(async_test)]
@@ -35,17 +35,23 @@ async fn proxy_disk_encrypted() -> anyhow::Result<()> {
         Some(creator_state_event_sender),
     )
     .await;
-    let creator_doc_id = peermerge_creator
+    let creator_doc_info = peermerge_creator
         .create_new_document_memory(
             NameDescription::new("proxy_test"),
             vec![("version", 1)],
             true,
         )
         .await?;
-    peermerge_creator.watch(&creator_doc_id, vec![ROOT]).await;
-    let doc_url = peermerge_creator.doc_url(&creator_doc_id).await;
-    let proxy_doc_url = peermerge_creator.proxy_doc_url(&creator_doc_id).await;
-    let encryption_key = peermerge_creator.encryption_key(&creator_doc_id).await;
+    peermerge_creator
+        .watch(&creator_doc_info.id(), vec![ROOT])
+        .await;
+    let doc_url = peermerge_creator.doc_url(&creator_doc_info.id()).await;
+    let proxy_doc_url = peermerge_creator
+        .proxy_doc_url(&creator_doc_info.id())
+        .await;
+    let encryption_key = peermerge_creator
+        .encryption_key(&creator_doc_info.id())
+        .await;
     assert_eq!(get_doc_url_info(&doc_url).encrypted, Some(true));
     assert_eq!(encryption_key.is_some(), true);
 
@@ -88,7 +94,7 @@ async fn proxy_disk_encrypted() -> anyhow::Result<()> {
 
     process_creator_state_events(
         peermerge_creator.clone(),
-        creator_doc_id,
+        creator_doc_info.id(),
         creator_state_event_receiver,
     )
     .await?;
@@ -115,10 +121,10 @@ async fn proxy_disk_encrypted() -> anyhow::Result<()> {
     peermerge_proxy
         .set_state_event_sender(Some(proxy_state_event_sender))
         .await;
-    let joiner_doc_id = peermerge_joiner
+    let joiner_doc_info = peermerge_joiner
         .attach_writer_document_memory(&doc_url, &encryption_key)
         .await?;
-    let write_key_pair: String = peermerge_joiner.write_key_pair(&joiner_doc_id).await;
+    let write_key_pair: String = peermerge_joiner.write_key_pair(&joiner_doc_info.id()).await;
     let mut peermerge_joiner_for_task = peermerge_joiner.clone();
     let joiner_connect = task::spawn(async move {
         peermerge_joiner_for_task
@@ -135,7 +141,7 @@ async fn proxy_disk_encrypted() -> anyhow::Result<()> {
             .unwrap();
     });
 
-    let joiner_doc_id_for_task = joiner_doc_id.clone();
+    let joiner_doc_id_for_task = joiner_doc_info.id();
     let proxy_process = task::spawn(async move {
         process_proxy_state_event_with_joiner_initial(
             joiner_doc_id_for_task,
@@ -148,7 +154,7 @@ async fn proxy_disk_encrypted() -> anyhow::Result<()> {
     let peermerge_joiner_for_task = peermerge_joiner.clone();
     process_joiner_state_events_initial(
         peermerge_joiner_for_task,
-        joiner_doc_id,
+        joiner_doc_info.id(),
         joiner_state_event_receiver,
     )
     .await?;
@@ -175,7 +181,7 @@ async fn proxy_disk_encrypted() -> anyhow::Result<()> {
     peermerge_proxy
         .set_state_event_sender(Some(proxy_state_event_sender))
         .await;
-    let joiner_doc_id = peermerge_joiner
+    let _joiner_doc_info = peermerge_joiner
         .reattach_writer_document_memory(&doc_url, &encryption_key, &write_key_pair)
         .await?;
     let mut peermerge_joiner_for_task = peermerge_joiner.clone();
@@ -194,7 +200,7 @@ async fn proxy_disk_encrypted() -> anyhow::Result<()> {
             .unwrap();
     });
 
-    let joiner_doc_id_for_task = joiner_doc_id.clone();
+    let joiner_doc_id_for_task = joiner_doc_info.id();
     let proxy_process = task::spawn(async move {
         process_proxy_state_event_with_joiner_reopen(
             joiner_doc_id_for_task,
@@ -207,7 +213,7 @@ async fn proxy_disk_encrypted() -> anyhow::Result<()> {
     let peermerge_joiner_for_task = peermerge_joiner.clone();
     process_joiner_state_events_reopen(
         peermerge_joiner_for_task,
-        joiner_doc_id,
+        joiner_doc_info.id(),
         joiner_state_event_receiver,
     )
     .await?;
@@ -366,7 +372,7 @@ async fn process_joiner_state_events_initial(
                     assert_eq!(len, 1);
                 }
             }
-            RemotePeerSynced((discovery_key, len)) => {
+            RemotePeerSynced((_discovery_key, len)) => {
                 // Only remote peer it can sync is its own writer
                 if len == 2 {
                     break;

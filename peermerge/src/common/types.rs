@@ -74,10 +74,15 @@ impl DocUrlInfo {
 
 #[derive(Debug, Clone)]
 pub struct DocumentInfo {
-    pub document_id: DocumentId,
     pub doc_url_info: DocUrlInfo,
     pub document_header: Option<NameDescription>,
     pub parent_document_id: Option<DocumentId>,
+}
+
+impl DocumentInfo {
+    pub fn id(&self) -> DocumentId {
+        self.doc_url_info.document_id
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -16,7 +16,7 @@ use async_std::{sync::Mutex, task, test as async_test};
 #[cfg(feature = "tokio")]
 use tokio::{sync::Mutex, task, test as async_test};
 
-mod common;
+pub mod common;
 use common::*;
 
 #[derive(Clone, Debug, Default)]
@@ -47,7 +47,7 @@ async fn memory_three_writers() -> anyhow::Result<()> {
         Some(creator_state_event_sender),
     )
     .await;
-    let creator_doc_id = peermerge_creator
+    let creator_doc_info = peermerge_creator
         .create_new_document_memory(
             NameDescription::new("memory_test"),
             vec![("version", 1)],
@@ -56,7 +56,7 @@ async fn memory_three_writers() -> anyhow::Result<()> {
         .await?;
     assert_eq!(
         peermerge_creator
-            .feed_discovery_keys(&creator_doc_id)
+            .feed_discovery_keys(&creator_doc_info.id())
             .await
             .len(),
         2
@@ -64,17 +64,30 @@ async fn memory_three_writers() -> anyhow::Result<()> {
 
     // Insert a map with a text field to the document
     let texts_id = peermerge_creator
-        .put_object(&creator_doc_id, ROOT, "texts", automerge::ObjType::Map)
+        .put_object(
+            &creator_doc_info.id(),
+            ROOT,
+            "texts",
+            automerge::ObjType::Map,
+        )
         .await
         .unwrap();
     let text_id = peermerge_creator
-        .put_object(&creator_doc_id, &texts_id, "text", automerge::ObjType::Text)
+        .put_object(
+            &creator_doc_info.id(),
+            &texts_id,
+            "text",
+            automerge::ObjType::Text,
+        )
         .await
         .unwrap();
 
     // Set watching for the prop
     peermerge_creator
-        .watch(&creator_doc_id, vec![texts_id.clone(), text_id.clone()])
+        .watch(
+            &creator_doc_info.id(),
+            vec![texts_id.clone(), text_id.clone()],
+        )
         .await;
 
     let peermerge_creator_for_task = peermerge_creator.clone();
@@ -89,8 +102,11 @@ async fn memory_three_writers() -> anyhow::Result<()> {
         Some(joiner_state_event_sender),
     )
     .await;
-    let joiner_doc_id = peermerge_joiner
-        .attach_writer_document_memory(&peermerge_creator.doc_url(&creator_doc_id).await, &None)
+    let joiner_doc_info = peermerge_joiner
+        .attach_writer_document_memory(
+            &peermerge_creator.doc_url(&creator_doc_info.id()).await,
+            &None,
+        )
         .await?;
     let peermerge_joiner_for_task = peermerge_joiner.clone();
     task::spawn(async move {
@@ -108,7 +124,7 @@ async fn memory_three_writers() -> anyhow::Result<()> {
     task::spawn(async move {
         process_joiner_state_event(
             peermerge_joiner,
-            joiner_doc_id,
+            joiner_doc_info.id(),
             joiner_state_event_receiver,
             cork_sync_joiner,
             merge_result_for_joiner,
@@ -120,7 +136,7 @@ async fn memory_three_writers() -> anyhow::Result<()> {
 
     process_creator_state_events(
         peermerge_creator,
-        creator_doc_id,
+        creator_doc_info.id(),
         creator_state_event_receiver,
         text_id,
         cork_sync_creator,
@@ -372,7 +388,7 @@ async fn process_creator_state_events(
                             Some(latecomer_state_event_sender),
                         )
                         .await;
-                        let latecomer_doc_id = peermerge_latecomer
+                        let latecomer_doc_info = peermerge_latecomer
                             .attach_writer_document_memory(&peermerge.doc_url(&doc_id).await, &None)
                             .await?;
                         let peermerge_latecomer_for_task = peermerge_latecomer.clone();
@@ -391,7 +407,7 @@ async fn process_creator_state_events(
                         task::spawn(async move {
                             process_latecomer_state_event(
                                 peermerge_latecomer,
-                                latecomer_doc_id,
+                                latecomer_doc_info.id(),
                                 latecomer_state_event_receiver,
                                 append_sync_latecomer,
                             )

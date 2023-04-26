@@ -18,7 +18,7 @@ use async_std::{task, test as async_test};
 #[cfg(feature = "tokio")]
 use tokio::{task, test as async_test};
 
-mod common;
+pub mod common;
 use common::*;
 
 #[test(async_test)]
@@ -51,15 +51,17 @@ async fn disk_two_peers(encrypted: bool) -> anyhow::Result<()> {
     let mut peermerge_creator =
         Peermerge::create_new_disk(NameDescription::new("creator"), None, &creator_dir).await;
     let document_name = "disk_test";
-    let creator_doc_id = peermerge_creator
+    let creator_doc_info = peermerge_creator
         .create_new_document_disk(
             NameDescription::new(document_name),
             vec![("version", 1)],
             encrypted,
         )
         .await?;
-    let doc_url = peermerge_creator.doc_url(&creator_doc_id).await;
-    let encryption_key = peermerge_creator.encryption_key(&creator_doc_id).await;
+    let doc_url = peermerge_creator.doc_url(&creator_doc_info.id()).await;
+    let encryption_key = peermerge_creator
+        .encryption_key(&creator_doc_info.id())
+        .await;
     assert_eq!(get_doc_url_info(&doc_url).encrypted, Some(encrypted));
     assert_eq!(encryption_key.is_some(), encrypted);
 
@@ -78,15 +80,15 @@ async fn disk_two_peers(encrypted: bool) -> anyhow::Result<()> {
 
     let mut peermerge_joiner =
         Peermerge::create_new_disk(NameDescription::new("joiner"), None, &joiner_dir).await;
-    let joiner_doc_id = peermerge_joiner
+    let joiner_doc_info = peermerge_joiner
         .attach_writer_document_disk(&doc_url, &encryption_key)
         .await?;
 
     run_disk_two_peers(
         peermerge_creator,
-        creator_doc_id.clone(),
+        creator_doc_info.id(),
         peermerge_joiner,
-        joiner_doc_id.clone(),
+        joiner_doc_info.id(),
         vec![("version".to_string(), 1)],
     )
     .await?;
@@ -106,15 +108,15 @@ async fn disk_two_peers(encrypted: bool) -> anyhow::Result<()> {
             .name,
         document_name
     );
-    assert_eq!(creator_document_infos[0].document_id, creator_doc_id);
+    assert_eq!(creator_document_infos[0].id(), creator_doc_info.id());
 
     let mut creator_encryption_keys = HashMap::new();
     if let Some(encryption_key) = encryption_key.as_ref() {
-        creator_encryption_keys.insert(creator_doc_id.clone(), encryption_key.clone());
+        creator_encryption_keys.insert(creator_doc_info.id(), encryption_key.clone());
     }
     let mut peermerge_creator = Peermerge::open_disk(creator_encryption_keys, &creator_dir).await?;
     peermerge_creator
-        .put_scalar(&creator_doc_id, ROOT, "open", 2)
+        .put_scalar(&creator_doc_info.id(), ROOT, "open", 2)
         .await?;
 
     let joiner_document_infos = Peermerge::document_infos_disk(&creator_dir).await?.unwrap();
@@ -131,19 +133,19 @@ async fn disk_two_peers(encrypted: bool) -> anyhow::Result<()> {
             .name,
         document_name
     );
-    assert_eq!(joiner_document_infos[0].document_id, joiner_doc_id);
+    assert_eq!(joiner_document_infos[0].id(), joiner_doc_info.id());
 
     let mut joiner_encryption_keys = HashMap::new();
     if let Some(encryption_key) = encryption_key.as_ref() {
-        joiner_encryption_keys.insert(joiner_doc_id.clone(), encryption_key.clone());
+        joiner_encryption_keys.insert(joiner_doc_info.id(), encryption_key.clone());
     }
     let peermerge_joiner = Peermerge::open_disk(joiner_encryption_keys, &joiner_dir).await?;
 
     run_disk_two_peers(
         peermerge_creator,
-        creator_doc_id,
+        creator_doc_info.id(),
         peermerge_joiner,
-        joiner_doc_id,
+        joiner_doc_info.id(),
         vec![("version".to_string(), 1), ("open".to_string(), 2)],
     )
     .await?;

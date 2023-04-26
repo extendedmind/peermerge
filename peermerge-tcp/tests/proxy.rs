@@ -41,7 +41,7 @@ async fn tcp_proxy_disk_encrypted() -> anyhow::Result<()> {
         &creator_dir,
     )
     .await;
-    let creator_doc_id = peermerge_creator
+    let creator_doc_info = peermerge_creator
         .create_new_document_disk(
             NameDescription::new("proxy_test"),
             vec![("version", 1)],
@@ -49,9 +49,13 @@ async fn tcp_proxy_disk_encrypted() -> anyhow::Result<()> {
         )
         .await?;
 
-    peermerge_creator.watch(&creator_doc_id, vec![ROOT]).await;
-    let doc_url = peermerge_creator.doc_url(&creator_doc_id).await;
-    let encryption_key = peermerge_creator.encryption_key(&creator_doc_id).await;
+    peermerge_creator
+        .watch(&creator_doc_info.id(), vec![ROOT])
+        .await;
+    let doc_url = peermerge_creator.doc_url(&creator_doc_info.id()).await;
+    let encryption_key = peermerge_creator
+        .encryption_key(&creator_doc_info.id())
+        .await;
     assert_eq!(get_doc_url_info(&doc_url).encrypted, Some(true));
     assert!(encryption_key.is_some());
 
@@ -78,7 +82,7 @@ async fn tcp_proxy_disk_encrypted() -> anyhow::Result<()> {
     drop(peermerge_creator);
     let mut creator_encryption_keys = HashMap::new();
     if let Some(encryption_key) = encryption_key.as_ref() {
-        creator_encryption_keys.insert(creator_doc_id, encryption_key.clone());
+        creator_encryption_keys.insert(creator_doc_info.id(), encryption_key.clone());
     }
     let peermerge_creator = Peermerge::open_disk(creator_encryption_keys, &creator_dir).await?;
 
@@ -101,7 +105,7 @@ async fn tcp_proxy_disk_encrypted() -> anyhow::Result<()> {
 
     process_creator_state_events(
         peermerge_creator,
-        creator_doc_id,
+        creator_doc_info.id(),
         creator_state_event_receiver,
     )
     .await?;

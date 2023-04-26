@@ -1,7 +1,7 @@
 use automerge::ObjId;
 use std::fmt::Debug;
 
-use crate::{automerge::AutomergeDoc, DocUrlInfo, DocumentId, NameDescription};
+use crate::{automerge::AutomergeDoc, DocUrlInfo, DocumentId, DocumentInfo, NameDescription};
 
 use super::{
     cipher::{decode_doc_url, encode_doc_url, DecodedDocUrl},
@@ -115,6 +115,14 @@ impl DocumentState {
             write_public_key,
             content,
             watched_ids: vec![],
+        }
+    }
+
+    pub(crate) fn info(&self) -> DocumentInfo {
+        DocumentInfo {
+            doc_url_info: self.doc_url_info(),
+            document_header: self.document_header.clone(),
+            parent_document_id: None, // TODO: Support for document hierarchies
         }
     }
 
