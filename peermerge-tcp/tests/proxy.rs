@@ -84,7 +84,8 @@ async fn tcp_proxy_disk_encrypted() -> anyhow::Result<()> {
     if let Some(encryption_key) = encryption_key.as_ref() {
         creator_encryption_keys.insert(creator_doc_info.id(), encryption_key.clone());
     }
-    let peermerge_creator = Peermerge::open_disk(creator_encryption_keys, &creator_dir).await?;
+    let peermerge_creator =
+        Peermerge::open_disk(creator_encryption_keys, &creator_dir, None).await?;
 
     // Delay attaching proxy document until after server above has been started.
     let _proxy_doc_id = peermerge_proxy.attach_proxy_document_disk(&doc_url).await;

@@ -473,6 +473,7 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
     pub async fn open_disk(
         encryption_keys: HashMap<DocumentId, String>,
         data_root_dir: &PathBuf,
+        state_event_sender: Option<UnboundedSender<StateEvent>>,
     ) -> Result<Self, PeermergeError> {
         let state_wrapper = PeermergeStateWrapper::open_disk(data_root_dir)
             .await?
@@ -496,7 +497,7 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
             prefix: data_root_dir.clone(),
             peermerge_state: Arc::new(Mutex::new(state_wrapper)),
             documents: Arc::new(documents),
-            state_event_sender: Arc::new(Mutex::new(None)),
+            state_event_sender: Arc::new(Mutex::new(state_event_sender)),
         })
     }
 

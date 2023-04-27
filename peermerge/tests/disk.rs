@@ -114,7 +114,8 @@ async fn disk_two_peers(encrypted: bool) -> anyhow::Result<()> {
     if let Some(encryption_key) = encryption_key.as_ref() {
         creator_encryption_keys.insert(creator_doc_info.id(), encryption_key.clone());
     }
-    let mut peermerge_creator = Peermerge::open_disk(creator_encryption_keys, &creator_dir).await?;
+    let mut peermerge_creator =
+        Peermerge::open_disk(creator_encryption_keys, &creator_dir, None).await?;
     peermerge_creator
         .put_scalar(&creator_doc_info.id(), ROOT, "open", 2)
         .await?;
@@ -139,7 +140,7 @@ async fn disk_two_peers(encrypted: bool) -> anyhow::Result<()> {
     if let Some(encryption_key) = encryption_key.as_ref() {
         joiner_encryption_keys.insert(joiner_doc_info.id(), encryption_key.clone());
     }
-    let peermerge_joiner = Peermerge::open_disk(joiner_encryption_keys, &joiner_dir).await?;
+    let peermerge_joiner = Peermerge::open_disk(joiner_encryption_keys, &joiner_dir, None).await?;
 
     run_disk_two_peers(
         peermerge_creator,

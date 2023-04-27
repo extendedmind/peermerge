@@ -53,7 +53,7 @@ async fn proxy_disk_encrypted() -> anyhow::Result<()> {
         .encryption_key(&creator_doc_info.id())
         .await;
     assert_eq!(get_doc_url_info(&doc_url).encrypted, Some(true));
-    assert_eq!(encryption_key.is_some(), true);
+    assert!(encryption_key.is_some());
 
     let mut peermerge_creator_for_task = peermerge_creator.clone();
     let creator_connect = task::spawn(async move {
