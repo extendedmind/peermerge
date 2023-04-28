@@ -523,7 +523,7 @@ where
                             .set_content_and_new_peer_headers(content, new_peer_headers)
                             .await;
                         (
-                            Some(DocumentInitialized(None)), // TODO: Parent document id
+                            Some(DocumentInitialized(true, None)), // TODO: Parent document id
                             vec![],
                             peer_syncs,
                             reattached_peer_header,

@@ -287,6 +287,9 @@ async fn process_creator_state_events(
             DocumentChanged(patches) => {
                 document_changes.push(patches);
             }
+            DocumentInitialized(..) => {
+                // Skip
+            }
             _ => {
                 panic!("Unexpected event {:?}", event);
             }
@@ -381,7 +384,7 @@ async fn process_joiner_state_events_initial(
             DocumentChanged(patches) => {
                 document_changes.push(patches);
             }
-            DocumentInitialized(_parent_document_id) => {
+            DocumentInitialized(..) => {
                 document_initialized = true;
                 if creator_synced {
                     peermerge
@@ -485,7 +488,7 @@ async fn process_joiner_state_events_reopen(
             DocumentChanged(patches) => {
                 document_changes.push(patches);
             }
-            DocumentInitialized(_parent_document_id) => {
+            DocumentInitialized(..) => {
                 document_initialized = true;
                 if creator_and_joiner_synced {
                     let value = peermerge

@@ -232,7 +232,7 @@ where
     // TODO: Check what these should be for peers > 3
     let mut sync_remaining = i * 2;
     let mut remote_sync_remaining = if i == 1 { 3 } else { 5 };
-    let mut document_initialized_remaining = 1;
+    let mut document_initialized_remaining = if i == 1 { 2 } else { 1 };
 
     while let Some(event) = state_event_receiver.next().await {
         match event.content {

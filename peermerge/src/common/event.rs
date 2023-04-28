@@ -22,7 +22,7 @@ pub enum StateEventContent {
     PeerSynced((Option<String>, [u8; 32], u64)),
     RemotePeerSynced(([u8; 32], u64)),
     Reattached(NameDescription),
-    DocumentInitialized(Option<DocumentId>),
+    DocumentInitialized(bool, Option<DocumentId>),
     DocumentChanged(Vec<Patch>),
 }
 

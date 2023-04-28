@@ -305,6 +305,9 @@ impl Peermerge<RandomAccessMemory, FeedMemoryPersistence> {
             encrypted,
         )
         .await?;
+        if let Some(state_event_sender) = self.state_event_sender.lock().await.as_mut() {
+            notify_document_initialized(state_event_sender, true, &document.id()).await;
+        }
         Ok(self.add_document(document).await)
     }
 
@@ -473,7 +476,7 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
     pub async fn open_disk(
         encryption_keys: HashMap<DocumentId, String>,
         data_root_dir: &PathBuf,
-        state_event_sender: Option<UnboundedSender<StateEvent>>,
+        mut state_event_sender: Option<UnboundedSender<StateEvent>>,
     ) -> Result<Self, PeermergeError> {
         let state_wrapper = PeermergeStateWrapper::open_disk(data_root_dir)
             .await?
@@ -485,11 +488,14 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
         for document_id in &state_wrapper.state.document_ids {
             let encryption_key: Option<Vec<u8>> =
                 decode_encryption_key(&encryption_keys.get(document_id).cloned());
-            let postfix = encode_document_id(&document_id);
+            let postfix = encode_document_id(document_id);
             let document_data_root_dir = data_root_dir.join(postfix);
             let document =
                 Document::open_disk(&peer_header, &encryption_key, &document_data_root_dir).await?;
-            documents.insert(document_id.clone(), document);
+            if let Some(state_event_sender) = state_event_sender.as_mut() {
+                notify_document_initialized(state_event_sender, false, document_id).await;
+            }
+            documents.insert(*document_id, document);
         }
 
         Ok(Self {
@@ -515,6 +521,9 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
             &self.prefix,
         )
         .await?;
+        if let Some(state_event_sender) = self.state_event_sender.lock().await.as_mut() {
+            notify_document_initialized(state_event_sender, true, &document.id()).await;
+        }
         Ok(self.add_document(document).await)
     }
 
@@ -618,6 +627,21 @@ async fn on_peer_event_disk(
 //////////////////////////////////////////////////////
 //
 // Utilities
+
+async fn notify_document_initialized(
+    state_event_sender: &mut UnboundedSender<StateEvent>,
+    new_document: bool,
+    document_id: &DocumentId,
+) {
+    if !state_event_sender.is_closed() {
+        state_event_sender
+            .unbounded_send(StateEvent::new(
+                document_id.clone(),
+                StateEventContent::DocumentInitialized(new_document, None), // TODO: child
+            ))
+            .unwrap();
+    }
+}
 
 #[instrument(level = "debug", skip_all)]
 async fn process_peer_event<T, U>(

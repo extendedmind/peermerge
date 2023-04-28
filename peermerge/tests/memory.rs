@@ -190,7 +190,7 @@ async fn process_joiner_state_event(
             RemotePeerSynced((discovery_key, len)) => {
                 remote_peer_synced.insert(discovery_key, len);
             }
-            DocumentInitialized(_parent_document_id) => {
+            DocumentInitialized(..) => {
                 // Skip
             }
             DocumentChanged(patches) => {
@@ -435,8 +435,11 @@ async fn process_creator_state_events(
                     }
                 };
             }
+            DocumentInitialized(..) => {
+                // Skip
+            }
             _ => {
-                panic!("Unkown event {:?}", event);
+                panic!("Unkown event {event:?}");
             }
         }
     }
@@ -494,7 +497,7 @@ async fn process_latecomer_state_event(
             RemotePeerSynced((discovery_key, len)) => {
                 remote_peer_synced.insert(discovery_key, len);
             }
-            DocumentInitialized(_parent_document_id) => {
+            DocumentInitialized(..) => {
                 // Ignore, this happens with the root hypercore
             }
             DocumentChanged(patches) => {
