@@ -177,11 +177,22 @@ async fn process_joiner_state_event(
                         .get_id(&doc_id, &local_texts_id, "text")
                         .await?
                         .unwrap();
-                    assert_text_equals(&peermerge, &doc_id, &local_text_id, "").await;
                     text_id = Some(local_text_id.clone());
                     peermerge
                         .watch(&doc_id, vec![local_texts_id, text_id.clone().unwrap()])
                         .await;
+
+                    // It's possible that this already contains "Hello" and the first DocumentChanged
+                    // event will never come.
+                    if assert_text_equals_either(&peermerge, &doc_id, &local_text_id, "", "Hello")
+                        .await
+                        == "Hello"
+                    {
+                        document_changes.push(vec![]);
+                        peermerge
+                            .splice_text(&doc_id, &text_id.clone().unwrap(), 5, 0, ", world!")
+                            .await?;
+                    }
                 } else {
                     assert!(name == "creator" || name == "latecomer");
                 }
@@ -556,7 +567,7 @@ async fn assert_text_equals_either(
     if result == expected_1 {
         return expected_1.to_string();
     } else if result == expected_2 {
-        return expected_1.to_string();
+        return expected_2.to_string();
     } else {
         panic!(
             "Text {} did not match either {} or {}",
