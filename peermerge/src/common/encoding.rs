@@ -67,25 +67,25 @@ impl CompactEncoding<DocumentState> for State {
         let mut flags: u8 = 0;
         self.add_start(1)?;
         if value.proxy {
-            flags = flags | 1;
+            flags |= 1;
         }
         if value.encrypted.unwrap_or(false) {
-            flags = flags | 2;
+            flags |= 2;
         }
         let len = value.peers.len();
         if len > 0 {
-            flags = flags | 4;
+            flags |= 4;
             self.encode(&len, buffer)?;
             for peer in &value.peers {
                 self.encode(peer, buffer)?;
             }
         }
         if let Some(write_public_key) = &value.write_public_key {
-            flags = flags | 8;
+            flags |= 8;
             self.encode_fixed_32(write_public_key, buffer)?;
         }
         if let Some(content) = &value.content {
-            flags = flags | 16;
+            flags |= 16;
             self.encode(content, buffer)?;
         }
 
@@ -153,7 +153,7 @@ impl CompactEncoding<DocumentPeerState> for State {
         let mut flags: u8 = 0;
         self.add_start(1)?;
         if let Some(peer_header) = &value.peer_header {
-            flags = flags | 1;
+            flags |= 1;
             self.encode(peer_header, buffer)?;
         }
         buffer[flags_index] = flags;
@@ -260,12 +260,12 @@ impl CompactEncoding<BroadcastMessage> for State {
         let mut flags: u8 = 0;
         self.add_start(1)?;
         if let Some(public_key) = &value.write_public_key {
-            flags = flags | 1;
+            flags |= 1;
             self.encode_fixed_32(public_key, buffer)?;
         }
         let len = value.peer_public_keys.len();
         if len > 0 {
-            flags = flags | 2;
+            flags |= 2;
             self.encode(&value.peer_public_keys, buffer)?;
         }
         buffer[flags_index] = flags;
@@ -335,7 +335,7 @@ impl CompactEncoding<Entry> for State {
         self.preencode(&value.version)?;
         self.preencode(&(value.entry_type as u8))?;
         self.add_end(1)?; // flags
-        if value.data.len() > 0 {
+        if !value.data.is_empty() {
             self.preencode(&value.data)?;
         }
         if let Some(name) = &value.name {
@@ -354,16 +354,16 @@ impl CompactEncoding<Entry> for State {
         let flags_index = self.start();
         let mut flags: u8 = 0;
         self.add_start(1)?;
-        if value.data.len() > 0 {
-            flags = flags | 1;
+        if !value.data.is_empty() {
+            flags |= 1;
             self.encode(&value.data, buffer)?;
         }
         if let Some(name) = &value.name {
-            flags = flags | 2;
+            flags |= 2;
             self.encode(name, buffer)?;
         }
         if let Some(peer_name) = &value.description {
-            flags = flags | 4;
+            flags |= 4;
             self.encode(peer_name, buffer)?;
         }
         buffer[flags_index] = flags;

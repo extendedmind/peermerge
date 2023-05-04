@@ -248,7 +248,7 @@ where
                 for document_id in get_document_ids(&self.documents).await {
                     let mut document = get_document(&self.documents, &document_id).await.unwrap();
                     let new_patches = document.take_patches().await;
-                    if new_patches.len() > 0 {
+                    if !new_patches.is_empty() {
                         document_patches.push((document.id(), new_patches))
                     }
                 }
@@ -427,7 +427,7 @@ async fn on_peer_event_memory(
                     &mut state_event_sender,
                     &mut peermerge_state,
                     &mut documents,
-                    &peer_name,
+                    peer_name,
                 )
                 .await
             }
@@ -463,7 +463,7 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
         if let Some(state_wrapper) = PeermergeStateWrapper::open_disk(data_root_dir).await? {
             let mut document_infos: Vec<DocumentInfo> = vec![];
             for document_id in &state_wrapper.state.document_ids {
-                let postfix = encode_document_id(&document_id);
+                let postfix = encode_document_id(document_id);
                 let document_data_root_dir = data_root_dir.join(postfix);
                 document_infos.push(Document::info_disk(&document_data_root_dir).await?);
             }
@@ -615,7 +615,7 @@ async fn on_peer_event_disk(
                     &mut state_event_sender,
                     &mut peermerge_state,
                     &mut documents,
-                    &peer_name,
+                    peer_name,
                 )
                 .await
             }
@@ -674,7 +674,7 @@ async fn process_peer_event<T, U>(
             }
         }
         PeerEventContent::PeerSynced((discovery_key, synced_contiguous_length)) => {
-            let mut document = get_document(&documents, &event.doc_discovery_key)
+            let mut document = get_document(documents, &event.doc_discovery_key)
                 .await
                 .unwrap();
             let state_events = document

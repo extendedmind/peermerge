@@ -64,7 +64,7 @@ impl UnappliedEntries {
             value.1.len() - 1
         } else {
             self.data
-                .insert(discovery_key.clone(), (length, VecDeque::from([entry])));
+                .insert(*discovery_key, (length, VecDeque::from([entry])));
             0
         };
     }
@@ -114,7 +114,7 @@ impl UnappliedEntries {
                                     result_value.set_length(new_length);
                                 } else {
                                     result.insert(
-                                        discovery_key.clone(),
+                                        *discovery_key,
                                         ApplyEntriesFeedChange::new(new_length),
                                     );
                                 }
@@ -136,7 +136,7 @@ impl UnappliedEntries {
                                 result_value.set_peer_header(peer_header);
                             } else {
                                 result.insert(
-                                    discovery_key.clone(),
+                                    *discovery_key,
                                     ApplyEntriesFeedChange::new_with_peer_header(
                                         new_length,
                                         peer_header,
@@ -145,7 +145,7 @@ impl UnappliedEntries {
                             }
                             changed = true;
                         }
-                        _ => panic!("Unexpected entry {:?}", entry),
+                        _ => panic!("Unexpected entry {entry:?}"),
                     }
                 }
 
@@ -191,7 +191,7 @@ pub(crate) fn apply_entries_autocommit(
                     if let Some(result_value) = result.get_mut(discovery_key) {
                         result_value.set_length(length);
                     } else {
-                        result.insert(discovery_key.clone(), ApplyEntriesFeedChange::new(length));
+                        result.insert(*discovery_key, ApplyEntriesFeedChange::new(length));
                     }
                 } else {
                     // All of the deps of this change are not in the doc, add to unapplied
@@ -209,12 +209,12 @@ pub(crate) fn apply_entries_autocommit(
                     result_value.set_peer_header(peer_header);
                 } else {
                     result.insert(
-                        discovery_key.clone(),
+                        *discovery_key,
                         ApplyEntriesFeedChange::new_with_peer_header(length, peer_header),
                     );
                 }
             }
-            _ => panic!("Unexpected entry {:?}", entry),
+            _ => panic!("Unexpected entry {entry:?}"),
         }
     }
 
@@ -326,7 +326,7 @@ mod tests {
         assert_int_value(&doc, &key_5, int_prop, int_value);
 
         // In chunks
-        doc = init_automerge_doc_from_data(&peer_name, &doc_discovery_key, &data);
+        doc = init_automerge_doc_from_data(peer_name, &doc_discovery_key, &data);
         apply_entries_autocommit(
             &mut doc,
             &doc_discovery_key,
@@ -354,7 +354,7 @@ mod tests {
         assert_int_value(&doc, &key_5, int_prop, int_value);
 
         // Missing first, should first result in all going to unapplied entries, then consolidate
-        doc = init_automerge_doc_from_data(&peer_name, &doc_discovery_key, &data);
+        doc = init_automerge_doc_from_data(peer_name, &doc_discovery_key, &data);
         apply_entries_autocommit(
             &mut doc,
             &doc_discovery_key,
@@ -389,12 +389,12 @@ mod tests {
         assert_int_value(&doc, &key_5, int_prop, int_value);
 
         // Mixture of two peers having every other change
-        doc = init_automerge_doc_from_data(&peer_name, &doc_discovery_key, &data);
+        doc = init_automerge_doc_from_data(peer_name, &doc_discovery_key, &data);
         apply_entries_autocommit(
             &mut doc,
             &peer_1_discovery_key,
             4,
-            vec![entry_2.clone(), entry_4.clone(), entry_scalar.clone()],
+            vec![entry_2, entry_4, entry_scalar],
             &mut unapplied_entries,
         )?;
         assert_eq!(unapplied_entries.data.len(), 1);
@@ -411,7 +411,7 @@ mod tests {
             &mut doc,
             &peer_2_discovery_key,
             3,
-            vec![entry_3.clone(), entry_5.clone()],
+            vec![entry_3, entry_5],
             &mut unapplied_entries,
         )?;
         assert_eq!(unapplied_entries.data.len(), 2);
@@ -437,7 +437,7 @@ mod tests {
             &mut doc,
             &doc_discovery_key,
             2,
-            vec![entry_1.clone()],
+            vec![entry_1],
             &mut unapplied_entries,
         )?;
         assert_eq!(unapplied_entries.data.len(), 0);

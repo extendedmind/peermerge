@@ -128,7 +128,7 @@ impl DocumentState {
 
     pub(crate) fn doc_url(&self, encryption_key: &Option<Vec<u8>>) -> String {
         if let Some(document_header) = &self.document_header {
-            encode_doc_url(&self.root_public_key, &document_header, encryption_key)
+            encode_doc_url(&self.root_public_key, document_header, encryption_key)
         } else {
             self.plain_doc_url.clone()
         }
@@ -229,7 +229,7 @@ impl DocumentContent {
             cursor.length = length;
         } else {
             self.cursors
-                .push(DocumentCursor::new(discovery_key.clone(), length));
+                .push(DocumentCursor::new(*discovery_key, length));
         }
     }
 }

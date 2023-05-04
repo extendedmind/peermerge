@@ -86,16 +86,16 @@ pub(crate) fn encode_doc_url(
         .expect("Encoding doc url should not fail");
 
     let postfix: String = if let Some(encryption_key) = encryption_key {
-        let nonce = generate_nonce(&root_public_key, 0);
-        let cipher = XChaCha20Poly1305::new_from_slice(&encryption_key).unwrap();
+        let nonce = generate_nonce(root_public_key, 0);
+        let cipher = XChaCha20Poly1305::new_from_slice(encryption_key).unwrap();
         let ciphertext = cipher.encrypt(&nonce, &*document_header_buffer).unwrap();
         let encoded_ciphertext = data_encoding::BASE32_NOPAD.encode(&ciphertext);
-        format!("{}{}", CIPHERTEXT_PARAM, encoded_ciphertext)
+        format!("{CIPHERTEXT_PARAM}{encoded_ciphertext}")
     } else {
         let encoded_plaintext = data_encoding::BASE32_NOPAD.encode(&document_header_buffer);
-        format!("{}{}", PLAINTEXT_PARAM, encoded_plaintext)
+        format!("{PLAINTEXT_PARAM}{encoded_plaintext}")
     };
-    format!("peermerge:/{}{}", encoded_domain, postfix)
+    format!("peermerge:/{encoded_domain}{postfix}")
 }
 
 pub(crate) fn encode_proxy_doc_url(doc_url: &str) -> String {
@@ -153,7 +153,7 @@ pub(crate) fn decode_doc_url(doc_url: &str, encryption_key: &Option<Vec<u8>>) ->
             // The url indicates that its encrypted. If an encryption key is given, use it to unwrap the header
             if let Some(encryption_key) = encryption_key {
                 let nonce = generate_nonce(&root_public_key, 0);
-                let cipher = XChaCha20Poly1305::new_from_slice(&encryption_key).unwrap();
+                let cipher = XChaCha20Poly1305::new_from_slice(encryption_key).unwrap();
                 Some(cipher.decrypt(&nonce, &*buffer).unwrap())
             } else {
                 None

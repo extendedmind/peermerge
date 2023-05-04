@@ -31,7 +31,7 @@ const CLOSED_LOCAL_SIGNAL_NAME: &str = "closed";
 
 pub(super) fn create_broadcast_message(peer_state: &PeerState) -> Message {
     let broadcast_message: BroadcastMessage = BroadcastMessage {
-        write_public_key: peer_state.write_public_key.clone(),
+        write_public_key: peer_state.write_public_key,
         peer_public_keys: peer_state.peer_public_keys.clone(),
     };
     let mut enc_state = State::new();
@@ -248,7 +248,7 @@ where
                     if new_info.contiguous_length == new_info.length {
                         peer_state.synced_contiguous_length = new_info.contiguous_length;
                         Some(PeerEvent::new(
-                            peer_state.doc_discovery_key.clone(),
+                            peer_state.doc_discovery_key,
                             PeerSynced((*channel.discovery_key(), new_info.contiguous_length)),
                         ))
                     } else {
@@ -312,7 +312,7 @@ where
                         {
                             // The peer has advertised that they now have what we have
                             let event = Some(PeerEvent::new(
-                                peer_state.doc_discovery_key.clone(),
+                                peer_state.doc_discovery_key,
                                 RemotePeerSynced((
                                     *channel.discovery_key(),
                                     peer_state.remote_contiguous_length,
@@ -373,13 +373,13 @@ where
                 } else if !new_remote_public_keys.is_empty() {
                     // New peers found, return a peer event
                     return Ok(Some(PeerEvent::new(
-                        peer_state.doc_discovery_key.clone(),
+                        peer_state.doc_discovery_key,
                         NewPeersBroadcasted(new_remote_public_keys),
                     )));
                 }
             }
             _ => {
-                panic!("Received unexpected extension message {:?}", message);
+                panic!("Received unexpected extension message {message:?}");
             }
         },
         Message::LocalSignal((name, data)) => match name.as_str() {
@@ -442,7 +442,7 @@ where
                     .await?;
 
                 // Create new broadcast message
-                let mut messages = vec![create_broadcast_message(&peer_state)];
+                let mut messages = vec![create_broadcast_message(peer_state)];
 
                 // If sync has not been started, start it now
                 if !peer_state.sync_sent {
@@ -459,17 +459,17 @@ where
                 channel.close().await?;
             }
             _ => {
-                panic!("Received unexpected local signal {}", name);
+                panic!("Received unexpected local signal: {name}");
             }
         },
         Message::Close(message) => {
             return Ok(Some(PeerEvent::new(
-                peer_state.doc_discovery_key.clone(),
+                peer_state.doc_discovery_key,
                 PeerDisconnected(message.channel),
             )));
         }
         _ => {
-            panic!("Received unexpected message {:?}", message);
+            panic!("Received unexpected message: {message:?}");
         }
     };
     Ok(None)

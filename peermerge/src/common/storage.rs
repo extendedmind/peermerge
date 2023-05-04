@@ -30,7 +30,7 @@ where
     T: RandomAccess + Debug + Send,
 {
     pub(crate) async fn add_document_id_to_state(&mut self, document_id: &DocumentId) {
-        self.state.document_ids.push(document_id.clone());
+        self.state.document_ids.push(*document_id);
         write_repo_state(&self.state, &mut self.storage).await;
     }
 
@@ -137,12 +137,7 @@ where
             .peers
             .iter()
             .find(|peer| &peer.discovery_key == discovery_key)
-            .and_then(|peer| {
-                peer.peer_header
-                    .as_ref()
-                    .map(|header| header.name.clone())
-                    .clone()
-            })
+            .and_then(|peer| peer.peer_header.as_ref().map(|header| header.name.clone()))
     }
 
     pub(crate) async fn persist_content_and_new_peer_headers(
@@ -209,8 +204,7 @@ where
             changed
         } else {
             panic!(
-                "Could not find a pre-existing peer with discovery key {:?} to set header {:?}",
-                discovery_key, peer_header
+                "Could not find a pre-existing peer with discovery key {discovery_key:02X?} to set header {peer_header:?}",
             );
         };
         changed
@@ -292,7 +286,7 @@ fn add_peer_public_keys_to_document_state(
     if need_to_add {
         let new_peers: Vec<DocumentPeerState> = public_keys
             .iter()
-            .map(|public_key| DocumentPeerState::new(public_key.clone(), None))
+            .map(|public_key| DocumentPeerState::new(*public_key, None))
             .collect();
         document_state.peers.extend(new_peers);
     }

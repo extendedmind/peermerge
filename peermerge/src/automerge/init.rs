@@ -56,13 +56,13 @@ pub(crate) fn init_automerge_doc_from_entries(
         init_automerge_doc_from_data(writer_name, write_discovery_key, &init_entry.data);
     let mut result = apply_entries_autocommit(
         &mut automerge_doc,
-        &synced_discovery_key,
+        synced_discovery_key,
         contiguous_length,
         vec![],
         unapplied_entries,
     )?;
     result.insert(
-        synced_discovery_key.clone(),
+        *synced_discovery_key,
         ApplyEntriesFeedChange::new(contiguous_length),
     );
     let data = automerge_doc.save();
@@ -72,13 +72,12 @@ pub(crate) fn init_automerge_doc_from_entries(
 pub(crate) fn init_automerge_doc_from_data(
     peer_name: &str,
     discovery_key: &[u8; 32],
-    data: &Vec<u8>,
+    data: &[u8],
 ) -> AutomergeDoc {
     let mut actor_id: Vec<u8> = peer_name.as_bytes().to_vec();
     actor_id.extend_from_slice(discovery_key);
     let automerge_doc = AutoCommit::load(data).unwrap();
-    let automerge_doc = automerge_doc
-        .with_actor(ActorId::from(actor_id))
-        .with_observer(VecOpObserver::default());
     automerge_doc
+        .with_actor(ActorId::from(actor_id))
+        .with_observer(VecOpObserver::default())
 }

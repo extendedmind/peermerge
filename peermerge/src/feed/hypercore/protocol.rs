@@ -41,7 +41,7 @@ where
                     break;
                 }
                 return Err(PeermergeError::IO {
-                    context: Some(format!("Unexpected protocol error")),
+                    context: Some("Unexpected protocol error".to_string()),
                     source: err,
                 });
             }
@@ -57,7 +57,7 @@ where
                                 let root_hypercore = document.root_feed().await;
                                 let root_hypercore = root_hypercore.lock().await;
                                 debug!("Event:Handshake: opening root channel");
-                                protocol.open(root_hypercore.public_key().clone()).await?;
+                                protocol.open(*root_hypercore.public_key()).await?;
                             }
                         }
                     }
@@ -71,7 +71,7 @@ where
                         {
                             unbound_discovery_keys.retain(|key| key != &discovery_key);
                             let hypercore = hypercore.lock().await;
-                            protocol.open(hypercore.public_key().clone()).await?;
+                            protocol.open(*hypercore.public_key()).await?;
                         } else {
                             unbound_discovery_keys.push(discovery_key);
                         }
@@ -81,14 +81,14 @@ where
                         let discovery_key = channel.discovery_key();
                         if let Some((document, hypercore, is_root)) =
                             get_document_and_openeable_hypercore_for_discovery_key(
-                                &discovery_key,
+                                discovery_key,
                                 &documents,
                                 &opened_documents,
                             )
                             .await
                         {
                             if is_root {
-                                opened_documents.push(discovery_key.clone());
+                                opened_documents.push(*discovery_key);
                                 let document =
                                     get_document(&documents, discovery_key).await.unwrap();
                                 if is_initiator {
@@ -97,7 +97,7 @@ where
                                     for leaf_feed in leaf_feeds {
                                         let leaf_feed = leaf_feed.lock().await;
                                         debug!("Event:Handshake: opening leaf channel");
-                                        protocol.open(leaf_feed.public_key().clone()).await?;
+                                        protocol.open(*leaf_feed.public_key()).await?;
                                     }
                                 }
                             }
@@ -117,8 +117,7 @@ where
                             );
                         } else {
                             panic!(
-                                "Could not find hypercore with discovery key {:02X?}",
-                                discovery_key
+                                "Could not find hypercore with discovery key {discovery_key:02X?}",
                             );
                         }
                     }
@@ -142,14 +141,14 @@ where
                             let discovery_keys_to_open: Vec<[u8; 32]> = message
                                 .public_keys
                                 .iter()
-                                .map(|public_key| discovery_key_from_public_key(public_key))
+                                .map(discovery_key_from_public_key)
                                 .filter(|discovery_key| {
                                     if is_initiator {
                                         true
                                     } else {
                                         // Only open protocol to those that have previously
                                         // been announced.
-                                        if unbound_discovery_keys.contains(&discovery_key) {
+                                        if unbound_discovery_keys.contains(discovery_key) {
                                             unbound_discovery_keys
                                                 .retain(|key| key != discovery_key);
                                             true
@@ -165,16 +164,15 @@ where
                             for discovery_key in discovery_keys_to_open {
                                 if let Some(hypercore) = document.leaf_feed(&discovery_key).await {
                                     let hypercore = hypercore.lock().await;
-                                    protocol.open(hypercore.public_key().clone()).await?;
+                                    protocol.open(*hypercore.public_key()).await?;
                                 } else {
                                     panic!(
-                                        "Could not find new hypercore with discovery key {:02X?}",
-                                        discovery_key
+                                        "Could not find new hypercore with discovery key {discovery_key:02X?}",
                                     );
                                 };
                             }
                         }
-                        _ => panic!("Unknown local signal {}", name),
+                        _ => panic!("Unknown local signal: {name}"),
                     },
                     _ => {}
                 }

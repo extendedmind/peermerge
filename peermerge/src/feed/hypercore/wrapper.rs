@@ -121,7 +121,7 @@ where
                 hypercore.append(data).await?
             }
         };
-        if self.channel_senders.len() > 0 {
+        if !self.channel_senders.is_empty() {
             let message = create_append_local_signal(outcome.length);
             self.notify_listeners(&message).await?;
         }
@@ -137,7 +137,7 @@ where
         &mut self,
         contiguous_length: u64,
     ) -> Result<(), PeermergeError> {
-        if self.channel_senders.len() > 0 {
+        if !self.channel_senders.is_empty() {
             let message = create_peer_synced_local_signal(contiguous_length);
             self.notify_listeners(&message).await?;
         }
@@ -149,7 +149,7 @@ where
         doc_discovery_key: [u8; 32],
         public_keys: Vec<[u8; 32]>,
     ) -> Result<(), PeermergeError> {
-        if self.channel_senders.len() > 0 {
+        if !self.channel_senders.is_empty() {
             let message = create_new_peers_created_local_signal(doc_discovery_key, public_keys);
             self.notify_listeners(&message).await?;
         }
@@ -157,7 +157,7 @@ where
     }
 
     pub(crate) async fn notify_closed(&mut self) -> Result<(), PeermergeError> {
-        if self.channel_senders.len() > 0 {
+        if !self.channel_senders.is_empty() {
             let message = create_closed_local_signal();
             self.notify_listeners(&message).await?;
         }

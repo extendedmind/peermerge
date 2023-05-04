@@ -13,7 +13,7 @@ pub enum PeermergeError {
         context: String,
     },
     #[error("Automerge error occured.{}",
-          .context.as_ref().map_or_else(String::new, |ctx| format!(" {}.", ctx)))]
+          .context.as_ref().map_or_else(String::new, |ctx| format!(" {ctx}.")))]
     AutomergeError {
         /// Context for the error
         context: Option<String>,
@@ -38,7 +38,7 @@ pub enum PeermergeError {
     },
     /// Unexpected IO error occured
     #[error("Unrecoverable input/output error occured.{}",
-          .context.as_ref().map_or_else(String::new, |ctx| format!(" {}.", ctx)))]
+          .context.as_ref().map_or_else(String::new, |ctx| format!(" {ctx}.")))]
     IO {
         /// Context for the error
         context: Option<String>,
@@ -63,31 +63,28 @@ impl From<HypercoreError> for PeermergeError {
     fn from(err: HypercoreError) -> Self {
         match err {
             HypercoreError::BadArgument { context } => PeermergeError::InvalidOperation {
-                context: format!("Hypercore bad argument: {}", context),
+                context: format!("Hypercore bad argument: {context}"),
             },
             HypercoreError::InvalidSignature { context } => PeermergeError::InvalidOperation {
-                context: format!("Hypercore invalid signature: {}", context),
+                context: format!("Hypercore invalid signature: {context}"),
             },
             HypercoreError::InvalidChecksum { context } => PeermergeError::InvalidOperation {
-                context: format!("Hypercore invalid checksum: {}", context),
+                context: format!("Hypercore invalid checksum: {context}"),
             },
             HypercoreError::CorruptStorage { context, store } => PeermergeError::InvalidOperation {
-                context: format!(
-                    "Hypercore corrupt storage, store: {}, context: {:?}",
-                    store, context
-                ),
+                context: format!("Hypercore corrupt storage, store: {store}, context: {context:?}",),
             },
             HypercoreError::EmptyStorage { store } => PeermergeError::InvalidOperation {
-                context: format!("Hypercore empty storage, store: {}", store),
+                context: format!("Hypercore empty storage, store: {store}"),
             },
             HypercoreError::NotWritable => PeermergeError::InvalidOperation {
-                context: format!("Hypercore storage not writable"),
+                context: "Hypercore storage not writable".to_string(),
             },
             HypercoreError::InvalidOperation { context } => PeermergeError::InvalidOperation {
-                context: format!("Hypercore invalid operation: {}", context),
+                context: format!("Hypercore invalid operation: {context}"),
             },
             HypercoreError::IO { context, source } => PeermergeError::IO {
-                context: Some(format!("Hypercore IO error, context: {:?}", context)),
+                context: Some(format!("Hypercore IO error, context: {context:?}")),
                 source,
             },
         }
@@ -111,7 +108,7 @@ impl<T> From<futures::channel::mpsc::TrySendError<T>> for PeermergeError {
             }
         } else {
             Self::InvalidOperation {
-                context: format!("Unexpected channel error, {:?}", err),
+                context: format!("Unexpected channel error, {err:?}"),
             }
         }
     }
@@ -120,7 +117,7 @@ impl<T> From<futures::channel::mpsc::TrySendError<T>> for PeermergeError {
 impl<T> From<ChannelSendError<T>> for PeermergeError {
     fn from(err: ChannelSendError<T>) -> Self {
         Self::InvalidOperation {
-            context: format!("Unexpected hypercore protocol channel error, {:?}", err),
+            context: format!("Unexpected hypercore protocol channel error, {err:?}"),
         }
     }
 }
@@ -128,7 +125,7 @@ impl<T> From<ChannelSendError<T>> for PeermergeError {
 impl From<EncodingError> for PeermergeError {
     fn from(err: EncodingError) -> Self {
         Self::InvalidOperation {
-            context: format!("{}", err),
+            context: format!("{err}"),
         }
     }
 }
