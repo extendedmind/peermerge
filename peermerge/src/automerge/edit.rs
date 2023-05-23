@@ -39,13 +39,15 @@ impl ApplyEntriesFeedChange {
 
 #[derive(Debug)]
 pub(crate) struct UnappliedEntries {
-    data: HashMap<[u8; 32], (u64, VecDeque<Entry>)>,
+    data: HashMap<[u8; 32], (u64, VecDeque<Entry>, Vec<ObjId>)>,
+    pub(crate) reserved_ids: HashSet<ObjId>,
 }
 
 impl UnappliedEntries {
     pub(crate) fn new() -> Self {
         Self {
             data: HashMap::new(),
+            reserved_ids: HashSet::new(),
         }
     }
 
@@ -57,14 +59,20 @@ impl UnappliedEntries {
         }
     }
 
-    pub(crate) fn add(&mut self, discovery_key: &[u8; 32], length: u64, entry: Entry) {
+    pub(crate) fn add(
+        &mut self,
+        discovery_key: &[u8; 32],
+        length: u64,
+        entry: Entry,
+        reserved: Vec<ObjId>,
+    ) {
         if let Some(value) = self.data.get_mut(discovery_key) {
             value.0 = length;
             value.1.push_back(entry);
             value.1.len() - 1
         } else {
             self.data
-                .insert(*discovery_key, (length, VecDeque::from([entry])));
+                .insert(*discovery_key, (length, VecDeque::from([entry]), reserved));
             0
         };
     }
@@ -87,6 +95,16 @@ impl UnappliedEntries {
             for kv in self.data.iter_mut() {
                 let discovery_key = kv.0;
                 let value = kv.1;
+                if value
+                    .2
+                    .iter()
+                    .any(|reserved_obj| self.reserved_ids.contains(reserved_obj))
+                {
+                    // This change is targeting a reserved object, don't try to apply
+                    continue;
+                } else if !value.2.is_empty() {
+                    value.2 = vec![];
+                }
                 // The data structure stores in value.0 the length after all entries are applied.
                 // When iterating the entries, start from the first.
                 let original_start_index = value.0 - value.1.len() as u64;
@@ -182,10 +200,38 @@ pub(crate) fn apply_entries_autocommit(
         match entry.entry_type {
             EntryType::Change => {
                 let change = entry.change.as_ref().unwrap();
-                if change
-                    .deps()
-                    .iter()
-                    .all(|dep| automerge_doc.get_change_by_hash(dep).is_some())
+                let reserved: Vec<ObjId> = if !unapplied_entries.reserved_ids.is_empty() {
+                    change
+                        .decode()
+                        .operations
+                        .iter()
+                        .filter_map(|op| {
+                            // TODO: This is hack to convert automerge::legacy::ObjectId id to ObjId
+                            // A better way to do this would be to use splice_text to a certain
+                            // point in history so that we could just always apply changes without
+                            // a need to reserve/unreserve the object id.
+                            let obj_id_as_string: &str = &op.obj.to_string();
+                            if let Ok((obj, _)) = automerge_doc.import(obj_id_as_string) {
+                                if unapplied_entries.reserved_ids.contains(&obj) {
+                                    Some(obj)
+                                } else {
+                                    None
+                                }
+                            } else {
+                                // Converting the legacy ObjectId can fail if the string id has bad actor.
+                                // This could cause a bug, but again, this is a hopefully temporary hack.
+                                None
+                            }
+                        })
+                        .collect()
+                } else {
+                    vec![]
+                };
+                if reserved.is_empty()
+                    && change
+                        .deps()
+                        .iter()
+                        .all(|dep| automerge_doc.get_change_by_hash(dep).is_some())
                 {
                     changes_to_apply.push(change.clone());
                     if let Some(result_value) = result.get_mut(discovery_key) {
@@ -194,9 +240,9 @@ pub(crate) fn apply_entries_autocommit(
                         result.insert(*discovery_key, ApplyEntriesFeedChange::new(length));
                     }
                 } else {
-                    // All of the deps of this change are not in the doc, add to unapplied
-                    // entries.
-                    unapplied_entries.add(discovery_key, length, entry);
+                    // All of the deps of this change are not in the doc or the object this
+                    // change targets is reserved, add to unapplied entries.
+                    unapplied_entries.add(discovery_key, length, entry, reserved);
                 };
             }
             EntryType::InitPeer => {
@@ -221,6 +267,24 @@ pub(crate) fn apply_entries_autocommit(
     // Consolidate unapplied entries and add them to changes and result
     unapplied_entries.consolidate(automerge_doc, &mut changes_to_apply, &mut result);
 
+    if !changes_to_apply.is_empty() {
+        automerge_doc.apply_changes(changes_to_apply)?;
+    }
+    Ok(result)
+}
+
+/// Tries to apply unapplied entries in given param. Returns what should be persisted.
+/// Returns for all of the affected discovery keys that were changed, the length
+/// where the cursor should be moved to and/or peer name change.
+pub(crate) fn apply_unapplied_entries_autocommit(
+    automerge_doc: &mut AutomergeDoc,
+    unapplied_entries: &mut UnappliedEntries,
+) -> Result<HashMap<[u8; 32], ApplyEntriesFeedChange>, PeermergeError> {
+    let mut result: HashMap<[u8; 32], ApplyEntriesFeedChange> = HashMap::new();
+    let mut changes_to_apply: Vec<Change> = vec![];
+
+    // Consolidate unapplied entries and add them to changes and result
+    unapplied_entries.consolidate(automerge_doc, &mut changes_to_apply, &mut result);
     if !changes_to_apply.is_empty() {
         automerge_doc.apply_changes(changes_to_apply)?;
     }

@@ -9,7 +9,7 @@ license = "AGPL-3.0-only"
 authors = ["Timo Tiuraniemi <timo.tiuraniemi@iki.fi>"]
 
 [dependencies]
-automerge = { version = "0.3.0", features = ["wasm"] }
+automerge = { git = "https://github.com/automerge/automerge", rev = "0335978", features = ["wasm"] }
 hypercore-protocol = { git = "https://github.com/datrs/hypercore-protocol-rs", branch = "v10", default-features = false, features = ["cache", "sparse"] }
 random-access-storage = "5.0.0"
 random-access-memory = "3.0.0"

@@ -1,4 +1,4 @@
-use automerge::{ObjId, ObjType, Patch, Prop, ReadDoc, ScalarValue, Value};
+use automerge::{ObjId, ObjType, Patch, Prop, ReadDoc, ScalarValue, Value, VecOpObserver};
 use dashmap::DashMap;
 use futures::channel::mpsc::UnboundedSender;
 use hypercore_protocol::hypercore::PartialKeypair;
@@ -6,13 +6,15 @@ use hypercore_protocol::hypercore::PartialKeypair;
 use random_access_disk::RandomAccessDisk;
 use random_access_memory::RandomAccessMemory;
 use random_access_storage::RandomAccess;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::{fmt::Debug, path::PathBuf};
 use tracing::{debug, instrument, warn};
 
 use crate::automerge::{
-    apply_entries_autocommit, init_automerge_doc_from_data, init_automerge_doc_from_entries,
-    put_scalar_autocommit, splice_text, AutomergeDoc, UnappliedEntries,
+    apply_entries_autocommit, apply_unapplied_entries_autocommit, init_automerge_doc_from_data,
+    init_automerge_doc_from_entries, put_scalar_autocommit, splice_text, ApplyEntriesFeedChange,
+    AutomergeDoc, UnappliedEntries,
 };
 use crate::common::cipher::{
     decode_doc_url, encode_doc_url, encode_document_id, encode_proxy_doc_url, DecodedDocUrl,
@@ -39,7 +41,7 @@ use crate::{
     },
     FeedMemoryPersistence, FeedPersistence, StateEvent,
 };
-use crate::{DocumentId, NameDescription, PeermergeError};
+use crate::{DocumentId, NameDescription, PeermergeError, StateEventContent};
 
 /// Document represents a single Automerge doc shared via feeds.
 #[derive(derivative::Derivative)]
@@ -392,37 +394,68 @@ where
     }
 
     #[instrument(skip_all, fields(doc_name = self.document_name))]
+    pub(crate) async fn reserve_object<O: AsRef<ObjId>>(
+        &mut self,
+        obj: O,
+    ) -> Result<(), PeermergeError> {
+        if self.proxy {
+            panic!("Can not reserve object on a proxy");
+        }
+        let mut document_state = self.document_state.lock().await;
+        document_state.reserve_object(obj);
+        Ok(())
+    }
+
+    #[instrument(skip_all, fields(doc_name = self.document_name))]
+    pub(crate) async fn unreserve_object<O: AsRef<ObjId>>(
+        &mut self,
+        obj: O,
+    ) -> Result<Vec<StateEvent>, PeermergeError> {
+        if self.proxy {
+            panic!("Can not unreserve object on a proxy");
+        }
+        let mut document_state = self.document_state.lock().await;
+        document_state.unreserve_object(obj);
+
+        // Now we need to re-consolidate
+        if let Some((content, unapplied_entries)) =
+            document_state.content_and_unapplied_entries_mut()
+        {
+            if let Some(automerge_doc) = content.automerge_doc.as_mut() {
+                let result = apply_unapplied_entries_autocommit(automerge_doc, unapplied_entries)?;
+                let (patches, new_peer_headers, reattached_peer_header, peer_syncs) =
+                    update_content_from_edit_result(
+                        result,
+                        &self.root_discovery_key,
+                        &self.write_discovery_key,
+                        content,
+                    )
+                    .await?;
+                document_state
+                    .persist_content_and_new_peer_headers(new_peer_headers)
+                    .await;
+                let state_events = self.state_events_from_update_content_result(
+                    &document_state,
+                    None,
+                    patches,
+                    peer_syncs,
+                    reattached_peer_header,
+                );
+                println!("STATE EVENTS {state_events:?}");
+                return Ok(state_events);
+            }
+        }
+
+        Ok(vec![])
+    }
+
+    #[instrument(skip_all, fields(doc_name = self.document_name))]
     pub(crate) async fn close(&mut self) -> Result<(), PeermergeError> {
         let root_feed = get_feed(&self.feeds, &self.root_discovery_key)
             .await
             .unwrap();
         let mut root_feed = root_feed.lock().await;
         root_feed.notify_closed().await?;
-        Ok(())
-    }
-
-    #[instrument(skip_all, fields(doc_name = self.document_name))]
-    pub(crate) async fn cork(&mut self) {
-        if self.proxy {
-            panic!("Can not cork a proxy");
-        }
-        let document_state = self.document_state.lock().await;
-        let write_discovery_key = document_state.write_discovery_key();
-        let write_feed_wrapper = get_feed(&self.feeds, &write_discovery_key).await.unwrap();
-        let mut write_feed = write_feed_wrapper.lock().await;
-        write_feed.cork();
-    }
-
-    #[instrument(skip_all, fields(doc_name = self.document_name))]
-    pub(crate) async fn uncork(&mut self) -> Result<(), PeermergeError> {
-        if self.proxy {
-            panic!("Can not uncork a proxy");
-        }
-        let document_state = self.document_state.lock().await;
-        let write_discovery_key = document_state.write_discovery_key();
-        let write_feed_wrapper = get_feed(&self.feeds, &write_discovery_key).await.unwrap();
-        let mut write_feed = write_feed_wrapper.lock().await;
-        write_feed.uncork().await?;
         Ok(())
     }
 
@@ -460,7 +493,7 @@ where
     pub(crate) async fn take_patches(&mut self) -> Vec<Patch> {
         let mut document_state = self.document_state.lock().await;
         if let Some(doc) = document_state.automerge_doc_mut() {
-            doc.observer().take_patches()
+            doc.diff_incremental::<VecOpObserver>().take_patches()
         } else {
             vec![]
         }
@@ -490,7 +523,7 @@ where
         let state_events: Vec<StateEvent> = {
             // Sync doc state exclusively...
             let mut document_state = self.document_state.lock().await;
-            let (document_initialized, mut patches, peer_syncs, mut reattached_peer_header) =
+            let (document_initialized, patches, peer_syncs, reattached_peer_header) =
                 if let Some((content, unapplied_entries)) =
                     document_state.content_and_unapplied_entries_mut()
                 {
@@ -538,46 +571,13 @@ where
                     }
                 };
 
-            // Filter out unwatched patches
-            let watched_ids = &document_state.state().watched_ids;
-
-            patches.retain(|patch| match patch {
-                Patch::Put { obj, .. } => watched_ids.contains(obj),
-                Patch::Insert { obj, .. } => watched_ids.contains(obj),
-                Patch::Delete { obj, .. } => watched_ids.contains(obj),
-                Patch::Increment { obj, .. } => watched_ids.contains(obj),
-                Patch::Expose { obj, .. } => watched_ids.contains(obj),
-                Patch::Splice { obj, .. } => watched_ids.contains(obj),
-            });
-            let mut state_events: Vec<StateEvent> =
-                if let Some(reattached_peer_header) = reattached_peer_header.take() {
-                    // TODO: This should be a better error
-                    assert_eq!(
-                        self.peer_name, reattached_peer_header.name,
-                        "Given peer_name did not match that of the reattached document"
-                    );
-                    vec![StateEvent::new(
-                        self.id(),
-                        Reattached(reattached_peer_header),
-                    )]
-                } else {
-                    vec![]
-                };
-            let peer_synced_state_events: Vec<StateEvent> = peer_syncs
-                .iter()
-                .map(|sync| {
-                    let name = document_state.peer_name(&sync.0);
-                    StateEvent::new(self.id(), PeerSynced((name, sync.0, sync.1)))
-                })
-                .collect();
-            state_events.extend(peer_synced_state_events);
-            if let Some(event) = document_initialized {
-                state_events.push(StateEvent::new(self.id(), event));
-            }
-            if !patches.is_empty() {
-                state_events.push(StateEvent::new(self.id(), DocumentChanged(patches)));
-            }
-            state_events
+            self.state_events_from_update_content_result(
+                &document_state,
+                document_initialized,
+                patches,
+                peer_syncs,
+                reattached_peer_header,
+            )
             // ..doc state sync ready, release lock
         };
 
@@ -602,7 +602,7 @@ where
                 if sender.is_closed() {
                     *state_event_sender = None;
                 } else {
-                    let patches = doc.observer().take_patches();
+                    let patches = doc.diff_incremental::<VecOpObserver>().take_patches();
                     if !patches.is_empty() {
                         sender
                             .unbounded_send(StateEvent::new(
@@ -676,7 +676,9 @@ where
                 .collect();
 
             // Empty patches queue, document is just initialized, so they can be safely ignored.
-            automerge_doc.observer().take_patches();
+            automerge_doc
+                .diff_incremental::<VecOpObserver>()
+                .take_patches();
 
             let new_peer_headers: Vec<([u8; 32], NameDescription)> = result
                 .iter()
@@ -717,7 +719,7 @@ where
                 .await?;
             let mut new_length = current_length + 1;
             for entry in entries {
-                unapplied_entries.add(synced_discovery_key, new_length, entry);
+                unapplied_entries.add(synced_discovery_key, new_length, entry, vec![]);
                 new_length += 1;
             }
             Ok(None)
@@ -757,6 +759,49 @@ where
             unapplied_entries,
         )
         .await
+    }
+
+    fn state_events_from_update_content_result(
+        &self,
+        document_state: &DocStateWrapper<T>,
+        document_initialized: Option<StateEventContent>,
+        mut patches: Vec<Patch>,
+        peer_syncs: Vec<([u8; 32], u64)>,
+        mut reattached_peer_header: Option<NameDescription>,
+    ) -> Vec<StateEvent> {
+        // Filter out unwatched patches
+        let watched_ids = document_state.watched_ids();
+
+        patches.retain(|patch| watched_ids.contains(&patch.obj));
+        let mut state_events: Vec<StateEvent> =
+            if let Some(reattached_peer_header) = reattached_peer_header.take() {
+                // TODO: This should be a better error
+                assert_eq!(
+                    self.peer_name, reattached_peer_header.name,
+                    "Given peer_name did not match that of the reattached document"
+                );
+                vec![StateEvent::new(
+                    self.id(),
+                    Reattached(reattached_peer_header),
+                )]
+            } else {
+                vec![]
+            };
+        let peer_synced_state_events: Vec<StateEvent> = peer_syncs
+            .iter()
+            .map(|sync| {
+                let name = document_state.peer_name(&sync.0);
+                StateEvent::new(self.id(), PeerSynced((name, sync.0, sync.1)))
+            })
+            .collect();
+        state_events.extend(peer_synced_state_events);
+        if let Some(event) = document_initialized {
+            state_events.push(StateEvent::new(self.id(), event));
+        }
+        if !patches.is_empty() {
+            state_events.push(StateEvent::new(self.id(), DocumentChanged(patches)));
+        }
+        state_events
     }
 }
 
@@ -1616,15 +1661,33 @@ async fn update_content_with_entries(
     ),
     PeermergeError,
 > {
+    let automerge_doc = content.automerge_doc.as_mut().unwrap();
+    let result = apply_entries_autocommit(
+        automerge_doc,
+        synced_discovery_key,
+        synced_contiguous_length,
+        entries,
+        unapplied_entries,
+    )?;
+    update_content_from_edit_result(result, root_discovery_key, write_discovery_key, content).await
+}
+
+async fn update_content_from_edit_result(
+    result: HashMap<[u8; 32], ApplyEntriesFeedChange>,
+    root_discovery_key: &[u8; 32],
+    write_discovery_key: &Option<[u8; 32]>,
+    content: &mut DocumentContent,
+) -> Result<
+    (
+        Vec<Patch>,
+        Vec<([u8; 32], NameDescription)>,
+        Option<NameDescription>,
+        Vec<([u8; 32], u64)>,
+    ),
+    PeermergeError,
+> {
     let (patches, new_headers, reattached_peer_header, cursor_changes, peer_syncs) = {
         let automerge_doc = content.automerge_doc.as_mut().unwrap();
-        let result = apply_entries_autocommit(
-            automerge_doc,
-            synced_discovery_key,
-            synced_contiguous_length,
-            entries,
-            unapplied_entries,
-        )?;
         let new_peer_headers: Vec<([u8; 32], NameDescription)> = result
             .iter()
             .filter(|(discovery_key, feed_change)| {
@@ -1655,7 +1718,9 @@ async fn update_content_with_entries(
             .collect();
 
         let patches = if !peer_syncs.is_empty() {
-            automerge_doc.observer().take_patches()
+            automerge_doc
+                .diff_incremental::<VecOpObserver>()
+                .take_patches()
         } else {
             vec![]
         };

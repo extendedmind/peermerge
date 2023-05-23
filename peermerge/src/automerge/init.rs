@@ -1,6 +1,6 @@
 use automerge::{
     transaction::{CommitOptions, Transactable},
-    ActorId, AutoCommit, Automerge, AutomergeError, Prop, ScalarValue, VecOpObserver, ROOT,
+    ActorId, AutoCommit, Automerge, AutomergeError, Prop, ScalarValue, ROOT,
 };
 use std::collections::HashMap;
 
@@ -32,7 +32,6 @@ pub(crate) fn init_automerge_doc_with_root_scalars<P: Into<Prop>, V: Into<Scalar
         .unwrap();
     let data = automerge_doc.save();
     let automerge_doc: AutoCommit = AutoCommit::load(&data).unwrap();
-    let automerge_doc = automerge_doc.with_observer(VecOpObserver::default());
     (automerge_doc, data)
 }
 
@@ -77,7 +76,5 @@ pub(crate) fn init_automerge_doc_from_data(
     let mut actor_id: Vec<u8> = peer_name.as_bytes().to_vec();
     actor_id.extend_from_slice(discovery_key);
     let automerge_doc = AutoCommit::load(data).unwrap();
-    automerge_doc
-        .with_actor(ActorId::from(actor_id))
-        .with_observer(VecOpObserver::default())
+    automerge_doc.with_actor(ActorId::from(actor_id))
 }

@@ -155,14 +155,12 @@ where
         prop: P,
         value: V,
     ) -> Result<(), PeermergeError> {
-        let result = {
-            let mut document = get_document(&self.documents, document_id).await.unwrap();
-            document.put_scalar(obj, prop, value).await?
-        };
+        let mut document = get_document(&self.documents, document_id).await.unwrap();
+        document.put_scalar(obj, prop, value).await?;
         {
             self.notify_of_document_changes().await;
         }
-        Ok(result)
+        Ok(())
     }
 
     #[instrument(skip(self, obj), fields(obj = obj.as_ref().to_string(), peer_name = self.peer_header.name))]
@@ -174,14 +172,45 @@ where
         delete: usize,
         text: &str,
     ) -> Result<(), PeermergeError> {
-        let result = {
-            let mut document = get_document(&self.documents, document_id).await.unwrap();
-            document.splice_text(obj, index, delete, text).await?
-        };
+        let mut document = get_document(&self.documents, document_id).await.unwrap();
+        document.splice_text(obj, index, delete, text).await?;
         {
             self.notify_of_document_changes().await;
         }
-        Ok(result)
+        Ok(())
+    }
+
+    /// Reserve a given object for only local changes, preventing any peers from making changes
+    /// to it at the same time before `unreserve_object` has been called. Useful especially when
+    /// editing a text to avoid having to update remote changes to the field while typing.
+    /// Reserve is not persisted to storage.
+    #[instrument(skip(self, obj), fields(obj = obj.as_ref().to_string(), peer_name = self.peer_header.name))]
+    pub async fn reserve_object<O: AsRef<ObjId>>(
+        &mut self,
+        document_id: &DocumentId,
+        obj: O,
+    ) -> Result<(), PeermergeError> {
+        let mut document = get_document(&self.documents, document_id).await.unwrap();
+        document.reserve_object(obj.as_ref().clone()).await
+    }
+
+    /// Un-reserve a given object previusly reserved with `reserve_object`.
+    #[instrument(skip(self, obj), fields(obj = obj.as_ref().to_string(), peer_name = self.peer_header.name))]
+    pub async fn unreserve_object<O: AsRef<ObjId>>(
+        &mut self,
+        document_id: &DocumentId,
+        obj: O,
+    ) -> Result<(), PeermergeError> {
+        let mut document = get_document(&self.documents, document_id).await.unwrap();
+        let state_events = document.unreserve_object(obj).await?;
+        if !state_events.is_empty() {
+            if let Some(state_event_sender) = self.state_event_sender.lock().await.as_mut() {
+                for state_event in state_events {
+                    state_event_sender.unbounded_send(state_event).unwrap();
+                }
+            }
+        }
+        Ok(())
     }
 
     #[instrument(skip(self), fields(peer_name = self.peer_header.name))]
@@ -191,18 +220,6 @@ where
             document.close().await?;
         }
         Ok(())
-    }
-
-    #[instrument(skip(self), fields(peer_name = self.peer_header.name))]
-    pub async fn cork(&mut self, document_id: &DocumentId) {
-        let mut document = get_document(&self.documents, document_id).await.unwrap();
-        document.cork().await
-    }
-
-    #[instrument(skip(self), fields(peer_name = self.peer_header.name))]
-    pub async fn uncork(&mut self, document_id: &DocumentId) -> Result<(), PeermergeError> {
-        let mut document = get_document(&self.documents, document_id).await.unwrap();
-        document.uncork().await
     }
 
     #[instrument(skip(self), fields(peer_name = self.peer_header.name))]

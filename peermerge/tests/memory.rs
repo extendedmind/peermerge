@@ -115,8 +115,8 @@ async fn memory_three_writers() -> anyhow::Result<()> {
             .unwrap();
     });
 
-    let cork_sync_creator = init_condvar();
-    let cork_sync_joiner = Arc::clone(&cork_sync_creator);
+    let edit_sync_creator = init_condvar();
+    let edit_sync_joiner = Arc::clone(&edit_sync_creator);
     let merge_result_for_creator = Arc::new(Mutex::new(MemoryThreeWritersResult::default()));
     let merge_result_for_joiner = merge_result_for_creator.clone();
     let append_sync_creator = init_condvar();
@@ -126,7 +126,7 @@ async fn memory_three_writers() -> anyhow::Result<()> {
             peermerge_joiner,
             joiner_doc_info.id(),
             joiner_state_event_receiver,
-            cork_sync_joiner,
+            edit_sync_joiner,
             merge_result_for_joiner,
             append_sync_joiner,
         )
@@ -139,7 +139,7 @@ async fn memory_three_writers() -> anyhow::Result<()> {
         creator_doc_info.id(),
         creator_state_event_receiver,
         text_id,
-        cork_sync_creator,
+        edit_sync_creator,
         merge_result_for_creator,
         append_sync_creator,
     )
@@ -153,7 +153,7 @@ async fn process_joiner_state_event(
     mut peermerge: Peermerge<RandomAccessMemory, FeedMemoryPersistence>,
     doc_id: DocumentId,
     mut joiner_state_event_receiver: UnboundedReceiver<StateEvent>,
-    cork_sync: BoolCondvar,
+    edit_sync: BoolCondvar,
     merge_result: Arc<Mutex<MemoryThreeWritersResult>>,
     append_sync: BoolCondvar,
 ) -> anyhow::Result<()> {
@@ -206,7 +206,7 @@ async fn process_joiner_state_event(
             }
             DocumentChanged(patches) => {
                 if document_changes.len() == 0 {
-                    assert_eq!(patches.len(), 5); // "Hello" has 5 chars
+                    assert_eq!(patches.len(), 1); // "Hello" in one TextValue
                     document_changes.push(patches);
                     let text_id = text_id.clone().unwrap();
                     assert_text_equals(&peermerge, &doc_id, &text_id, "Hello").await;
@@ -219,11 +219,11 @@ async fn process_joiner_state_event(
                     let text_id = text_id.clone().unwrap();
                     assert_text_equals(&peermerge, &doc_id, &text_id, "Hello, world!").await;
 
-                    // Let's make sure via variable that the other end is also ready to cork
-                    wait_for_condvar(cork_sync.clone()).await;
+                    // Let's make sure via variable that the other end is also ready to edit
+                    wait_for_condvar(edit_sync.clone()).await;
 
-                    // Ok, ready to cork in unison
-                    peermerge.cork(&doc_id).await;
+                    // Ok, ready to edit in unison, reserve field
+                    peermerge.reserve_object(&doc_id, &text_id).await?;
                     peermerge.splice_text(&doc_id, &text_id, 5, 2, "").await?;
                     peermerge.splice_text(&doc_id, &text_id, 4, 0, "XX").await?;
                     assert_text_equals(&peermerge, &doc_id, &text_id, "HellXXoworld!").await;
@@ -235,24 +235,31 @@ async fn process_joiner_state_event(
                     // This is the two local additions as one Splice patch
                     assert_eq!(patches.len(), 1);
                     document_changes.push(patches);
+                    // Unreserve to get the peers' changes processed
+                    let text_id = text_id.clone().unwrap();
+                    peermerge.unreserve_object(&doc_id, &text_id).await?;
                 } else if document_changes.len() == 4 {
-                    assert_eq!(patches.len(), 3); // One overlapping delete, and two Y
+                    assert_eq!(patches.len(), 2); // One overlapping delete, and YY as TextValue
                     document_changes.push(patches);
                     let text_id = text_id.clone().unwrap();
-                    merge_result.lock().await.joiner_merge = Some(
-                        assert_text_equals_either(
-                            &peermerge,
-                            &doc_id,
-                            &text_id,
-                            "HellXXYYworld!",
-                            "HellYYXXworld!",
-                        )
-                        .await,
-                    );
-                    // These are the changes sent by the peer, uncork to send the changes to the peer now
-                    peermerge.uncork(&doc_id).await.unwrap();
+                    {
+                        let mut merge_result = merge_result.lock().await;
+                        merge_result.joiner_merge = Some(
+                            assert_text_equals_either(
+                                &peermerge,
+                                &doc_id,
+                                &text_id,
+                                "HellXXYYworld!",
+                                "HellYYXXworld!",
+                            )
+                            .await,
+                        );
+                        if merge_result.creator_merge.is_some() {
+                            assert!(merge_result.merge_equals());
+                        }
+                    }
                 } else if document_changes.len() == 5 {
-                    assert_eq!(patches.len(), 2); // Two latecomer additions
+                    assert_eq!(patches.len(), 1); // ZZ latecomer additions as one TextValue
                     document_changes.push(patches);
                     let text_id = text_id.clone().unwrap();
                     assert_text_equals_either(
@@ -272,7 +279,7 @@ async fn process_joiner_state_event(
                 }
             }
             _ => {
-                panic!("Unkown event {:?}", event);
+                panic!("Unkown event {event:?}");
             }
         }
     }
@@ -285,7 +292,7 @@ async fn process_creator_state_events(
     doc_id: DocumentId,
     mut creator_state_event_receiver: UnboundedReceiver<StateEvent>,
     text_id: ObjId,
-    cork_sync: BoolCondvar,
+    edit_sync: BoolCondvar,
     merge_result: Arc<Mutex<MemoryThreeWritersResult>>,
     append_sync: BoolCondvar,
 ) -> anyhow::Result<()> {
@@ -325,7 +332,7 @@ async fn process_creator_state_events(
                 let document_changes_len = document_changes.len();
                 match document_changes_len {
                     0 => {
-                        assert_eq!(patches.len(), 1); // Original creation of "texts";
+                        assert_eq!(patches.len(), 2); // Original creation of "version" and "texts";
                         document_changes.push(patches);
                     }
                     1 => {
@@ -337,18 +344,19 @@ async fn process_creator_state_events(
                         document_changes.push(patches);
                     }
                     3 => {
-                        assert_eq!(patches.len(), 8); // ", world!" has 8 chars
+                        assert_eq!(patches.len(), 1); // ", world!" in one TextValue
                         document_changes.push(patches);
                         assert_text_equals(&peermerge, &doc_id, &text_id, "Hello, world!").await;
 
-                        // Ready to notify about cork
-                        notify_one_condvar(cork_sync.clone()).await;
+                        // Ready to notify about edit
+                        notify_one_condvar(edit_sync.clone()).await;
 
-                        // Ok, ready to cork
-                        peermerge.cork(&doc_id).await;
+                        // Ok, ready to edit, reserve the text_id to prevent the other peer from
+                        // affecting our document too soon
+                        peermerge.reserve_object(&doc_id, &text_id).await?;
 
-                        // Let's create a conflict here, cork to prevent sending these changes to the
-                        // peer
+                        // Let's create a conflict here, reserve prevent getting changes from the
+                        // other peer before unreserve
                         peermerge
                             .splice_text(&doc_id, &text_id, 4, 2, "")
                             .await
@@ -368,25 +376,28 @@ async fn process_creator_state_events(
                         // This is the two local additions as one Splice message
                         assert_eq!(patches.len(), 1);
                         document_changes.push(patches);
-                        // Uncork to send the changes to the peer now
-                        peermerge.uncork(&doc_id).await?;
+                        // Unreserve to process the changes from the peer now
+                        peermerge.unreserve_object(&doc_id, &text_id).await?;
                     }
                     6 => {
-                        assert_eq!(patches.len(), 3); // One deletion that wasn't joined and two X chars
+                        assert_eq!(patches.len(), 2); // One deletion that wasn't joined and two X chars as one TextValue
                         document_changes.push(patches);
-                        let mut merge_result = merge_result.lock().await;
-                        merge_result.creator_merge = Some(
-                            assert_text_equals_either(
-                                &peermerge,
-                                &doc_id,
-                                &text_id,
-                                "HellXXYYworld!",
-                                "HellYYXXworld!",
-                            )
-                            .await,
-                        );
-                        assert!(merge_result.merge_equals());
-
+                        {
+                            let mut merge_result = merge_result.lock().await;
+                            merge_result.creator_merge = Some(
+                                assert_text_equals_either(
+                                    &peermerge,
+                                    &doc_id,
+                                    &text_id,
+                                    "HellXXYYworld!",
+                                    "HellYYXXworld!",
+                                )
+                                .await,
+                            );
+                            if merge_result.joiner_merge.is_some() {
+                                assert!(merge_result.merge_equals());
+                            }
+                        }
                         // Now let's join in a latecomer peer to the creator peer
                         latecomer_attached = true;
                         let (proto_responder, proto_initiator) = create_pair_memory().await;
@@ -427,7 +438,7 @@ async fn process_creator_state_events(
                         });
                     }
                     7 => {
-                        assert_eq!(patches.len(), 2); // Two latecomer additions
+                        assert_eq!(patches.len(), 1); // ZZ latecomer addition as one TextValue
                         assert_text_equals_either(
                             &peermerge,
                             &doc_id,

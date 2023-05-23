@@ -1,4 +1,3 @@
-use automerge::ObjId;
 use std::fmt::Debug;
 
 use crate::{automerge::AutomergeDoc, DocUrlInfo, DocumentId, DocumentInfo, NameDescription};
@@ -56,8 +55,6 @@ pub(crate) struct DocumentState {
     pub(crate) write_public_key: Option<[u8; 32]>,
     /// Content of the document. None means content hasn't been synced yet.
     pub(crate) content: Option<DocumentContent>,
-    /// Transient watch variable
-    pub(crate) watched_ids: Vec<ObjId>,
 }
 impl DocumentState {
     pub(crate) fn new(
@@ -91,7 +88,6 @@ impl DocumentState {
             peers,
             write_public_key,
             content,
-            watched_ids: vec![],
         }
     }
 
@@ -114,7 +110,6 @@ impl DocumentState {
             peers,
             write_public_key,
             content,
-            watched_ids: vec![],
         }
     }
 

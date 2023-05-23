@@ -87,6 +87,7 @@ where
 {
     state: DocumentState,
     unapplied_entries: UnappliedEntries,
+    watched_ids: Vec<ObjId>,
     storage: T,
 }
 
@@ -118,6 +119,10 @@ where
 
     pub(crate) fn unappliend_entries_mut(&mut self) -> &mut UnappliedEntries {
         &mut self.unapplied_entries
+    }
+
+    pub(crate) fn watched_ids(&self) -> &Vec<ObjId> {
+        &self.watched_ids
     }
 
     pub(crate) async fn set_content_and_new_peer_headers(
@@ -187,7 +192,18 @@ where
     }
 
     pub(crate) fn watch(&mut self, ids: Vec<ObjId>) {
-        self.state.watched_ids = ids;
+        self.watched_ids = ids;
+    }
+
+    pub(crate) fn reserve_object<O: AsRef<ObjId>>(&mut self, obj: O) {
+        let obj = obj.as_ref();
+        if !self.unapplied_entries.reserved_ids.contains(obj) {
+            self.unapplied_entries.reserved_ids.insert(obj.clone());
+        }
+    }
+
+    pub(crate) fn unreserve_object<O: AsRef<ObjId>>(&mut self, obj: O) {
+        self.unapplied_entries.reserved_ids.remove(obj.as_ref());
     }
 
     fn set_peer_header(&mut self, discovery_key: &[u8; 32], peer_header: NameDescription) -> bool {
@@ -218,6 +234,7 @@ impl DocStateWrapper<RandomAccessMemory> {
             state,
             storage,
             unapplied_entries: UnappliedEntries::new(),
+            watched_ids: vec![],
         }
     }
 }
@@ -232,6 +249,7 @@ impl DocStateWrapper<RandomAccessDisk> {
             state,
             storage,
             unapplied_entries: UnappliedEntries::new(),
+            watched_ids: vec![],
         }
     }
 
@@ -249,6 +267,7 @@ impl DocStateWrapper<RandomAccessDisk> {
             state,
             storage,
             unapplied_entries: UnappliedEntries::new(),
+            watched_ids: vec![],
         })
     }
 }

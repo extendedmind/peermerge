@@ -41,8 +41,6 @@ where
     proxy: bool,
     entry_cipher: Option<EntryCipher>,
     channel_senders: Vec<ChannelSender<Message>>,
-    corked: bool,
-    message_queue: Vec<Message>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -67,8 +65,6 @@ impl HypercoreWrapper<RandomAccessDisk> {
             proxy,
             entry_cipher,
             channel_senders: vec![],
-            corked: false,
-            message_queue: vec![],
         };
         (wrapper, key)
     }
@@ -95,8 +91,6 @@ impl HypercoreWrapper<RandomAccessMemory> {
             proxy,
             entry_cipher,
             channel_senders: vec![],
-            corked: false,
-            message_queue: vec![],
         };
         (wrapper, key)
     }
@@ -160,29 +154,6 @@ where
         if !self.channel_senders.is_empty() {
             let message = create_closed_local_signal();
             self.notify_listeners(&message).await?;
-        }
-        Ok(())
-    }
-
-    /// Cork sending notifications about this hypercore and start queuing in-memory messages
-    /// about changes.
-    pub(crate) fn cork(&mut self) {
-        self.corked = true;
-    }
-
-    /// Remove cork and send out all of the messages that were corked to listeners.
-    pub(crate) async fn uncork(&mut self) -> Result<(), PeermergeError> {
-        let messages = {
-            self.corked = false;
-            self.message_queue.clone()
-        };
-        {
-            for message in messages {
-                self.notify_listeners(&message).await?;
-            }
-        }
-        {
-            self.message_queue = vec![];
         }
         Ok(())
     }
@@ -306,11 +277,7 @@ where
                 closed_indices.push(i);
             } else {
                 let message = message.clone();
-                if !self.corked {
-                    self.channel_senders[i].send(message).await?;
-                } else {
-                    self.message_queue.push(message);
-                }
+                self.channel_senders[i].send(message).await?;
             }
         }
         closed_indices.sort();

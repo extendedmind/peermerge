@@ -252,7 +252,7 @@ async fn process_joiner_state_event(
                 document_changes.push(patches);
             }
             _ => {
-                panic!("Unkown event {:?}", event);
+                panic!("Unkown event {event:?}");
             }
         }
     }
@@ -267,12 +267,13 @@ async fn process_creator_state_events(
     assert_sync: BoolCondvar,
     expected_scalars: Vec<(String, u64)>,
 ) -> anyhow::Result<()> {
+    let mut document_changes: Vec<Vec<Patch>> = vec![];
     while let Some(event) = creator_state_event_receiver.next().await {
         info!("Received event {:?}", event);
         match event.content {
             PeerSynced((Some(name), _, len)) => {
                 if expected_scalars.len() == 2 {
-                    panic!("Invalid creator peer sync {:?}", name);
+                    panic!("Invalid creator peer sync {name:?}");
                 }
                 assert_eq!(name, "joiner");
                 assert_eq!(len, expected_scalars.len() as u64);
@@ -295,13 +296,11 @@ async fn process_creator_state_events(
                 }
             }
             DocumentChanged(patches) => {
-                if expected_scalars.len() == 1 {
-                    panic!("Invalid creator document changes {:?}", patches);
-                }
-                assert_eq!(patches.len(), 1);
+                assert_eq!(patches.len(), expected_scalars.len());
+                document_changes.push(patches);
             }
             _ => {
-                panic!("Unkown event {:?}", event);
+                panic!("Unkown event {event:?}");
             }
         }
     }
