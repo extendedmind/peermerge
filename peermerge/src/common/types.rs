@@ -82,6 +82,13 @@ impl DocumentInfo {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct DocumentSharingInfo {
+    pub proxy: bool,
+    pub proxy_doc_url: String,
+    pub doc_url: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct NameDescription {
     pub name: String,

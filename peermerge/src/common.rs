@@ -15,4 +15,4 @@ pub(crate) mod utils;
 pub use cipher::get_doc_url_info;
 pub use error::PeermergeError;
 pub use event::{PeerEvent, PeerEventContent, StateEvent, StateEventContent};
-pub use types::{DocUrlInfo, DocumentInfo, FeedType, NameDescription};
+pub use types::{DocUrlInfo, DocumentInfo, DocumentSharingInfo, FeedType, NameDescription};

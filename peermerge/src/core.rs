@@ -34,7 +34,7 @@ use crate::{
         PeerEventContent,
     },
     feed::{FeedMemoryPersistence, FeedPersistence, Protocol},
-    PeermergeError, StateEventContent,
+    DocumentSharingInfo, PeermergeError, StateEventContent,
 };
 use crate::{
     common::{DocumentInfo, PeerEvent},
@@ -220,6 +220,12 @@ where
             document.close().await?;
         }
         Ok(())
+    }
+
+    #[instrument(skip(self), fields(peer_name = self.peer_header.name))]
+    pub async fn sharing_info(&self, document_id: &DocumentId) -> DocumentSharingInfo {
+        let document = get_document(&self.documents, document_id).await.unwrap();
+        document.sharing_info()
     }
 
     #[instrument(skip(self), fields(peer_name = self.peer_header.name))]

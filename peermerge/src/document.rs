@@ -41,7 +41,7 @@ use crate::{
     },
     FeedMemoryPersistence, FeedPersistence, StateEvent,
 };
-use crate::{DocumentId, NameDescription, PeermergeError, StateEventContent};
+use crate::{DocumentId, DocumentSharingInfo, NameDescription, PeermergeError, StateEventContent};
 
 /// Document represents a single Automerge doc shared via feeds.
 #[derive(derivative::Derivative)]
@@ -457,6 +457,20 @@ where
         let mut root_feed = root_feed.lock().await;
         root_feed.notify_closed().await?;
         Ok(())
+    }
+
+    #[instrument(skip_all, fields(doc_name = self.document_name))]
+    pub(crate) fn sharing_info(&self) -> DocumentSharingInfo {
+        let doc_url = if !self.proxy {
+            Some(self.doc_url.clone())
+        } else {
+            None
+        };
+        DocumentSharingInfo {
+            proxy: self.proxy,
+            proxy_doc_url: self.proxy_doc_url(),
+            doc_url,
+        }
     }
 
     #[instrument(skip_all, fields(doc_name = self.document_name))]

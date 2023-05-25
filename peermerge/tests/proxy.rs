@@ -52,8 +52,14 @@ async fn proxy_disk_encrypted() -> anyhow::Result<()> {
     let encryption_key = peermerge_creator
         .encryption_key(&creator_doc_info.id())
         .await;
-    assert_eq!(get_doc_url_info(&doc_url).encrypted, Some(true));
+    let doc_url_info = get_doc_url_info(&doc_url);
+    assert_eq!(doc_url_info.encrypted, Some(true));
     assert!(encryption_key.is_some());
+    let sharing_info = peermerge_creator
+        .sharing_info(&doc_url_info.document_id)
+        .await;
+    assert!(!sharing_info.proxy);
+    assert!(sharing_info.doc_url.is_some());
 
     let mut peermerge_creator_for_task = peermerge_creator.clone();
     let creator_connect = task::spawn(async move {
@@ -75,9 +81,13 @@ async fn proxy_disk_encrypted() -> anyhow::Result<()> {
         &proxy_dir,
     )
     .await;
-    let _proxy_doc_id = peermerge_proxy
+    let proxy_doc_info = peermerge_proxy
         .attach_proxy_document_disk(&proxy_doc_url)
         .await;
+    let sharing_info = peermerge_proxy.sharing_info(&proxy_doc_info.id()).await;
+    assert!(sharing_info.proxy);
+    assert!(sharing_info.doc_url.is_none());
+
     let mut peermerge_proxy_for_task = peermerge_proxy.clone();
     let proxy_connect = task::spawn(async move {
         peermerge_proxy_for_task
