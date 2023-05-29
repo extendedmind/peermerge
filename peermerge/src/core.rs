@@ -1,4 +1,4 @@
-use automerge::{ObjId, ObjType, Patch, Prop, ScalarValue};
+use automerge::{AutomergeError, ObjId, ObjType, Patch, Prop, ScalarValue};
 use dashmap::DashMap;
 use futures::{
     channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender},
@@ -23,6 +23,7 @@ use wasm_bindgen_futures::spawn_local;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::feed::FeedDiskPersistence;
 use crate::{
+    automerge::AutomergeDoc,
     common::{
         cipher::{
             decode_encryption_key, decode_key_pair, encode_document_id, encode_encryption_key,
@@ -140,6 +141,25 @@ where
         let result = {
             let mut document = get_document(&self.documents, document_id).await.unwrap();
             document.put_object(obj, prop, object).await?
+        };
+        {
+            self.notify_of_document_changes().await;
+        }
+        Ok(result)
+    }
+
+    #[instrument(skip(self, cb), fields(peer_name = self.peer_header.name))]
+    pub async fn transact<F, O>(
+        &mut self,
+        document_id: &DocumentId,
+        cb: F,
+    ) -> Result<O, PeermergeError>
+    where
+        F: FnOnce(&mut AutomergeDoc) -> Result<O, AutomergeError>,
+    {
+        let result = {
+            let mut document = get_document(&self.documents, document_id).await.unwrap();
+            document.transact(cb).await?
         };
         {
             self.notify_of_document_changes().await;

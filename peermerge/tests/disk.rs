@@ -1,4 +1,4 @@
-use automerge::ROOT;
+use automerge::{transaction::Transactable, ROOT};
 use futures::{
     channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender},
     stream::StreamExt,
@@ -116,9 +116,14 @@ async fn disk_two_peers(encrypted: bool) -> anyhow::Result<()> {
     }
     let mut peermerge_creator =
         Peermerge::open_disk(creator_encryption_keys, &creator_dir, None).await?;
-    peermerge_creator
-        .put_scalar(&creator_doc_info.id(), ROOT, "open", 2)
+    let value = peermerge_creator
+        .transact(&creator_doc_info.id(), |doc| {
+            let value = 2;
+            doc.put(ROOT, "open", value)?;
+            Ok(value)
+        })
         .await?;
+    assert_eq!(value, 2);
 
     let joiner_document_infos = Peermerge::document_infos_disk(&creator_dir).await?.unwrap();
     assert_eq!(joiner_document_infos.len(), 1);

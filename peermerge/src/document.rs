@@ -1,4 +1,6 @@
-use automerge::{ObjId, ObjType, Patch, Prop, ReadDoc, ScalarValue, Value, VecOpObserver};
+use automerge::{
+    AutomergeError, ObjId, ObjType, Patch, Prop, ReadDoc, ScalarValue, Value, VecOpObserver,
+};
 use dashmap::DashMap;
 use futures::channel::mpsc::UnboundedSender;
 use hypercore_protocol::hypercore::PartialKeypair;
@@ -13,8 +15,8 @@ use tracing::{debug, instrument, warn};
 
 use crate::automerge::{
     apply_entries_autocommit, apply_unapplied_entries_autocommit, init_automerge_doc_from_data,
-    init_automerge_doc_from_entries, put_scalar_autocommit, splice_text, ApplyEntriesFeedChange,
-    AutomergeDoc, UnappliedEntries,
+    init_automerge_doc_from_entries, put_scalar_autocommit, splice_text_autocommit,
+    transact_autocommit, ApplyEntriesFeedChange, AutomergeDoc, UnappliedEntries,
 };
 use crate::common::cipher::{
     decode_doc_url, encode_doc_url, encode_document_id, encode_proxy_doc_url, DecodedDocUrl,
@@ -358,6 +360,42 @@ where
     }
 
     #[instrument(skip_all, fields(doc_name = self.document_name))]
+    pub(crate) async fn transact<F, O>(&mut self, cb: F) -> Result<O, PeermergeError>
+    where
+        F: FnOnce(&mut AutomergeDoc) -> Result<O, AutomergeError>,
+    {
+        if self.proxy {
+            panic!("Can not put object on a proxy");
+        }
+        let result = {
+            let mut document_state = self.document_state.lock().await;
+            let (entry, result) = if let Some(doc) = document_state.automerge_doc_mut() {
+                transact_autocommit(doc, cb).unwrap()
+            } else {
+                unimplemented!(
+                    "TODO: No proper error code for trying to change before a document is synced"
+                );
+            };
+            if let Some(entry) = entry {
+                let write_discovery_key = document_state.write_discovery_key();
+                let length = {
+                    let write_feed = get_feed(&self.feeds, &write_discovery_key).await.unwrap();
+                    let mut write_feed = write_feed.lock().await;
+                    write_feed.append(&serialize_entry(&entry)?).await?
+                };
+                document_state
+                    .set_cursor(&write_discovery_key, length)
+                    .await;
+            }
+            result
+        };
+        {
+            self.notify_of_document_changes().await;
+        }
+        Ok(result)
+    }
+
+    #[instrument(skip_all, fields(doc_name = self.document_name))]
     pub(crate) async fn splice_text<O: AsRef<ObjId>>(
         &mut self,
         obj: O,
@@ -371,7 +409,7 @@ where
         {
             let mut document_state = self.document_state.lock().await;
             let entry = if let Some(doc) = document_state.automerge_doc_mut() {
-                splice_text(doc, obj, index, delete, text)?
+                splice_text_autocommit(doc, obj, index, delete, text)?
             } else {
                 unimplemented!(
                 "TODO: No proper error code for trying to splice text before a document is synced"

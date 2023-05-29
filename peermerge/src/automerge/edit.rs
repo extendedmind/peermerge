@@ -1,4 +1,7 @@
-use automerge::{transaction::Transactable, Change, ChangeHash, ObjId, ObjType, Prop, ScalarValue};
+use automerge::{
+    transaction::Transactable, AutomergeError, Change, ChangeHash, ObjId, ObjType, Prop,
+    ScalarValue,
+};
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use super::AutomergeDoc;
@@ -313,7 +316,7 @@ pub(crate) fn put_scalar_autocommit<O: AsRef<ObjId>, P: Into<Prop>, V: Into<Scal
     Ok(Entry::new_change(change))
 }
 
-pub(crate) fn splice_text<O: AsRef<ObjId>>(
+pub(crate) fn splice_text_autocommit<O: AsRef<ObjId>>(
     automerge_doc: &mut AutomergeDoc,
     obj: O,
     index: usize,
@@ -323,6 +326,20 @@ pub(crate) fn splice_text<O: AsRef<ObjId>>(
     automerge_doc.splice_text(obj, index, delete, text)?;
     let change = automerge_doc.get_last_local_change().unwrap().clone();
     Ok(Entry::new_change(change))
+}
+
+pub(crate) fn transact_autocommit<F, O>(
+    automerge_doc: &mut AutomergeDoc,
+    cb: F,
+) -> Result<(Option<Entry>, O), PeermergeError>
+where
+    F: FnOnce(&mut AutomergeDoc) -> Result<O, AutomergeError>,
+{
+    let result = cb(automerge_doc).unwrap();
+    let entry = automerge_doc
+        .get_last_local_change()
+        .map(|change| Entry::new_change(change.clone()));
+    Ok((entry, result))
 }
 
 #[cfg(test)]
