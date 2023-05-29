@@ -6,6 +6,7 @@ use std::collections::HashMap;
 
 use super::{apply_entries_autocommit, ApplyEntriesFeedChange, AutomergeDoc, UnappliedEntries};
 use crate::{
+    common::constants::PEERMERGE_VERSION,
     common::entry::{Entry, EntryType},
     PeermergeError,
 };
@@ -21,7 +22,7 @@ pub(crate) fn init_automerge_doc_with_root_scalars<P: Into<Prop>, V: Into<Scalar
     let mut automerge_doc = Automerge::new().with_actor(ActorId::from(actor_id));
     automerge_doc
         .transact_with::<_, _, AutomergeError, _>(
-            |_| CommitOptions::default().with_message("init".to_owned()),
+            |_| CommitOptions::default().with_message(format!("init:{PEERMERGE_VERSION}")),
             |tx| {
                 for root_prop in root_props {
                     tx.put(ROOT, root_prop.0, root_prop.1).unwrap();

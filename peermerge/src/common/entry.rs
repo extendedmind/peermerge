@@ -4,6 +4,8 @@ use automerge::Change;
 
 use crate::NameDescription;
 
+use super::constants::PEERMERGE_VERSION;
+
 /// Type of entry stored to a hypercore.
 #[derive(Copy, Clone, Debug, PartialEq)]
 #[repr(u8)]
@@ -38,7 +40,7 @@ pub(crate) struct Entry {
 impl Entry {
     pub(crate) fn new_init_doc(document_header: NameDescription, data: Vec<u8>) -> Self {
         Self::new(
-            1,
+            PEERMERGE_VERSION,
             EntryType::InitDoc,
             Some(document_header.name),
             document_header.description,
@@ -51,7 +53,7 @@ impl Entry {
         root_discovery_key: [u8; 32],
     ) -> Self {
         Self::new(
-            1,
+            PEERMERGE_VERSION,
             EntryType::InitPeer,
             Some(peer_header.name),
             peer_header.description,
@@ -62,7 +64,7 @@ impl Entry {
     pub(crate) fn new_change(mut change: Change) -> Self {
         let data = change.bytes().to_vec();
         Self {
-            version: 1,
+            version: PEERMERGE_VERSION,
             entry_type: EntryType::Change,
             name: None,
             description: None,

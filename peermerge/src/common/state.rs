@@ -4,6 +4,7 @@ use crate::{automerge::AutomergeDoc, DocUrlInfo, DocumentId, DocumentInfo, NameD
 
 use super::{
     cipher::{decode_doc_url, encode_doc_url, DecodedDocUrl},
+    constants::PEERMERGE_VERSION,
     keys::discovery_key_from_public_key,
 };
 
@@ -16,7 +17,7 @@ pub(crate) struct PeermergeState {
 }
 impl PeermergeState {
     pub(crate) fn new(peer_header: &NameDescription, document_ids: Vec<DocumentId>) -> Self {
-        Self::new_with_version(1, peer_header.clone(), document_ids)
+        Self::new_with_version(PEERMERGE_VERSION, peer_header.clone(), document_ids)
     }
 
     pub(crate) fn new_with_version(
@@ -64,7 +65,14 @@ impl DocumentState {
         write_public_key: Option<[u8; 32]>,
         content: Option<DocumentContent>,
     ) -> Self {
-        Self::new_with_version(1, decoded_doc_url, proxy, peers, write_public_key, content)
+        Self::new_with_version(
+            PEERMERGE_VERSION,
+            decoded_doc_url,
+            proxy,
+            peers,
+            write_public_key,
+            content,
+        )
     }
 
     pub(crate) fn new_from_plain_doc_url(

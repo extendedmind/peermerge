@@ -10,8 +10,9 @@ use crate::{
     common::keys::discovery_key_from_public_key, DocUrlInfo, DocumentId, FeedType, NameDescription,
 };
 
+use super::constants::PEERMERGE_VERSION;
+
 const DOC_URL_PREFIX: &str = "peermerge:/";
-const DOC_URL_VERSION: u8 = 1;
 const PLAINTEXT_PARAM: &str = "?pt=";
 const CIPHERTEXT_PARAM: &str = "?ct=";
 
@@ -220,7 +221,7 @@ fn decode_keys(keys: &str, expected_len: usize) -> Vec<u8> {
 
 fn encode_domain(root_public_key: &[u8; 32]) -> String {
     let mut domain: Vec<u8> = Vec::with_capacity(32 + 2);
-    domain.push(DOC_URL_VERSION);
+    domain.push(PEERMERGE_VERSION);
     let feed_type = FeedType::Hypercore as u8;
     let header: u8 = feed_type | 0x80; // TODO: child documents
     domain.push(header);
@@ -241,7 +242,7 @@ fn decode_domain(doc_url: &str, domain_end: usize) -> (u8, bool, FeedType, [u8; 
         .unwrap();
     assert_eq!(decoded_len, 32 + 2);
     let version = domain[0];
-    assert_eq!(domain[0], DOC_URL_VERSION);
+    assert_eq!(domain[0], PEERMERGE_VERSION);
     let header = domain[1];
     // The highest bit is the parent bit, the rest feed type.
     // NB: Other info can be encoded later in between because
