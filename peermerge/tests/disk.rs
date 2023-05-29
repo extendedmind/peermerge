@@ -116,14 +116,16 @@ async fn disk_two_peers(encrypted: bool) -> anyhow::Result<()> {
     }
     let mut peermerge_creator =
         Peermerge::open_disk(creator_encryption_keys, &creator_dir, None).await?;
-    let value = peermerge_creator
+    let values = peermerge_creator
         .transact(&creator_doc_info.id(), |doc| {
-            let value = 2;
-            doc.put(ROOT, "open", value)?;
-            Ok(value)
+            let open_value = 2;
+            let reopen_value = 3;
+            doc.put(ROOT, "open", open_value)?;
+            doc.put(ROOT, "reopen", reopen_value)?;
+            Ok(vec![open_value, reopen_value])
         })
         .await?;
-    assert_eq!(value, 2);
+    assert_eq!(values, vec![2, 3]);
 
     let joiner_document_infos = Peermerge::document_infos_disk(&creator_dir).await?.unwrap();
     assert_eq!(joiner_document_infos.len(), 1);
@@ -152,7 +154,11 @@ async fn disk_two_peers(encrypted: bool) -> anyhow::Result<()> {
         creator_doc_info.id(),
         peermerge_joiner,
         joiner_doc_info.id(),
-        vec![("version".to_string(), 1), ("open".to_string(), 2)],
+        vec![
+            ("version".to_string(), 1),
+            ("open".to_string(), 2),
+            ("reopen".to_string(), 3),
+        ],
     )
     .await?;
 
@@ -241,7 +247,8 @@ async fn process_joiner_state_event(
         match event.content {
             PeerSynced((Some(name), _, len)) => {
                 assert_eq!(name, "creator");
-                assert_eq!(len, expected_scalars.len() as u64);
+                let expected_len = if expected_scalars.len() > 1 { 2 } else { 1 };
+                assert_eq!(len, expected_len);
                 for (field, expected) in &expected_scalars {
                     let value = peermerge.get_scalar(&doc_id, ROOT, field).await?.unwrap();
                     assert_eq!(value.to_u64().unwrap(), *expected);
@@ -291,7 +298,7 @@ async fn process_creator_state_events(
             }
             RemotePeerSynced((discovery_key, len)) => {
                 if expected_scalars.len() > 1 && discovery_key != doc_id {
-                    assert_eq!(len, expected_scalars.len() as u64);
+                    assert_eq!(len, 2);
                     for (field, expected) in &expected_scalars {
                         let value = peermerge.get_scalar(&doc_id, ROOT, field).await?.unwrap();
                         assert_eq!(value.to_u64().unwrap(), *expected);
