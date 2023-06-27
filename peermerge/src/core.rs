@@ -149,6 +149,18 @@ where
     }
 
     #[instrument(skip(self, cb), fields(peer_name = self.peer_header.name))]
+    pub async fn read<F, O>(&self, document_id: &DocumentId, cb: F) -> Result<O, PeermergeError>
+    where
+        F: FnOnce(&AutomergeDoc) -> Result<O, AutomergeError>,
+    {
+        let result = {
+            let document = get_document(&self.documents, document_id).await.unwrap();
+            document.read(cb).await?
+        };
+        Ok(result)
+    }
+
+    #[instrument(skip(self, cb), fields(peer_name = self.peer_header.name))]
     pub async fn transact<F, O>(
         &mut self,
         document_id: &DocumentId,

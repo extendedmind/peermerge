@@ -1,4 +1,4 @@
-use automerge::{transaction::Transactable, ROOT};
+use automerge::{transaction::Transactable, ReadDoc, ROOT};
 use futures::{
     channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender},
     stream::StreamExt,
@@ -250,7 +250,18 @@ async fn process_joiner_state_event(
                 let expected_len = if expected_scalars.len() > 1 { 2 } else { 1 };
                 assert_eq!(len, expected_len);
                 for (field, expected) in &expected_scalars {
-                    let value = peermerge.get_scalar(&doc_id, ROOT, field).await?.unwrap();
+                    let value = peermerge
+                        .read(&doc_id, |doc| {
+                            Ok(doc
+                                .get(ROOT, field)
+                                .unwrap()
+                                .unwrap()
+                                .0
+                                .to_scalar()
+                                .unwrap()
+                                .clone())
+                        })
+                        .await?;
                     assert_eq!(value.to_u64().unwrap(), *expected);
                 }
                 notify_one_condvar(assert_sync.clone()).await;
@@ -290,7 +301,18 @@ async fn process_creator_state_events(
                 assert_eq!(name, "joiner");
                 assert_eq!(len, expected_scalars.len() as u64);
                 for (field, expected) in &expected_scalars {
-                    let value = peermerge.get_scalar(&doc_id, ROOT, field).await?.unwrap();
+                    let value = peermerge
+                        .read(&doc_id, |doc| {
+                            Ok(doc
+                                .get(ROOT, field)
+                                .unwrap()
+                                .unwrap()
+                                .0
+                                .to_scalar()
+                                .unwrap()
+                                .clone())
+                        })
+                        .await?;
                     assert_eq!(value.to_u64().unwrap(), *expected);
                 }
                 wait_for_condvar(assert_sync).await;
@@ -300,7 +322,19 @@ async fn process_creator_state_events(
                 if expected_scalars.len() > 1 && discovery_key != doc_id {
                     assert_eq!(len, 2);
                     for (field, expected) in &expected_scalars {
-                        let value = peermerge.get_scalar(&doc_id, ROOT, field).await?.unwrap();
+                        let value = peermerge
+                            .read(&doc_id, |doc| {
+                                Ok(doc
+                                    .get(ROOT, field)
+                                    .unwrap()
+                                    .unwrap()
+                                    .0
+                                    .to_scalar()
+                                    .unwrap()
+                                    .clone())
+                            })
+                            .await?;
+
                         assert_eq!(value.to_u64().unwrap(), *expected);
                     }
                     wait_for_condvar(assert_sync).await;

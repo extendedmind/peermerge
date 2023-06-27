@@ -342,6 +342,17 @@ where
     Ok((entry, result))
 }
 
+pub(crate) fn read_autocommit<F, O>(
+    automerge_doc: &AutomergeDoc,
+    cb: F,
+) -> Result<O, PeermergeError>
+where
+    F: FnOnce(&AutomergeDoc) -> Result<O, AutomergeError>,
+{
+    let result = cb(automerge_doc).unwrap();
+    Ok(result)
+}
+
 #[cfg(test)]
 mod tests {
     use automerge::{ReadDoc, ROOT};

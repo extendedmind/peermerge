@@ -15,8 +15,9 @@ use tracing::{debug, instrument, warn};
 
 use crate::automerge::{
     apply_entries_autocommit, apply_unapplied_entries_autocommit, init_automerge_doc_from_data,
-    init_automerge_doc_from_entries, put_scalar_autocommit, splice_text_autocommit,
-    transact_autocommit, ApplyEntriesFeedChange, AutomergeDoc, UnappliedEntries,
+    init_automerge_doc_from_entries, put_scalar_autocommit, read_autocommit,
+    splice_text_autocommit, transact_autocommit, ApplyEntriesFeedChange, AutomergeDoc,
+    UnappliedEntries,
 };
 use crate::common::cipher::{
     decode_doc_url, encode_doc_url, encode_document_id, encode_proxy_doc_url, DecodedDocUrl,
@@ -360,12 +361,34 @@ where
     }
 
     #[instrument(skip_all, fields(doc_name = self.document_name))]
+    pub(crate) async fn read<F, O>(&self, cb: F) -> Result<O, PeermergeError>
+    where
+        F: FnOnce(&AutomergeDoc) -> Result<O, AutomergeError>,
+    {
+        if self.proxy {
+            panic!("Can not read on a proxy");
+        }
+        let result = {
+            let document_state = self.document_state.lock().await;
+            let result = if let Some(doc) = document_state.automerge_doc() {
+                read_autocommit(doc, cb).unwrap()
+            } else {
+                unimplemented!(
+                    "TODO: No proper error code for trying to read before a document is synced"
+                );
+            };
+            result
+        };
+        Ok(result)
+    }
+
+    #[instrument(skip_all, fields(doc_name = self.document_name))]
     pub(crate) async fn transact<F, O>(&mut self, cb: F) -> Result<O, PeermergeError>
     where
         F: FnOnce(&mut AutomergeDoc) -> Result<O, AutomergeError>,
     {
         if self.proxy {
-            panic!("Can not put object on a proxy");
+            panic!("Can not transact on a proxy");
         }
         let result = {
             let mut document_state = self.document_state.lock().await;
