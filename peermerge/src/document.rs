@@ -131,7 +131,7 @@ where
     }
 
     #[instrument(skip_all, fields(doc_name = self.document_name))]
-    pub(crate) async fn watch(&mut self, ids: Vec<ObjId>) {
+    pub(crate) async fn watch(&mut self, ids: Option<Vec<ObjId>>) {
         if self.proxy {
             panic!("Can not watch on a proxy");
         }
@@ -845,9 +845,8 @@ where
         mut reattached_peer_header: Option<NameDescription>,
     ) -> Vec<StateEvent> {
         // Filter out unwatched patches
-        let watched_ids = document_state.watched_ids();
+        document_state.filter_watched_patches(&mut patches);
 
-        patches.retain(|patch| watched_ids.contains(&patch.obj));
         let mut state_events: Vec<StateEvent> =
             if let Some(reattached_peer_header) = reattached_peer_header.take() {
                 // TODO: This should be a better error

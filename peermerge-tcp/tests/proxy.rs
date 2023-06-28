@@ -50,7 +50,7 @@ async fn tcp_proxy_disk_encrypted() -> anyhow::Result<()> {
         .await?;
 
     peermerge_creator
-        .watch(&creator_doc_info.id(), vec![ROOT])
+        .watch(&creator_doc_info.id(), Some(vec![ROOT]))
         .await;
     let doc_url = peermerge_creator.doc_url(&creator_doc_info.id()).await;
     let encryption_key = peermerge_creator

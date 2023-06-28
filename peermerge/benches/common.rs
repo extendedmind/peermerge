@@ -42,7 +42,9 @@ pub async fn setup_peermerge_mesh_memory(
         .await
         .unwrap();
     let encryption_key = peermerge_creator.encryption_key(&doc_info.id()).await;
-    peermerge_creator.watch(&doc_info.id(), vec![ROOT]).await;
+    peermerge_creator
+        .watch(&doc_info.id(), Some(vec![ROOT]))
+        .await;
 
     let mut senders = Vec::with_capacity(peers);
     let doc_url = peermerge_creator.doc_url(&doc_info.id()).await;
@@ -64,7 +66,7 @@ pub async fn setup_peermerge_mesh_memory(
             .attach_writer_document_memory(&doc_url, &encryption_key)
             .await
             .unwrap();
-        peermerge_peer.watch(&doc_info.id(), vec![ROOT]).await;
+        peermerge_peer.watch(&doc_info.id(), Some(vec![ROOT])).await;
 
         let peermerge_peer_for_task = peermerge_peer.clone();
         let task_span = tracing::debug_span!("call_connect").or_current();
@@ -125,7 +127,9 @@ pub async fn setup_peermerge_mesh_disk(
         .await
         .unwrap();
     let encryption_key = peermerge_creator.encryption_key(&doc_info.id()).await;
-    peermerge_creator.watch(&doc_info.id(), vec![ROOT]).await;
+    peermerge_creator
+        .watch(&doc_info.id(), Some(vec![ROOT]))
+        .await;
 
     let mut senders = Vec::with_capacity(peers);
     let doc_url = peermerge_creator.doc_url(&doc_info.id()).await;
@@ -157,7 +161,7 @@ pub async fn setup_peermerge_mesh_disk(
             .attach_writer_document_disk(&doc_url, &encryption_key)
             .await
             .unwrap();
-        peermerge_peer.watch(&doc_info.id(), vec![ROOT]).await;
+        peermerge_peer.watch(&doc_info.id(), Some(vec![ROOT])).await;
 
         let peermerge_peer_for_task = peermerge_peer.clone();
         let task_span = tracing::debug_span!("call_connect").or_current();

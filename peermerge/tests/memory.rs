@@ -86,7 +86,7 @@ async fn memory_three_writers() -> anyhow::Result<()> {
     peermerge_creator
         .watch(
             &creator_doc_info.id(),
-            vec![texts_id.clone(), text_id.clone()],
+            Some(vec![texts_id.clone(), text_id.clone()]),
         )
         .await;
 
@@ -108,6 +108,9 @@ async fn memory_three_writers() -> anyhow::Result<()> {
             &None,
         )
         .await?;
+    peermerge_joiner
+        .watch(&creator_doc_info.id(), Some(vec![]))
+        .await;
     let peermerge_joiner_for_task = peermerge_joiner.clone();
     task::spawn(async move {
         connect(peermerge_joiner_for_task, proto_initiator)
@@ -179,7 +182,10 @@ async fn process_joiner_state_event(
                         .unwrap();
                     text_id = Some(local_text_id.clone());
                     peermerge
-                        .watch(&doc_id, vec![local_texts_id, text_id.clone().unwrap()])
+                        .watch(
+                            &doc_id,
+                            Some(vec![local_texts_id, text_id.clone().unwrap()]),
+                        )
                         .await;
 
                     // It's possible that this already contains "Hello" and the first DocumentChanged
@@ -413,6 +419,7 @@ async fn process_creator_state_events(
                         let latecomer_doc_info = peermerge_latecomer
                             .attach_writer_document_memory(&peermerge.doc_url(&doc_id).await, &None)
                             .await?;
+                        peermerge_latecomer.watch(&doc_id, Some(vec![])).await;
                         let peermerge_latecomer_for_task = peermerge_latecomer.clone();
                         let peermerge_creator_for_task = peermerge.clone();
                         task::spawn(async move {
@@ -508,7 +515,10 @@ async fn process_latecomer_state_event(
                     .await;
                     text_id = Some(local_text_id.clone());
                     peermerge
-                        .watch(&doc_id, vec![local_texts_id, text_id.clone().unwrap()])
+                        .watch(
+                            &doc_id,
+                            Some(vec![local_texts_id, text_id.clone().unwrap()]),
+                        )
                         .await;
                     // Make one final change and see that it propagates through to the creator
                     peermerge

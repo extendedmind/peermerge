@@ -1,4 +1,4 @@
-use automerge::ObjId;
+use automerge::{ObjId, Patch};
 use compact_encoding::{CompactEncoding, State};
 #[cfg(not(target_arch = "wasm32"))]
 use random_access_disk::RandomAccessDisk;
@@ -87,7 +87,7 @@ where
 {
     state: DocumentState,
     unapplied_entries: UnappliedEntries,
-    watched_ids: Vec<ObjId>,
+    watched_ids: Option<Vec<ObjId>>,
     storage: T,
 }
 
@@ -121,8 +121,10 @@ where
         &mut self.unapplied_entries
     }
 
-    pub(crate) fn watched_ids(&self) -> &Vec<ObjId> {
-        &self.watched_ids
+    pub(crate) fn filter_watched_patches(&self, patches: &mut Vec<Patch>) {
+        if let Some(ids) = &self.watched_ids {
+            patches.retain(|patch| ids.contains(&patch.obj));
+        }
     }
 
     pub(crate) async fn set_content_and_new_peer_headers(
@@ -191,7 +193,7 @@ where
             .and_then(|content| content.automerge_doc.as_mut())
     }
 
-    pub(crate) fn watch(&mut self, ids: Vec<ObjId>) {
+    pub(crate) fn watch(&mut self, ids: Option<Vec<ObjId>>) {
         self.watched_ids = ids;
     }
 
@@ -234,7 +236,7 @@ impl DocStateWrapper<RandomAccessMemory> {
             state,
             storage,
             unapplied_entries: UnappliedEntries::new(),
-            watched_ids: vec![],
+            watched_ids: None,
         }
     }
 }
@@ -249,7 +251,7 @@ impl DocStateWrapper<RandomAccessDisk> {
             state,
             storage,
             unapplied_entries: UnappliedEntries::new(),
-            watched_ids: vec![],
+            watched_ids: None,
         }
     }
 
@@ -267,7 +269,7 @@ impl DocStateWrapper<RandomAccessDisk> {
             state,
             storage,
             unapplied_entries: UnappliedEntries::new(),
-            watched_ids: vec![],
+            watched_ids: None,
         })
     }
 }

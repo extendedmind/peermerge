@@ -93,7 +93,7 @@ where
     }
 
     #[instrument(skip(self))]
-    pub async fn watch(&mut self, document_id: &DocumentId, ids: Vec<ObjId>) {
+    pub async fn watch(&mut self, document_id: &DocumentId, ids: Option<Vec<ObjId>>) {
         let mut document = get_document(&self.documents, document_id).await.unwrap();
         document.watch(ids).await;
     }
