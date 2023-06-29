@@ -1,6 +1,9 @@
 use std::fmt::Debug;
 
-use crate::{automerge::AutomergeDoc, DocUrlInfo, DocumentId, DocumentInfo, NameDescription};
+use crate::{
+    automerge::{save_automerge_doc, AutomergeDoc},
+    DocUrlInfo, DocumentId, DocumentInfo, NameDescription,
+};
 
 use super::{
     cipher::{decode_doc_url, encode_doc_url, DecodedDocUrl},
@@ -223,16 +226,27 @@ impl DocumentContent {
         }
     }
 
-    pub(crate) fn set_cursor(&mut self, discovery_key: &[u8; 32], length: u64) {
-        if let Some(cursor) = self
-            .cursors
-            .iter_mut()
-            .find(|cursor| &cursor.discovery_key == discovery_key)
-        {
-            cursor.length = length;
-        } else {
-            self.cursors
-                .push(DocumentCursor::new(*discovery_key, length));
+    pub(crate) fn set_cursor_and_save_data(&mut self, discovery_key: [u8; 32], length: u64) {
+        self.set_cursors_and_save_data(vec![(discovery_key, length)]);
+    }
+
+    pub(crate) fn set_cursors_and_save_data(&mut self, cursor_changes: Vec<([u8; 32], u64)>) {
+        for (discovery_key, length) in cursor_changes {
+            if let Some(cursor) = self
+                .cursors
+                .iter_mut()
+                .find(|cursor| cursor.discovery_key == discovery_key)
+            {
+                cursor.length = length;
+            } else {
+                self.cursors
+                    .push(DocumentCursor::new(discovery_key, length));
+            }
         }
+        let automerge_doc = self
+            .automerge_doc
+            .as_mut()
+            .expect("Document must be present when setting cursor");
+        self.data = save_automerge_doc(automerge_doc);
     }
 }

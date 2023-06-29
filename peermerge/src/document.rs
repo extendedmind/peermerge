@@ -314,7 +314,7 @@ where
                 write_feed.append(&serialize_entry(&entry)?).await?
             };
             document_state
-                .set_cursor(&write_discovery_key, length)
+                .set_cursor_and_save_data(&write_discovery_key, length)
                 .await;
             id
         };
@@ -351,7 +351,7 @@ where
                 write_feed.append(&serialize_entry(&entry)?).await?
             };
             document_state
-                .set_cursor(&write_discovery_key, length)
+                .set_cursor_and_save_data(&write_discovery_key, length)
                 .await;
         };
         {
@@ -407,7 +407,7 @@ where
                     write_feed.append(&serialize_entry(&entry)?).await?
                 };
                 document_state
-                    .set_cursor(&write_discovery_key, length)
+                    .set_cursor_and_save_data(&write_discovery_key, length)
                     .await;
             }
             result
@@ -445,7 +445,7 @@ where
                 write_feed.append(&serialize_entry(&entry)?).await?
             };
             document_state
-                .set_cursor(&write_discovery_key, length)
+                .set_cursor_and_save_data(&write_discovery_key, length)
                 .await;
         }
         {
@@ -1401,6 +1401,10 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
 
         // Open write feed, if any
         let (feeds, write_discovery_key) = if let Some(write_public_key) = state.write_public_key {
+            debug!(
+                "open_disk: peers={}, writable, proxy={proxy}, encrypted={encrypted}",
+                feeds.len() - 1
+            );
             let write_discovery_key = discovery_key_from_public_key(&write_public_key);
             if write_public_key != state.root_public_key {
                 let (_, write_feed) = open_disk_feed(
@@ -1437,14 +1441,21 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
                 )
                 .await
                 .unwrap();
+                debug!("open_disk: initialized document from data, changed={changed}");
                 if changed {
                     document_state_wrapper
                         .persist_content_and_new_peer_headers(new_peer_headers)
                         .await;
                 }
+            } else {
+                debug!("open_disk: document not created yet",);
             }
             (feeds, Some(write_discovery_key))
         } else {
+            debug!(
+                "open_disk: peers={}, not writable, proxy={proxy}, encrypted={encrypted}",
+                feeds.len() - 1
+            );
             (Arc::new(feeds), None)
         };
 
@@ -1806,11 +1817,7 @@ async fn update_content_from_edit_result(
             peer_syncs,
         )
     };
-
-    for (discovery_key, length) in cursor_changes {
-        content.set_cursor(&discovery_key, length);
-    }
-
+    content.set_cursors_and_save_data(cursor_changes);
     Ok((patches, new_headers, reattached_peer_header, peer_syncs))
 }
 

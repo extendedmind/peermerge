@@ -65,7 +65,7 @@ pub(crate) fn init_automerge_doc_from_entries(
         *synced_discovery_key,
         ApplyEntriesFeedChange::new(contiguous_length),
     );
-    let data = automerge_doc.save();
+    let data = save_automerge_doc(&mut automerge_doc);
     Ok((automerge_doc, data, result))
 }
 
@@ -78,4 +78,8 @@ pub(crate) fn init_automerge_doc_from_data(
     actor_id.extend_from_slice(discovery_key);
     let automerge_doc = AutoCommit::load(data).unwrap();
     automerge_doc.with_actor(ActorId::from(actor_id))
+}
+
+pub(crate) fn save_automerge_doc(automerge_doc: &mut AutomergeDoc) -> Vec<u8> {
+    automerge_doc.save()
 }

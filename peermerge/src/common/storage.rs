@@ -157,9 +157,9 @@ where
         write_document_state(&self.state, &mut self.storage).await;
     }
 
-    pub(crate) async fn set_cursor(&mut self, discovery_key: &[u8; 32], length: u64) {
+    pub(crate) async fn set_cursor_and_save_data(&mut self, discovery_key: &[u8; 32], length: u64) {
         if let Some(content) = self.state.content.as_mut() {
-            content.set_cursor(discovery_key, length);
+            content.set_cursor_and_save_data(*discovery_key, length);
             write_document_state(&self.state, &mut self.storage).await;
         } else {
             unimplemented!("This shouldn't happen")

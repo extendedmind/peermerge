@@ -691,7 +691,7 @@ async fn notify_document_initialized(
     if !state_event_sender.is_closed() {
         state_event_sender
             .unbounded_send(StateEvent::new(
-                document_id.clone(),
+                *document_id,
                 StateEventContent::DocumentInitialized(new_document, None), // TODO: child
             ))
             .unwrap();
