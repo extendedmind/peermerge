@@ -1,4 +1,4 @@
-use automerge::{AutomergeError, ObjId, ObjType, Patch, Prop, ScalarValue};
+use automerge::{AutomergeError, ObjId, Patch, Prop, ScalarValue};
 use dashmap::DashMap;
 use futures::{
     channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender},
@@ -115,76 +115,20 @@ where
         }
     }
 
-    #[instrument(skip(self))]
-    pub async fn watch(&mut self, document_id: &DocumentId, ids: Option<Vec<ObjId>>) {
-        let mut document = get_document(&self.documents, document_id).await.unwrap();
-        document.watch(ids).await;
-    }
-
-    #[instrument(skip(self, obj, prop), fields(obj = obj.as_ref().to_string(), peer_name = self.peer_header.name))]
-    pub async fn get_id<O: AsRef<ObjId>, P: Into<Prop>>(
-        &self,
-        document_id: &DocumentId,
-        obj: O,
-        prop: P,
-    ) -> Result<Option<ObjId>, PeermergeError> {
-        let document = get_document(&self.documents, document_id).await.unwrap();
-        document.get_id(obj, prop).await
-    }
-
-    #[instrument(skip(self, obj, prop), fields(obj = obj.as_ref().to_string(), peer_name = self.peer_header.name))]
-    pub async fn get_scalar<O: AsRef<ObjId>, P: Into<Prop>>(
-        &self,
-        document_id: &DocumentId,
-        obj: O,
-        prop: P,
-    ) -> Result<Option<ScalarValue>, PeermergeError> {
-        let document = get_document(&self.documents, document_id).await.unwrap();
-        document.get_scalar(obj, prop).await
-    }
-
-    #[instrument(skip(self, obj), fields(obj = obj.as_ref().to_string(), peer_name = self.peer_header.name))]
-    pub async fn realize_text<O: AsRef<ObjId>>(
-        &self,
-        document_id: &DocumentId,
-        obj: O,
-    ) -> Result<Option<String>, PeermergeError> {
-        let document = get_document(&self.documents, document_id).await.unwrap();
-        document.realize_text(obj).await
-    }
-
-    #[instrument(skip(self, obj, prop), fields(obj = obj.as_ref().to_string(), peer_name = self.peer_header.name))]
-    pub async fn put_object<O: AsRef<ObjId>, P: Into<Prop>>(
-        &mut self,
-        document_id: &DocumentId,
-        obj: O,
-        prop: P,
-        object: ObjType,
-    ) -> Result<ObjId, PeermergeError> {
-        let result = {
-            let mut document = get_document(&self.documents, document_id).await.unwrap();
-            document.put_object(obj, prop, object).await?
-        };
-        {
-            self.notify_of_document_changes().await;
-        }
-        Ok(result)
-    }
-
     #[instrument(skip(self, cb), fields(peer_name = self.peer_header.name))]
-    pub async fn read<F, O>(&self, document_id: &DocumentId, cb: F) -> Result<O, PeermergeError>
+    pub async fn transact<F, O>(&self, document_id: &DocumentId, cb: F) -> Result<O, PeermergeError>
     where
         F: FnOnce(&AutomergeDoc) -> Result<O, AutomergeError>,
     {
         let result = {
             let document = get_document(&self.documents, document_id).await.unwrap();
-            document.read(cb).await?
+            document.transact(cb).await?
         };
         Ok(result)
     }
 
     #[instrument(skip(self, cb), fields(peer_name = self.peer_header.name))]
-    pub async fn transact<F, O>(
+    pub async fn transact_mut<F, O>(
         &mut self,
         document_id: &DocumentId,
         cb: F,
@@ -196,43 +140,16 @@ where
         let result = {
             let mut document = get_document(&self.documents, document_id).await.unwrap();
             document
-                .transact(cb, change_id, &mut self.state_event_sender)
+                .transact_mut(cb, change_id, &mut self.state_event_sender)
                 .await?
         };
         Ok(result)
     }
 
-    #[instrument(skip(self, obj, prop, value), fields(obj = obj.as_ref().to_string(), peer_name = self.peer_header.name))]
-    pub async fn put_scalar<O: AsRef<ObjId>, P: Into<Prop>, V: Into<ScalarValue>>(
-        &mut self,
-        document_id: &DocumentId,
-        obj: O,
-        prop: P,
-        value: V,
-    ) -> Result<(), PeermergeError> {
+    #[instrument(skip(self))]
+    pub async fn watch(&mut self, document_id: &DocumentId, ids: Option<Vec<ObjId>>) {
         let mut document = get_document(&self.documents, document_id).await.unwrap();
-        document.put_scalar(obj, prop, value).await?;
-        {
-            self.notify_of_document_changes().await;
-        }
-        Ok(())
-    }
-
-    #[instrument(skip(self, obj), fields(obj = obj.as_ref().to_string(), peer_name = self.peer_header.name))]
-    pub async fn splice_text<O: AsRef<ObjId>>(
-        &mut self,
-        document_id: &DocumentId,
-        obj: O,
-        index: usize,
-        delete: usize,
-        text: &str,
-    ) -> Result<(), PeermergeError> {
-        let mut document = get_document(&self.documents, document_id).await.unwrap();
-        document.splice_text(obj, index, delete, text).await?;
-        {
-            self.notify_of_document_changes().await;
-        }
-        Ok(())
+        document.watch(ids).await;
     }
 
     /// Reserve a given object for only local changes, preventing any peers from making changes
@@ -314,32 +231,6 @@ where
         let document = get_document(&self.documents, document_id).await.unwrap();
         let key_pair = document.write_key_pair().await;
         encode_key_pair(&partial_key_pair_to_bytes(key_pair))
-    }
-
-    async fn notify_of_document_changes(&mut self) {
-        let mut state_event_sender = self.state_event_sender.lock().await;
-        if let Some(sender) = state_event_sender.as_mut() {
-            if sender.is_closed() {
-                *state_event_sender = None;
-            } else {
-                let mut document_patches: Vec<([u8; 32], Vec<Patch>)> = vec![];
-                for document_id in get_document_ids(&self.documents).await {
-                    let mut document = get_document(&self.documents, &document_id).await.unwrap();
-                    let new_patches = document.take_patches().await;
-                    if !new_patches.is_empty() {
-                        document_patches.push((document.id(), new_patches))
-                    }
-                }
-                for (doc_discovery_key, patches) in document_patches {
-                    sender
-                        .unbounded_send(StateEvent::new(
-                            doc_discovery_key,
-                            StateEventContent::DocumentChanged((None, patches)),
-                        ))
-                        .unwrap();
-                }
-            }
-        }
     }
 
     async fn add_document(&mut self, document: Document<T, U>) -> DocumentInfo {

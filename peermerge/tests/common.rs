@@ -1,4 +1,5 @@
 use hypercore_protocol::{Duplex, Protocol, ProtocolBuilder};
+use peermerge::{AutomergeDoc, AutomergeError, ObjId, Prop, ReadDoc, ScalarValue, Value};
 use std::sync::Arc;
 
 #[cfg(feature = "async-std")]
@@ -88,4 +89,65 @@ pub async fn notify_one_condvar(sync: BoolCondvar) {
     let mut guard = lock.lock().await;
     *guard = true;
     cvar.notify_one();
+}
+
+pub fn get_id<O: AsRef<ObjId>, P: Into<Prop>>(
+    doc: &AutomergeDoc,
+    obj: O,
+    prop: P,
+) -> Result<Option<ObjId>, AutomergeError> {
+    let result = doc.get(obj, prop)?.map(|result| result.1);
+    Ok(result)
+}
+
+pub fn get_scalar<O: AsRef<ObjId>, P: Into<Prop>>(
+    doc: &AutomergeDoc,
+    obj: O,
+    prop: P,
+) -> Result<Option<ScalarValue>, AutomergeError> {
+    let result = doc
+        .get(obj, prop)?
+        .and_then(|result| result.0.to_scalar().cloned());
+    Ok(result)
+}
+
+pub fn get<O: AsRef<ObjId>, P: Into<Prop>>(
+    doc: &AutomergeDoc,
+    obj: O,
+    prop: P,
+) -> Result<Option<(Value, ObjId)>, AutomergeError> {
+    let result = doc
+        .get(obj, prop)?
+        .map(|(value, id)| (value.to_owned(), id));
+    Ok(result)
+}
+
+pub fn realize_text<O: AsRef<ObjId>>(
+    doc: &AutomergeDoc,
+    obj: O,
+) -> Result<Option<String>, AutomergeError> {
+    let length = doc.length(obj.as_ref().clone());
+    let mut chars = Vec::with_capacity(length);
+    for i in 0..length {
+        match doc.get(obj.as_ref().clone(), i) {
+            Ok(result) => {
+                if let Some(result) = result {
+                    let scalar = result.0.to_scalar().unwrap();
+                    match scalar {
+                        ScalarValue::Str(character) => {
+                            chars.push(character.to_string());
+                        }
+                        _ => {
+                            panic!("Not a char")
+                        }
+                    }
+                }
+            }
+            Err(_err) => {
+                panic!("Not a char")
+            }
+        };
+    }
+    let string: String = chars.into_iter().collect();
+    Ok(Some(string))
 }

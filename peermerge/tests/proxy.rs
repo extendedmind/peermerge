@@ -1,3 +1,4 @@
+use automerge::transaction::Transactable;
 use automerge::ROOT;
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use futures::future::join_all;
@@ -285,7 +286,7 @@ async fn process_creator_state_events(
                     if remote_peer_syncs == 1 {
                         assert_eq!(len, 1);
                         peermerge
-                            .put_scalar(&doc_id, ROOT, "creator", "testing")
+                            .transact_mut(&doc_id, |doc| doc.put(ROOT, "creator", "testing"), None)
                             .await?;
                     } else if remote_peer_syncs == 2 {
                         assert_eq!(len, 2);
@@ -375,7 +376,11 @@ async fn process_joiner_state_events_initial(
                         creator_synced = true;
                         if document_initialized {
                             peermerge
-                                .put_scalar(&doc_id, ROOT, "joiner", "testing")
+                                .transact_mut(
+                                    &doc_id,
+                                    |doc| doc.put(ROOT, "joiner", "testing"),
+                                    None,
+                                )
                                 .await?;
                         }
                     } else {
@@ -398,7 +403,7 @@ async fn process_joiner_state_events_initial(
                 document_initialized = true;
                 if creator_synced {
                     peermerge
-                        .put_scalar(&doc_id, ROOT, "joiner", "testing")
+                        .transact_mut(&doc_id, |doc| doc.put(ROOT, "joiner", "testing"), None)
                         .await?;
                 }
             }
@@ -477,17 +482,21 @@ async fn process_joiner_state_events_reopen(
                         creator_and_joiner_synced = true;
                         if document_initialized {
                             let value = peermerge
-                                .get_scalar(&doc_id, ROOT, "creator")
+                                .transact(&doc_id, |doc| get_scalar(doc, ROOT, "creator"))
                                 .await?
                                 .unwrap();
                             assert_eq!(value.to_str().unwrap(), "testing");
                             let value = peermerge
-                                .get_scalar(&doc_id, ROOT, "joiner")
+                                .transact(&doc_id, |doc| get_scalar(doc, ROOT, "joiner"))
                                 .await?
                                 .unwrap();
                             assert_eq!(value.to_str().unwrap(), "testing");
                             peermerge
-                                .put_scalar(&doc_id, ROOT, "joiner_reopen", "testing")
+                                .transact_mut(
+                                    &doc_id,
+                                    |doc| doc.put(ROOT, "joiner_reopen", "testing"),
+                                    None,
+                                )
                                 .await?;
                         }
                     }
@@ -502,17 +511,21 @@ async fn process_joiner_state_events_reopen(
                 document_initialized = true;
                 if creator_and_joiner_synced {
                     let value = peermerge
-                        .get_scalar(&doc_id, ROOT, "creator")
+                        .transact(&doc_id, |doc| get_scalar(doc, ROOT, "creator"))
                         .await?
                         .unwrap();
                     assert_eq!(value.to_str().unwrap(), "testing");
                     let value = peermerge
-                        .get_scalar(&doc_id, ROOT, "joiner")
+                        .transact(&doc_id, |doc| get_scalar(doc, ROOT, "joiner"))
                         .await?
                         .unwrap();
                     assert_eq!(value.to_str().unwrap(), "testing");
                     peermerge
-                        .put_scalar(&doc_id, ROOT, "joiner_reopen", "testing")
+                        .transact_mut(
+                            &doc_id,
+                            |doc| doc.put(ROOT, "joiner_reopen", "testing"),
+                            None,
+                        )
                         .await?;
                 }
             }

@@ -1,3 +1,4 @@
+use automerge::transaction::Transactable;
 use automerge::{ObjId, ROOT};
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use futures::stream::StreamExt;
@@ -64,20 +65,18 @@ async fn memory_three_writers() -> anyhow::Result<()> {
 
     // Insert a map with a text field to the document
     let texts_id = peermerge_creator
-        .put_object(
+        .transact_mut(
             &creator_doc_info.id(),
-            ROOT,
-            "texts",
-            automerge::ObjType::Map,
+            |doc| doc.put_object(ROOT, "texts", automerge::ObjType::Map),
+            None,
         )
         .await
         .unwrap();
     let text_id = peermerge_creator
-        .put_object(
+        .transact_mut(
             &creator_doc_info.id(),
-            &texts_id,
-            "text",
-            automerge::ObjType::Text,
+            |doc| doc.put_object(&texts_id, "text", automerge::ObjType::Text),
+            None,
         )
         .await
         .unwrap();
@@ -175,9 +174,12 @@ async fn process_joiner_state_event(
             PeerSynced((Some(name), _, len)) => {
                 if !peer_synced.contains_key("creator") {
                     assert_eq!(name, "creator");
-                    let local_texts_id = peermerge.get_id(&doc_id, ROOT, "texts").await?.unwrap();
+                    let local_texts_id = peermerge
+                        .transact(&doc_id, |doc| get_id(doc, ROOT, "texts"))
+                        .await?
+                        .unwrap();
                     let local_text_id = peermerge
-                        .get_id(&doc_id, &local_texts_id, "text")
+                        .transact(&doc_id, |doc| get_id(doc, &local_texts_id, "text"))
                         .await?
                         .unwrap();
                     text_id = Some(local_text_id.clone());
@@ -196,7 +198,11 @@ async fn process_joiner_state_event(
                     {
                         document_changes.push(vec![]);
                         peermerge
-                            .splice_text(&doc_id, &text_id.clone().unwrap(), 5, 0, ", world!")
+                            .transact_mut(
+                                &doc_id,
+                                |doc| doc.splice_text(&text_id.clone().unwrap(), 5, 0, ", world!"),
+                                None,
+                            )
                             .await?;
                     }
                 } else {
@@ -211,13 +217,17 @@ async fn process_joiner_state_event(
                 // Skip
             }
             DocumentChanged((_, patches)) => {
-                if document_changes.len() == 0 {
+                if document_changes.is_empty() {
                     assert_eq!(patches.len(), 1); // "Hello" in one TextValue
                     document_changes.push(patches);
                     let text_id = text_id.clone().unwrap();
                     assert_text_equals(&peermerge, &doc_id, &text_id, "Hello").await;
                     peermerge
-                        .splice_text(&doc_id, &text_id, 5, 0, ", world!")
+                        .transact_mut(
+                            &doc_id,
+                            |doc| doc.splice_text(&text_id, 5, 0, ", world!"),
+                            None,
+                        )
                         .await?;
                 } else if document_changes.len() == 1 {
                     assert_eq!(patches.len(), 1); // ", world!" in one Splice patch
@@ -230,8 +240,12 @@ async fn process_joiner_state_event(
 
                     // Ok, ready to edit in unison, reserve field
                     peermerge.reserve_object(&doc_id, &text_id).await?;
-                    peermerge.splice_text(&doc_id, &text_id, 5, 2, "").await?;
-                    peermerge.splice_text(&doc_id, &text_id, 4, 0, "XX").await?;
+                    peermerge
+                        .transact_mut(&doc_id, |doc| doc.splice_text(&text_id, 5, 2, ""), None)
+                        .await?;
+                    peermerge
+                        .transact_mut(&doc_id, |doc| doc.splice_text(&text_id, 4, 0, "XX"), None)
+                        .await?;
                     assert_text_equals(&peermerge, &doc_id, &text_id, "HellXXoworld!").await;
                 } else if document_changes.len() == 2 {
                     // This is the two local deletions as one Splice message
@@ -327,7 +341,11 @@ async fn process_creator_state_events(
             RemotePeerSynced((discovery_key, len)) => {
                 if remote_peer_synced.is_empty() {
                     peermerge
-                        .splice_text(&doc_id, &text_id, 0, 0, "Hello")
+                        .transact_mut(
+                            &doc_id,
+                            |doc| doc.splice_text(&text_id, 0, 0, "Hello"),
+                            None,
+                        )
                         .await
                         .unwrap();
                     assert_text_equals(&peermerge, &doc_id, &text_id, "Hello").await;
@@ -364,11 +382,15 @@ async fn process_creator_state_events(
                         // Let's create a conflict here, reserve prevent getting changes from the
                         // other peer before unreserve
                         peermerge
-                            .splice_text(&doc_id, &text_id, 4, 2, "")
+                            .transact_mut(&doc_id, |doc| doc.splice_text(&text_id, 4, 2, ""), None)
                             .await
                             .unwrap();
                         peermerge
-                            .splice_text(&doc_id, &text_id, 4, 0, "YY")
+                            .transact_mut(
+                                &doc_id,
+                                |doc| doc.splice_text(&text_id, 4, 0, "YY"),
+                                None,
+                            )
                             .await
                             .unwrap();
                         assert_text_equals(&peermerge, &doc_id, &text_id, "HellYY world!").await;
@@ -500,9 +522,12 @@ async fn process_latecomer_state_event(
                     && peer_synced.contains_key("joiner")
                     && text_id.is_none()
                 {
-                    let local_texts_id = peermerge.get_id(&doc_id, ROOT, "texts").await?.unwrap();
+                    let local_texts_id = peermerge
+                        .transact(&doc_id, |doc| get_id(doc, ROOT, "texts"))
+                        .await?
+                        .unwrap();
                     let local_text_id = peermerge
-                        .get_id(&doc_id, &local_texts_id, "text")
+                        .transact(&doc_id, |doc| get_id(doc, &local_texts_id, "text"))
                         .await?
                         .unwrap();
                     assert_text_equals_either(
@@ -522,7 +547,11 @@ async fn process_latecomer_state_event(
                         .await;
                     // Make one final change and see that it propagates through to the creator
                     peermerge
-                        .splice_text(&doc_id, &local_text_id, 13, 0, "ZZ")
+                        .transact_mut(
+                            &doc_id,
+                            |doc| doc.splice_text(&local_text_id, 13, 0, "ZZ"),
+                            None,
+                        )
                         .await?;
                 }
             }
@@ -533,7 +562,7 @@ async fn process_latecomer_state_event(
                 // Ignore, this happens with the root hypercore
             }
             DocumentChanged((_, patches)) => {
-                if document_changes.len() == 0 {
+                if document_changes.is_empty() {
                     assert_eq!(patches.len(), 1); // Two local additions as one Splice
                     assert_text_equals_either(
                         &peermerge,
@@ -551,7 +580,7 @@ async fn process_latecomer_state_event(
                 break;
             }
             _ => {
-                panic!("Unkown event {:?}", event);
+                panic!("Unkown event {event:?}");
             }
         }
     }
@@ -573,7 +602,9 @@ async fn assert_text_equals(
     obj: &ObjId,
     expected: &str,
 ) {
-    let result = peermerge.realize_text(doc_id, obj).await;
+    let result = peermerge
+        .transact(doc_id, |doc| realize_text(doc, obj))
+        .await;
     assert_eq!(result.unwrap().unwrap(), expected);
 }
 
@@ -584,7 +615,11 @@ async fn assert_text_equals_either(
     expected_1: &str,
     expected_2: &str,
 ) -> String {
-    let result = peermerge.realize_text(doc_id, obj).await.unwrap().unwrap();
+    let result = peermerge
+        .transact(doc_id, |doc| realize_text(doc, obj))
+        .await
+        .unwrap()
+        .unwrap();
     return if result == expected_1 {
         expected_1.to_string()
     } else if result == expected_2 {

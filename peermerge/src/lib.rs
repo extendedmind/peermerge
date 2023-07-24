@@ -11,6 +11,7 @@ pub trait IO: AsyncWrite + AsyncRead + Send + Unpin + 'static {}
 impl<T> IO for T where T: AsyncWrite + AsyncRead + Send + Unpin + 'static {}
 
 // Crate exports
+pub use crate::automerge::AutomergeDoc;
 pub use crate::common::{
     get_doc_url_info, DocUrlInfo, DocumentInfo, DocumentSharingInfo, FeedType, NameDescription,
     PeermergeError, StateEvent, StateEventContent,

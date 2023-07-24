@@ -1,7 +1,4 @@
-use automerge::{
-    transaction::Transactable, AutomergeError, Change, ChangeHash, ObjId, ObjType, Prop,
-    ScalarValue,
-};
+use automerge::{AutomergeError, Change, ChangeHash, ObjId};
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use super::AutomergeDoc;
@@ -294,40 +291,6 @@ pub(crate) fn apply_unapplied_entries_autocommit(
     Ok(result)
 }
 
-pub(crate) fn put_object_autocommit<O: AsRef<ObjId>, P: Into<Prop>>(
-    automerge_doc: &mut AutomergeDoc,
-    obj: O,
-    prop: P,
-    object: ObjType,
-) -> Result<(Entry, ObjId), PeermergeError> {
-    let id = automerge_doc.put_object(obj, prop, object)?;
-    let change = automerge_doc.get_last_local_change().unwrap().clone();
-    Ok((Entry::new_change(change), id))
-}
-
-pub(crate) fn put_scalar_autocommit<O: AsRef<ObjId>, P: Into<Prop>, V: Into<ScalarValue>>(
-    automerge_doc: &mut AutomergeDoc,
-    obj: O,
-    prop: P,
-    value: V,
-) -> Result<Entry, PeermergeError> {
-    automerge_doc.put(obj, prop, value)?;
-    let change = automerge_doc.get_last_local_change().unwrap().clone();
-    Ok(Entry::new_change(change))
-}
-
-pub(crate) fn splice_text_autocommit<O: AsRef<ObjId>>(
-    automerge_doc: &mut AutomergeDoc,
-    obj: O,
-    index: usize,
-    delete: usize,
-    text: &str,
-) -> Result<Entry, PeermergeError> {
-    automerge_doc.splice_text(obj, index, delete, text)?;
-    let change = automerge_doc.get_last_local_change().unwrap().clone();
-    Ok(Entry::new_change(change))
-}
-
 pub(crate) fn transact_autocommit<F, O>(
     automerge_doc: &mut AutomergeDoc,
     cb: F,
@@ -355,7 +318,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use automerge::{ReadDoc, ROOT};
+    use automerge::{transaction::Transactable, ObjType, Prop, ReadDoc, ScalarValue, ROOT};
 
     use super::*;
     use crate::{
@@ -367,6 +330,28 @@ mod tests {
         let value = doc.get(key, prop).unwrap().unwrap();
         let actual = value.0.to_scalar().unwrap();
         assert_eq!(actual, &ScalarValue::Int(expected));
+    }
+
+    fn put_object_autocommit<O: AsRef<ObjId>, P: Into<Prop>>(
+        automerge_doc: &mut AutomergeDoc,
+        obj: O,
+        prop: P,
+        object: ObjType,
+    ) -> Result<(Entry, ObjId), PeermergeError> {
+        let id = automerge_doc.put_object(obj, prop, object)?;
+        let change = automerge_doc.get_last_local_change().unwrap().clone();
+        Ok((Entry::new_change(change), id))
+    }
+
+    fn put_scalar_autocommit<O: AsRef<ObjId>, P: Into<Prop>, V: Into<ScalarValue>>(
+        automerge_doc: &mut AutomergeDoc,
+        obj: O,
+        prop: P,
+        value: V,
+    ) -> Result<Entry, PeermergeError> {
+        automerge_doc.put(obj, prop, value)?;
+        let change = automerge_doc.get_last_local_change().unwrap().clone();
+        Ok(Entry::new_change(change))
     }
 
     #[test]

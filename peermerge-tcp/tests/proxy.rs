@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use futures::stream::StreamExt;
+use peermerge::transaction::Transactable;
 use peermerge::ROOT;
 use peermerge::{get_doc_url_info, DocumentId};
 use peermerge::{
@@ -171,7 +172,9 @@ async fn process_creator_state_events(
                     remote_peer_syncs += 1;
                     if remote_peer_syncs == 1 {
                         assert_eq!(len, 1);
-                        peermerge.put_scalar(&doc_id, ROOT, "test", "value").await?;
+                        peermerge
+                            .transact_mut(&doc_id, |doc| doc.put(ROOT, "test", "value"), None)
+                            .await?;
                     } else if remote_peer_syncs == 2 {
                         assert_eq!(len, 2);
                         assert_eq!(document_changes.len(), 1);

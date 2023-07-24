@@ -1,6 +1,4 @@
-use automerge::{
-    AutomergeError, ObjId, ObjType, Patch, Prop, ReadDoc, ScalarValue, Value, VecOpObserver,
-};
+use automerge::{AutomergeError, ObjId, Patch, Prop, ScalarValue, VecOpObserver};
 use dashmap::DashMap;
 use futures::channel::mpsc::UnboundedSender;
 use hypercore_protocol::hypercore::PartialKeypair;
@@ -15,9 +13,8 @@ use tracing::{debug, instrument, warn};
 
 use crate::automerge::{
     apply_entries_autocommit, apply_unapplied_entries_autocommit, init_automerge_doc_from_data,
-    init_automerge_doc_from_entries, put_scalar_autocommit, read_autocommit,
-    splice_text_autocommit, transact_autocommit, ApplyEntriesFeedChange, AutomergeDoc,
-    UnappliedEntries,
+    init_automerge_doc_from_entries, init_automerge_doc_with_root_scalars, read_autocommit,
+    transact_autocommit, ApplyEntriesFeedChange, AutomergeDoc, UnappliedEntries,
 };
 use crate::common::cipher::{
     decode_doc_url, encode_doc_url, encode_document_id, encode_proxy_doc_url, DecodedDocUrl,
@@ -32,7 +29,6 @@ use crate::feed::{create_new_read_disk_feed, create_new_write_disk_feed, open_di
 #[cfg(not(target_arch = "wasm32"))]
 use crate::FeedDiskPersistence;
 use crate::{
-    automerge::{init_automerge_doc_with_root_scalars, put_object_autocommit},
     common::{
         entry::Entry,
         state::{DocumentContent, DocumentCursor},
@@ -138,222 +134,7 @@ where
     }
 
     #[instrument(skip_all, fields(doc_name = self.document_name))]
-    pub(crate) async fn get_id<O: AsRef<ObjId>, P: Into<Prop>>(
-        &self,
-        obj: O,
-        prop: P,
-    ) -> Result<Option<ObjId>, PeermergeError> {
-        if self.proxy {
-            panic!("Can not get id on a proxy");
-        }
-        let document_state = &self.document_state;
-        let result = {
-            let document_state = document_state.lock().await;
-            if let Some(doc) = document_state.automerge_doc() {
-                match doc.get(obj, prop) {
-                    Ok(result) => {
-                        if let Some(result) = result {
-                            Some(result.1)
-                        } else {
-                            None
-                        }
-                    }
-                    Err(_err) => {
-                        // TODO: Some errors should probably be errors
-                        None
-                    }
-                }
-            } else {
-                unimplemented!("TODO: No proper error code for trying to get id from doc before a document is synced");
-            }
-        };
-        Ok(result)
-    }
-
-    #[instrument(skip_all, fields(doc_name = self.document_name))]
-    pub(crate) async fn get_scalar<O: AsRef<ObjId>, P: Into<Prop>>(
-        &self,
-        obj: O,
-        prop: P,
-    ) -> Result<Option<ScalarValue>, PeermergeError> {
-        if self.proxy {
-            panic!("Can not get id on a proxy");
-        }
-        let document_state = &self.document_state;
-        let result = {
-            let document_state = document_state.lock().await;
-            if let Some(doc) = document_state.automerge_doc() {
-                match doc.get(obj, prop) {
-                    Ok(result) => {
-                        if let Some(result) = result {
-                            if let Some(value) = result.0.to_scalar() {
-                                Some(value.clone())
-                            } else {
-                                None
-                            }
-                        } else {
-                            None
-                        }
-                    }
-                    Err(_err) => {
-                        // TODO: Some errors should probably be errors
-                        None
-                    }
-                }
-            } else {
-                unimplemented!("TODO: No proper error code for trying to get id from doc before a document is synced");
-            }
-        };
-        Ok(result)
-    }
-
-    #[instrument(skip_all, fields(doc_name = self.document_name))]
-    pub(crate) async fn get<O: AsRef<ObjId>, P: Into<Prop>>(
-        &self,
-        obj: O,
-        prop: P,
-    ) -> Result<Option<(Value, ObjId)>, PeermergeError> {
-        if self.proxy {
-            panic!("Can not get document values on a proxy");
-        }
-        let document_state = &self.document_state;
-        let result = {
-            let document_state = document_state.lock().await;
-            if let Some(doc) = document_state.automerge_doc() {
-                match doc.get(obj, prop) {
-                    Ok(result) => {
-                        if let Some(result) = result {
-                            let value = result.0.to_owned();
-                            let id = result.1.to_owned();
-                            Some((value, id))
-                        } else {
-                            None
-                        }
-                    }
-                    Err(_err) => {
-                        // TODO: Some errors should probably be errors
-                        None
-                    }
-                }
-            } else {
-                unimplemented!("TODO: No proper error code for trying to get from doc before a document is synced");
-            }
-        };
-        Ok(result)
-    }
-
-    #[instrument(skip_all, fields(doc_name = self.document_name))]
-    pub(crate) async fn realize_text<O: AsRef<ObjId>>(
-        &self,
-        obj: O,
-    ) -> Result<Option<String>, PeermergeError> {
-        if self.proxy {
-            panic!("Can not realize text on a proxy");
-        }
-        let document_state = &self.document_state;
-        let result = {
-            let document_state = document_state.lock().await;
-            if let Some(doc) = document_state.automerge_doc() {
-                let length = doc.length(obj.as_ref().clone());
-                let mut chars = Vec::with_capacity(length);
-                for i in 0..length {
-                    match doc.get(obj.as_ref().clone(), i) {
-                        Ok(result) => {
-                            if let Some(result) = result {
-                                let scalar = result.0.to_scalar().unwrap();
-                                match scalar {
-                                    ScalarValue::Str(character) => {
-                                        chars.push(character.to_string());
-                                    }
-                                    _ => {
-                                        panic!("Not a char")
-                                    }
-                                }
-                            }
-                        }
-                        Err(_err) => {
-                            panic!("Not a char")
-                        }
-                    };
-                }
-                let string: String = chars.into_iter().collect();
-                Some(string)
-            } else {
-                unimplemented!("TODO: No proper error code for trying to get from doc before a document is synced");
-            }
-        };
-        Ok(result)
-    }
-
-    #[instrument(skip_all, fields(doc_name = self.document_name))]
-    pub(crate) async fn put_object<O: AsRef<ObjId>, P: Into<Prop>>(
-        &mut self,
-        obj: O,
-        prop: P,
-        object: ObjType,
-    ) -> Result<ObjId, PeermergeError> {
-        if self.proxy {
-            panic!("Can not put object on a proxy");
-        }
-        let id = {
-            let mut document_state = self.document_state.lock().await;
-            let (entry, id) = if let Some(doc) = document_state.automerge_doc_mut() {
-                put_object_autocommit(doc, obj, prop, object).unwrap()
-            } else {
-                unimplemented!(
-                    "TODO: No proper error code for trying to change before a document is synced"
-                );
-            };
-
-            let write_discovery_key = document_state.write_discovery_key();
-            let length = {
-                let write_feed = get_feed(&self.feeds, &write_discovery_key).await.unwrap();
-                let mut write_feed = write_feed.lock().await;
-                write_feed.append(&serialize_entry(&entry)?).await?
-            };
-            document_state
-                .set_cursor_and_save_data(&write_discovery_key, length)
-                .await;
-            id
-        };
-        Ok(id)
-    }
-
-    #[instrument(skip_all, fields(doc_name = self.document_name))]
-    pub(crate) async fn put_scalar<O: AsRef<ObjId>, P: Into<Prop>, V: Into<ScalarValue>>(
-        &mut self,
-        obj: O,
-        prop: P,
-        value: V,
-    ) -> Result<(), PeermergeError> {
-        if self.proxy {
-            panic!("Can not put scalar on a proxy");
-        }
-        {
-            let mut document_state = self.document_state.lock().await;
-            let entry = if let Some(doc) = document_state.automerge_doc_mut() {
-                put_scalar_autocommit(doc, obj, prop, value).unwrap()
-            } else {
-                unimplemented!(
-                    "TODO: No proper error code for trying to change before a document is synced"
-                );
-            };
-
-            let write_discovery_key = document_state.write_discovery_key();
-            let length = {
-                let write_feed = get_feed(&self.feeds, &write_discovery_key).await.unwrap();
-                let mut write_feed = write_feed.lock().await;
-                write_feed.append(&serialize_entry(&entry)?).await?
-            };
-            document_state
-                .set_cursor_and_save_data(&write_discovery_key, length)
-                .await;
-        };
-        Ok(())
-    }
-
-    #[instrument(skip_all, fields(doc_name = self.document_name))]
-    pub(crate) async fn read<F, O>(&self, cb: F) -> Result<O, PeermergeError>
+    pub(crate) async fn transact<F, O>(&self, cb: F) -> Result<O, PeermergeError>
     where
         F: FnOnce(&AutomergeDoc) -> Result<O, AutomergeError>,
     {
@@ -375,7 +156,7 @@ where
     }
 
     #[instrument(skip_all, fields(doc_name = self.document_name))]
-    pub(crate) async fn transact<F, O>(
+    pub(crate) async fn transact_mut<F, O>(
         &mut self,
         cb: F,
         change_id: Option<Vec<u8>>,
@@ -430,39 +211,6 @@ where
     }
 
     #[instrument(skip_all, fields(doc_name = self.document_name))]
-    pub(crate) async fn splice_text<O: AsRef<ObjId>>(
-        &mut self,
-        obj: O,
-        index: usize,
-        delete: usize,
-        text: &str,
-    ) -> Result<(), PeermergeError> {
-        if self.proxy {
-            panic!("Can not splice text on a proxy");
-        }
-        {
-            let mut document_state = self.document_state.lock().await;
-            let entry = if let Some(doc) = document_state.automerge_doc_mut() {
-                splice_text_autocommit(doc, obj, index, delete, text)?
-            } else {
-                unimplemented!(
-                "TODO: No proper error code for trying to splice text before a document is synced"
-            );
-            };
-            let write_discovery_key = document_state.write_discovery_key();
-            let length = {
-                let write_feed_wrapper = get_feed(&self.feeds, &write_discovery_key).await.unwrap();
-                let mut write_feed = write_feed_wrapper.lock().await;
-                write_feed.append(&serialize_entry(&entry)?).await?
-            };
-            document_state
-                .set_cursor_and_save_data(&write_discovery_key, length)
-                .await;
-        }
-        Ok(())
-    }
-
-    #[instrument(skip_all, fields(doc_name = self.document_name))]
     pub(crate) async fn reserve_object<O: AsRef<ObjId>>(
         &mut self,
         obj: O,
@@ -510,7 +258,6 @@ where
                     peer_syncs,
                     reattached_peer_header,
                 );
-                println!("STATE EVENTS {state_events:?}");
                 return Ok(state_events);
             }
         }

@@ -295,7 +295,7 @@ async fn append_value<T, U>(
 {
     while let Some(i) = append_index_receiver.next().await {
         peermerge
-            .transact(
+            .transact_mut(
                 &doc_id,
                 |doc| {
                     doc.put(ROOT, format!("{peer_name}_{i}"), i)?;
