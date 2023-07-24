@@ -88,7 +88,30 @@ where
             // Let's drain any patches that are not yet sent out, and push them out. These can
             // be created by scalar values inserted with peermerge.create_doc_memory() or other
             // mutating calls executed before this call without a state_event_sender.
-            self.notify_of_document_changes().await;
+            let mut state_event_sender = self.state_event_sender.lock().await;
+            if let Some(sender) = state_event_sender.as_mut() {
+                if sender.is_closed() {
+                    *state_event_sender = None;
+                } else {
+                    let mut document_patches: Vec<([u8; 32], Vec<Patch>)> = vec![];
+                    for document_id in get_document_ids(&self.documents).await {
+                        let mut document =
+                            get_document(&self.documents, &document_id).await.unwrap();
+                        let new_patches = document.take_patches().await;
+                        if !new_patches.is_empty() {
+                            document_patches.push((document.id(), new_patches))
+                        }
+                    }
+                    for (doc_discovery_key, patches) in document_patches {
+                        sender
+                            .unbounded_send(StateEvent::new(
+                                doc_discovery_key,
+                                StateEventContent::DocumentChanged((None, patches)),
+                            ))
+                            .unwrap();
+                    }
+                }
+            }
         }
     }
 
@@ -165,17 +188,17 @@ where
         &mut self,
         document_id: &DocumentId,
         cb: F,
+        change_id: Option<Vec<u8>>,
     ) -> Result<O, PeermergeError>
     where
         F: FnOnce(&mut AutomergeDoc) -> Result<O, AutomergeError>,
     {
         let result = {
             let mut document = get_document(&self.documents, document_id).await.unwrap();
-            document.transact(cb).await?
+            document
+                .transact(cb, change_id, &mut self.state_event_sender)
+                .await?
         };
-        {
-            self.notify_of_document_changes().await;
-        }
         Ok(result)
     }
 
@@ -311,7 +334,7 @@ where
                     sender
                         .unbounded_send(StateEvent::new(
                             doc_discovery_key,
-                            StateEventContent::DocumentChanged(patches),
+                            StateEventContent::DocumentChanged((None, patches)),
                         ))
                         .unwrap();
                 }

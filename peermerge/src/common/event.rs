@@ -23,7 +23,7 @@ pub enum StateEventContent {
     RemotePeerSynced(([u8; 32], u64)),
     Reattached(NameDescription),
     DocumentInitialized(bool, Option<DocumentId>),
-    DocumentChanged(Vec<Patch>),
+    DocumentChanged((Option<Vec<u8>>, Vec<Patch>)),
 }
 
 #[derive(Clone, Debug)]

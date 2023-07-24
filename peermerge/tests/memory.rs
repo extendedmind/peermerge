@@ -210,7 +210,7 @@ async fn process_joiner_state_event(
             DocumentInitialized(..) => {
                 // Skip
             }
-            DocumentChanged(patches) => {
+            DocumentChanged((_, patches)) => {
                 if document_changes.len() == 0 {
                     assert_eq!(patches.len(), 1); // "Hello" in one TextValue
                     document_changes.push(patches);
@@ -334,7 +334,7 @@ async fn process_creator_state_events(
                 }
                 remote_peer_synced.insert(discovery_key, len);
             }
-            DocumentChanged(patches) => {
+            DocumentChanged((_, patches)) => {
                 let document_changes_len = document_changes.len();
                 match document_changes_len {
                     0 => {
@@ -532,7 +532,7 @@ async fn process_latecomer_state_event(
             DocumentInitialized(..) => {
                 // Ignore, this happens with the root hypercore
             }
-            DocumentChanged(patches) => {
+            DocumentChanged((_, patches)) => {
                 if document_changes.len() == 0 {
                     assert_eq!(patches.len(), 1); // Two local additions as one Splice
                     assert_text_equals_either(
@@ -585,14 +585,11 @@ async fn assert_text_equals_either(
     expected_2: &str,
 ) -> String {
     let result = peermerge.realize_text(doc_id, obj).await.unwrap().unwrap();
-    if result == expected_1 {
-        return expected_1.to_string();
+    return if result == expected_1 {
+        expected_1.to_string()
     } else if result == expected_2 {
-        return expected_2.to_string();
+        expected_2.to_string()
     } else {
-        panic!(
-            "Text {} did not match either {} or {}",
-            result, expected_1, expected_2
-        );
-    }
+        panic!("Text {result} did not match either {expected_1} or {expected_2}",);
+    };
 }

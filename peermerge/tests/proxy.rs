@@ -255,7 +255,7 @@ async fn process_proxy_state_event_with_creator(
                 }
             }
             _ => {
-                panic!("Unexpected event {:?}", event);
+                panic!("Unexpected event {event:?}");
             }
         }
     }
@@ -277,7 +277,7 @@ async fn process_creator_state_events(
         );
         match event.content {
             PeerSynced(_) => {
-                panic!("Creator should not get peer synced events {:?}", event);
+                panic!("Creator should not get peer synced events {event:?}");
             }
             RemotePeerSynced((discovery_key, len)) => {
                 if discovery_key != doc_id {
@@ -294,14 +294,14 @@ async fn process_creator_state_events(
                     }
                 }
             }
-            DocumentChanged(patches) => {
+            DocumentChanged((_, patches)) => {
                 document_changes.push(patches);
             }
             DocumentInitialized(..) => {
                 // Skip
             }
             _ => {
-                panic!("Unexpected event {:?}", event);
+                panic!("Unexpected event {event:?}");
             }
         }
     }
@@ -342,7 +342,7 @@ async fn process_proxy_state_event_with_joiner_initial(
                 }
             }
             _ => {
-                panic!("Unexpected event {:?}", event);
+                panic!("Unexpected event {event:?}");
             }
         }
     }
@@ -391,7 +391,7 @@ async fn process_joiner_state_events_initial(
                     break;
                 }
             }
-            DocumentChanged(patches) => {
+            DocumentChanged((_, patches)) => {
                 document_changes.push(patches);
             }
             DocumentInitialized(..) => {
@@ -403,7 +403,7 @@ async fn process_joiner_state_events_initial(
                 }
             }
             _ => {
-                panic!("Unexpected event {:?}", event);
+                panic!("Unexpected event {event:?}");
             }
         }
     }
@@ -495,7 +495,7 @@ async fn process_joiner_state_events_reopen(
                     assert_eq!(len, 1);
                 }
             }
-            DocumentChanged(patches) => {
+            DocumentChanged((_, patches)) => {
                 document_changes.push(patches);
             }
             DocumentInitialized(..) => {

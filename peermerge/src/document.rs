@@ -59,8 +59,6 @@ where
     feeds: Arc<DashMap<[u8; 32], Arc<Mutex<Feed<U>>>>>,
     /// The state of the document
     document_state: Arc<Mutex<DocStateWrapper<T>>>,
-    /// Sender to use to communicate local changes to document
-    state_event_sender: Arc<Mutex<Option<UnboundedSender<StateEvent>>>>,
     /// Locally stored prefix path, empty for memory.
     prefix: PathBuf,
     /// This peer's name, needed for creating an actor for the automerge document.
@@ -318,9 +316,6 @@ where
                 .await;
             id
         };
-        {
-            self.notify_of_document_changes().await;
-        }
         Ok(id)
     }
 
@@ -354,9 +349,6 @@ where
                 .set_cursor_and_save_data(&write_discovery_key, length)
                 .await;
         };
-        {
-            self.notify_of_document_changes().await;
-        }
         Ok(())
     }
 
@@ -383,7 +375,12 @@ where
     }
 
     #[instrument(skip_all, fields(doc_name = self.document_name))]
-    pub(crate) async fn transact<F, O>(&mut self, cb: F) -> Result<O, PeermergeError>
+    pub(crate) async fn transact<F, O>(
+        &mut self,
+        cb: F,
+        change_id: Option<Vec<u8>>,
+        state_event_sender: &mut Arc<Mutex<Option<UnboundedSender<StateEvent>>>>,
+    ) -> Result<O, PeermergeError>
     where
         F: FnOnce(&mut AutomergeDoc) -> Result<O, AutomergeError>,
     {
@@ -393,7 +390,24 @@ where
         let result = {
             let mut document_state = self.document_state.lock().await;
             let (entry, result) = if let Some(doc) = document_state.automerge_doc_mut() {
-                transact_autocommit(doc, cb).unwrap()
+                let (entry, result) = transact_autocommit(doc, cb).unwrap();
+                if entry.is_some() {
+                    // Immediately push out the patches while the document is locked to make sure
+                    // the given change_id matches the patches
+                    let mut state_event_sender = state_event_sender.lock().await;
+                    if let Some(sender) = state_event_sender.as_mut() {
+                        let patches = doc.diff_incremental::<VecOpObserver>().take_patches();
+                        if !patches.is_empty() {
+                            sender
+                                .unbounded_send(StateEvent::new(
+                                    self.root_discovery_key,
+                                    DocumentChanged((change_id, patches)),
+                                ))
+                                .unwrap();
+                        }
+                    }
+                }
+                (entry, result)
             } else {
                 unimplemented!(
                     "TODO: No proper error code for trying to change before a document is synced"
@@ -412,9 +426,6 @@ where
             }
             result
         };
-        {
-            self.notify_of_document_changes().await;
-        }
         Ok(result)
     }
 
@@ -447,9 +458,6 @@ where
             document_state
                 .set_cursor_and_save_data(&write_discovery_key, length)
                 .await;
-        }
-        {
-            self.notify_of_document_changes().await;
         }
         Ok(())
     }
@@ -669,29 +677,6 @@ where
     }
 
     #[instrument(level = "debug", skip_all, fields(doc_name = self.document_name))]
-    async fn notify_of_document_changes(&mut self) {
-        let mut document_state = self.document_state.lock().await;
-        if let Some(doc) = document_state.automerge_doc_mut() {
-            let mut state_event_sender = self.state_event_sender.lock().await;
-            if let Some(sender) = state_event_sender.as_mut() {
-                if sender.is_closed() {
-                    *state_event_sender = None;
-                } else {
-                    let patches = doc.diff_incremental::<VecOpObserver>().take_patches();
-                    if !patches.is_empty() {
-                        sender
-                            .unbounded_send(StateEvent::new(
-                                self.root_discovery_key,
-                                DocumentChanged(patches),
-                            ))
-                            .unwrap();
-                    }
-                }
-            }
-        }
-    }
-
-    #[instrument(level = "debug", skip_all, fields(doc_name = self.document_name))]
     async fn notify_new_peers_created(&mut self, public_keys: Vec<[u8; 32]>) {
         // Send message to root feed that new peers have been created to get all open protocols to
         // open channels to it.
@@ -873,7 +858,7 @@ where
             state_events.push(StateEvent::new(self.id(), event));
         }
         if !patches.is_empty() {
-            state_events.push(StateEvent::new(self.id(), DocumentChanged(patches)));
+            state_events.push(StateEvent::new(self.id(), DocumentChanged((None, patches))));
         }
         state_events
     }
@@ -1117,7 +1102,6 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
         Self {
             feeds: Arc::new(feeds),
             document_state: Arc::new(Mutex::new(document_state)),
-            state_event_sender: Arc::new(Mutex::new(None)),
             prefix: PathBuf::new(),
             document_name,
             proxy,
@@ -1463,7 +1447,6 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
         Ok(Self {
             feeds,
             document_state: Arc::new(Mutex::new(document_state_wrapper)),
-            state_event_sender: Arc::new(Mutex::new(None)),
             prefix: data_root_dir.clone(),
             root_discovery_key,
             write_discovery_key,
@@ -1526,7 +1509,6 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
         Self {
             feeds: Arc::new(feeds),
             document_state: Arc::new(Mutex::new(document_state)),
-            state_event_sender: Arc::new(Mutex::new(None)),
             prefix: data_root_dir.clone(),
             document_name,
             proxy,

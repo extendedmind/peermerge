@@ -117,13 +117,17 @@ async fn disk_two_peers(encrypted: bool) -> anyhow::Result<()> {
     let mut peermerge_creator =
         Peermerge::open_disk(creator_encryption_keys, &creator_dir, None).await?;
     let values = peermerge_creator
-        .transact(&creator_doc_info.id(), |doc| {
-            let open_value = 2;
-            let reopen_value = 3;
-            doc.put(ROOT, "open", open_value)?;
-            doc.put(ROOT, "reopen", reopen_value)?;
-            Ok(vec![open_value, reopen_value])
-        })
+        .transact(
+            &creator_doc_info.id(),
+            |doc| {
+                let open_value = 2;
+                let reopen_value = 3;
+                doc.put(ROOT, "open", open_value)?;
+                doc.put(ROOT, "reopen", reopen_value)?;
+                Ok(vec![open_value, reopen_value])
+            },
+            None,
+        )
         .await?;
     assert_eq!(values, vec![2, 3]);
 
@@ -271,7 +275,8 @@ async fn process_joiner_state_event(
             DocumentInitialized(..) => {
                 // Just ignore for now
             }
-            DocumentChanged(patches) => {
+            DocumentChanged((change_id, patches)) => {
+                assert!(change_id.is_none());
                 document_changes.push(patches);
             }
             _ => {
@@ -341,7 +346,7 @@ async fn process_creator_state_events(
                     break;
                 }
             }
-            DocumentChanged(patches) => {
+            DocumentChanged((_, patches)) => {
                 assert_eq!(patches.len(), expected_scalars.len());
                 document_changes.push(patches);
             }

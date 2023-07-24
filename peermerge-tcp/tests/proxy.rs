@@ -179,7 +179,7 @@ async fn process_creator_state_events(
                     }
                 }
             }
-            DocumentChanged(patches) => {
+            DocumentChanged((_, patches)) => {
                 document_changes.push(patches);
             }
             Reattached(_) => {

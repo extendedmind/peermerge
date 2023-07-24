@@ -39,7 +39,10 @@ async fn append_three(
                     break;
                 }
             }
-            DocumentChanged(patches) => {
+            DocumentChanged((change_id, patches)) => {
+                if let Some(change_id) = change_id {
+                    assert_eq!(change_id, i.to_le_bytes().to_vec());
+                }
                 patches_remaining -= patches.len() as i64;
                 // println!(
                 //     "DC: i={} sr={}, rsr={}, pr={}",

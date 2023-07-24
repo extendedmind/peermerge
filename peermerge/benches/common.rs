@@ -1,5 +1,6 @@
 use std::fmt::Debug;
 
+use automerge::transaction::Transactable;
 use futures::channel::mpsc::{
     channel, unbounded, Receiver, Sender, UnboundedReceiver, UnboundedSender,
 };
@@ -294,7 +295,14 @@ async fn append_value<T, U>(
 {
     while let Some(i) = append_index_receiver.next().await {
         peermerge
-            .put_scalar(&doc_id, ROOT, format!("{peer_name}_{i}"), i)
+            .transact(
+                &doc_id,
+                |doc| {
+                    doc.put(ROOT, format!("{peer_name}_{i}"), i)?;
+                    Ok(())
+                },
+                Some(i.to_le_bytes().to_vec()),
+            )
             .await
             .unwrap();
     }
