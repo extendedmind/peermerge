@@ -1,4 +1,4 @@
-use automerge::{AutomergeError, ObjId, Patch, Prop, ScalarValue, VecOpObserver};
+use automerge::{AutomergeError, ObjId, Patch, Prop, ScalarValue};
 use dashmap::DashMap;
 use futures::channel::mpsc::UnboundedSender;
 use hypercore_protocol::hypercore::PartialKeypair;
@@ -177,7 +177,7 @@ where
                     // the given change_id matches the patches
                     let mut state_event_sender = state_event_sender.lock().await;
                     if let Some(sender) = state_event_sender.as_mut() {
-                        let patches = doc.diff_incremental::<VecOpObserver>().take_patches();
+                        let patches = doc.diff_incremental();
                         if !patches.is_empty() {
                             sender
                                 .unbounded_send(StateEvent::new(
@@ -323,7 +323,7 @@ where
     pub(crate) async fn take_patches(&mut self) -> Vec<Patch> {
         let mut document_state = self.document_state.lock().await;
         if let Some(doc) = document_state.automerge_doc_mut() {
-            doc.diff_incremental::<VecOpObserver>().take_patches()
+            doc.diff_incremental()
         } else {
             vec![]
         }
@@ -483,9 +483,7 @@ where
                 .collect();
 
             // Empty patches queue, document is just initialized, so they can be safely ignored.
-            automerge_doc
-                .diff_incremental::<VecOpObserver>()
-                .take_patches();
+            automerge_doc.update_diff_cursor();
 
             let new_peer_headers: Vec<([u8; 32], NameDescription)> = result
                 .iter()
@@ -1532,9 +1530,7 @@ async fn update_content_from_edit_result(
             .collect();
 
         let patches = if !peer_syncs.is_empty() {
-            automerge_doc
-                .diff_incremental::<VecOpObserver>()
-                .take_patches()
+            automerge_doc.diff_incremental()
         } else {
             vec![]
         };
