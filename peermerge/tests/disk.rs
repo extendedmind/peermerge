@@ -90,6 +90,7 @@ async fn disk_two_peers(encrypted: bool) -> anyhow::Result<()> {
         peermerge_joiner,
         joiner_doc_info.id(),
         vec![("version".to_string(), 1)],
+        1,
     )
     .await?;
 
@@ -163,6 +164,7 @@ async fn disk_two_peers(encrypted: bool) -> anyhow::Result<()> {
             ("open".to_string(), 2),
             ("reopen".to_string(), 3),
         ],
+        2,
     )
     .await?;
 
@@ -175,6 +177,7 @@ async fn run_disk_two_peers(
     mut peermerge_joiner: Peermerge<RandomAccessDisk, FeedDiskPersistence>,
     joiner_doc_id: DocumentId,
     expected_scalars: Vec<(String, u64)>,
+    expected_changes: usize,
 ) -> anyhow::Result<()> {
     let (mut proto_responder, mut proto_initiator) = create_pair_memory().await;
     let (creator_state_event_sender, creator_state_event_receiver): (
@@ -229,6 +232,7 @@ async fn run_disk_two_peers(
         creator_state_event_receiver,
         assert_sync_creator,
         expected_scalars,
+        expected_changes,
     )
     .await?;
     Ok(())
@@ -286,6 +290,7 @@ async fn process_creator_state_events(
     mut creator_state_event_receiver: UnboundedReceiver<StateEvent>,
     assert_sync: BoolCondvar,
     expected_scalars: Vec<(String, u64)>,
+    expected_changes: usize,
 ) -> anyhow::Result<()> {
     let mut document_changes: Vec<Vec<Patch>> = vec![];
     while let Some(event) = creator_state_event_receiver.next().await {
@@ -323,7 +328,7 @@ async fn process_creator_state_events(
                 }
             }
             DocumentChanged((_, patches)) => {
-                assert_eq!(patches.len(), expected_scalars.len());
+                assert_eq!(patches.len(), expected_changes);
                 document_changes.push(patches);
             }
             _ => {
