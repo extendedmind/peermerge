@@ -168,27 +168,16 @@ where
         if self.proxy {
             panic!("Can not transact on a proxy");
         }
-        let result = {
+        let (result, patches) = {
             let mut document_state = self.document_state.lock().await;
-            let (entry, result) = if let Some(doc) = document_state.automerge_doc_mut() {
+            let (entry, result, patches) = if let Some(doc) = document_state.automerge_doc_mut() {
                 let (entry, result) = transact_autocommit(doc, cb).unwrap();
-                if entry.is_some() {
-                    // Immediately push out the patches while the document is locked to make sure
-                    // the given change_id matches the patches
-                    let mut state_event_sender = state_event_sender.lock().await;
-                    if let Some(sender) = state_event_sender.as_mut() {
-                        let patches = doc.diff_incremental();
-                        if !patches.is_empty() {
-                            sender
-                                .unbounded_send(StateEvent::new(
-                                    self.root_discovery_key,
-                                    DocumentChanged((change_id, patches)),
-                                ))
-                                .unwrap();
-                        }
-                    }
-                }
-                (entry, result)
+                let patches = if entry.is_some() {
+                    doc.diff_incremental()
+                } else {
+                    vec![]
+                };
+                (entry, result, patches)
             } else {
                 unimplemented!(
                     "TODO: No proper error code for trying to change before a document is synced"
@@ -205,8 +194,19 @@ where
                     .set_cursor_and_save_data(&write_discovery_key, length)
                     .await;
             }
-            result
+            (result, patches)
         };
+        if !patches.is_empty() {
+            let mut state_event_sender = state_event_sender.lock().await;
+            if let Some(sender) = state_event_sender.as_mut() {
+                sender
+                    .unbounded_send(StateEvent::new(
+                        self.root_discovery_key,
+                        DocumentChanged((change_id, patches)),
+                    ))
+                    .unwrap();
+            }
+        }
         Ok(result)
     }
 
