@@ -48,12 +48,10 @@ async fn memory_three_writers() -> anyhow::Result<()> {
         Some(creator_state_event_sender),
     )
     .await;
-    let creator_doc_info = peermerge_creator
-        .create_new_document_memory(
-            NameDescription::new("memory_test"),
-            vec![("version", 1)],
-            false,
-        )
+    let (creator_doc_info, _) = peermerge_creator
+        .create_new_document_memory(NameDescription::new("memory_test"), false, |tx| {
+            tx.put(ROOT, "version", 1)
+        })
         .await?;
     assert_eq!(
         peermerge_creator

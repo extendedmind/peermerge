@@ -1,4 +1,4 @@
-use automerge::{AutomergeError, ObjId, Patch, Prop, ScalarValue};
+use automerge::{transaction::Transaction, AutomergeError, ObjId, Patch};
 use dashmap::DashMap;
 use futures::{
     channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender},
@@ -261,23 +261,22 @@ impl Peermerge<RandomAccessMemory, FeedMemoryPersistence> {
         }
     }
 
-    pub async fn create_new_document_memory<P: Into<Prop>, V: Into<ScalarValue>>(
+    pub async fn create_new_document_memory<F, O>(
         &mut self,
         document_header: NameDescription,
-        doc_root_scalars: Vec<(P, V)>,
         encrypted: bool,
-    ) -> Result<DocumentInfo, PeermergeError> {
-        let document = Document::create_new_memory(
-            &self.peer_header,
-            document_header,
-            doc_root_scalars,
-            encrypted,
-        )
-        .await?;
+        init_cb: F,
+    ) -> Result<(DocumentInfo, O), PeermergeError>
+    where
+        F: FnOnce(&mut Transaction) -> Result<O, AutomergeError>,
+    {
+        let (document, init_result) =
+            Document::create_new_memory(&self.peer_header, document_header, encrypted, init_cb)
+                .await?;
         if let Some(state_event_sender) = self.state_event_sender.lock().await.as_mut() {
             notify_document_initialized(state_event_sender, true, &document.id()).await;
         }
-        Ok(self.add_document(document).await)
+        Ok((self.add_document(document).await, init_result))
     }
 
     pub async fn attach_writer_document_memory(
@@ -476,24 +475,27 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
         })
     }
 
-    pub async fn create_new_document_disk<P: Into<Prop>, V: Into<ScalarValue>>(
+    pub async fn create_new_document_disk<F, O>(
         &mut self,
         document_header: NameDescription,
-        doc_root_scalars: Vec<(P, V)>,
         encrypted: bool,
-    ) -> Result<DocumentInfo, PeermergeError> {
-        let document = Document::create_new_disk(
+        init_cb: F,
+    ) -> Result<(DocumentInfo, O), PeermergeError>
+    where
+        F: FnOnce(&mut Transaction) -> Result<O, AutomergeError>,
+    {
+        let (document, init_result) = Document::create_new_disk(
             &self.peer_header,
             document_header,
-            doc_root_scalars,
             encrypted,
+            init_cb,
             &self.prefix,
         )
         .await?;
         if let Some(state_event_sender) = self.state_event_sender.lock().await.as_mut() {
             notify_document_initialized(state_event_sender, true, &document.id()).await;
         }
-        Ok(self.add_document(document).await)
+        Ok((self.add_document(document).await, init_result))
     }
 
     pub async fn attach_writer_document_disk(

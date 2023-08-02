@@ -1,4 +1,5 @@
-use automerge::{AutomergeError, ObjId, Patch, Prop, ScalarValue};
+use automerge::transaction::Transaction;
+use automerge::{AutomergeError, ObjId, Patch};
 use dashmap::DashMap;
 use futures::channel::mpsc::UnboundedSender;
 use hypercore_protocol::hypercore::PartialKeypair;
@@ -12,8 +13,8 @@ use std::{fmt::Debug, path::PathBuf};
 use tracing::{debug, instrument, warn};
 
 use crate::automerge::{
-    apply_entries_autocommit, apply_unapplied_entries_autocommit, init_automerge_doc_from_data,
-    init_automerge_doc_from_entries, init_automerge_doc_with_root_scalars, read_autocommit,
+    apply_entries_autocommit, apply_unapplied_entries_autocommit, init_automerge_doc,
+    init_automerge_doc_from_data, init_automerge_doc_from_entries, read_autocommit,
     transact_autocommit, ApplyEntriesFeedChange, AutomergeDoc, UnappliedEntries,
 };
 use crate::common::cipher::{
@@ -614,14 +615,17 @@ where
 // Memory
 
 impl Document<RandomAccessMemory, FeedMemoryPersistence> {
-    pub(crate) async fn create_new_memory<P: Into<Prop>, V: Into<ScalarValue>>(
+    pub(crate) async fn create_new_memory<F, O>(
         peer_header: &NameDescription,
         document_header: NameDescription,
-        doc_root_scalars: Vec<(P, V)>,
         encrypted: bool,
-    ) -> Result<Self, PeermergeError> {
-        let result =
-            prepare_create(peer_header, &document_header, doc_root_scalars, encrypted).await;
+        init_cb: F,
+    ) -> Result<(Self, O), PeermergeError>
+    where
+        F: FnOnce(&mut Transaction) -> Result<O, AutomergeError>,
+    {
+        let (result, init_result) =
+            prepare_create(peer_header, &document_header, encrypted, init_cb).await;
 
         // Create the root memory feed
         let (root_feed_length, root_feed, root_encryption_key) = create_new_write_memory_feed(
@@ -664,16 +668,19 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
         let mut state = result.state;
         state.content = Some(content);
 
-        Ok(Self::new_memory(
-            (result.root_discovery_key, root_feed),
-            Some((result.write_discovery_key, write_feed)),
-            peer_header,
-            state,
-            encrypted,
-            &doc_url,
-            root_encryption_key,
-        )
-        .await)
+        Ok((
+            Self::new_memory(
+                (result.root_discovery_key, root_feed),
+                Some((result.write_discovery_key, write_feed)),
+                peer_header,
+                state,
+                encrypted,
+                &doc_url,
+                root_encryption_key,
+            )
+            .await,
+            init_result,
+        ))
     }
 
     pub(crate) async fn attach_writer_memory(
@@ -900,15 +907,18 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
 
 #[cfg(not(target_arch = "wasm32"))]
 impl Document<RandomAccessDisk, FeedDiskPersistence> {
-    pub(crate) async fn create_new_disk<P: Into<Prop>, V: Into<ScalarValue>>(
+    pub(crate) async fn create_new_disk<F, O>(
         peer_header: &NameDescription,
         document_header: NameDescription,
-        doc_root_scalars: Vec<(P, V)>,
         encrypted: bool,
+        init_cb: F,
         data_root_dir: &PathBuf,
-    ) -> Result<Self, PeermergeError> {
-        let result =
-            prepare_create(peer_header, &document_header, doc_root_scalars, encrypted).await;
+    ) -> Result<(Self, O), PeermergeError>
+    where
+        F: FnOnce(&mut Transaction) -> Result<O, AutomergeError>,
+    {
+        let (result, init_result) =
+            prepare_create(peer_header, &document_header, encrypted, init_cb).await;
         let postfix = encode_document_id(&result.root_discovery_key);
         let data_root_dir = data_root_dir.join(postfix);
 
@@ -957,17 +967,20 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
         let mut state = result.state;
         state.content = Some(content);
 
-        Ok(Self::new_disk(
-            (result.root_discovery_key, root_feed),
-            Some((result.write_discovery_key, write_feed)),
-            peer_header,
-            state,
-            encrypted,
-            &doc_url,
-            root_encryption_key,
-            &data_root_dir,
-        )
-        .await)
+        Ok((
+            Self::new_disk(
+                (result.root_discovery_key, root_feed),
+                Some((result.write_discovery_key, write_feed)),
+                peer_header,
+                state,
+                encrypted,
+                &doc_url,
+                root_encryption_key,
+                &data_root_dir,
+            )
+            .await,
+            init_result,
+        ))
     }
 
     pub(crate) async fn attach_writer_disk(
@@ -1357,12 +1370,15 @@ struct PrepareCreateResult {
     state: DocumentState,
 }
 
-async fn prepare_create<P: Into<Prop>, V: Into<ScalarValue>>(
+async fn prepare_create<F, O>(
     peer_header: &NameDescription,
     document_header: &NameDescription,
-    doc_root_scalars: Vec<(P, V)>,
     encrypted: bool,
-) -> PrepareCreateResult {
+    init_cb: F,
+) -> (PrepareCreateResult, O)
+where
+    F: FnOnce(&mut Transaction) -> Result<O, AutomergeError>,
+{
     // Generate a root feed key pair, its discovery key and the public key string
     let (root_key_pair, root_discovery_key) = generate_keys();
     let root_public_key = *root_key_pair.public.as_bytes();
@@ -1372,11 +1388,8 @@ async fn prepare_create<P: Into<Prop>, V: Into<ScalarValue>>(
     let write_public_key = *write_key_pair.public.as_bytes();
 
     // Initialize the document
-    let (automerge_doc, data) = init_automerge_doc_with_root_scalars(
-        &peer_header.name,
-        &root_discovery_key,
-        doc_root_scalars,
-    );
+    let (automerge_doc, init_result, data) =
+        init_automerge_doc(&peer_header.name, &root_discovery_key, init_cb).unwrap();
 
     // Initialize document state, will be filled later with content
     let decoded_doc_url = DecodedDocUrl::new(
@@ -1387,16 +1400,19 @@ async fn prepare_create<P: Into<Prop>, V: Into<ScalarValue>>(
     );
     let state = DocumentState::new(decoded_doc_url, false, vec![], Some(write_public_key), None);
 
-    PrepareCreateResult {
-        root_key_pair,
-        root_discovery_key,
-        root_public_key,
-        write_key_pair,
-        write_discovery_key,
-        automerge_doc,
-        data,
-        state,
-    }
+    (
+        PrepareCreateResult {
+            root_key_pair,
+            root_discovery_key,
+            root_public_key,
+            write_key_pair,
+            write_discovery_key,
+            automerge_doc,
+            data,
+            state,
+        },
+        init_result,
+    )
 }
 
 async fn update_content<T>(

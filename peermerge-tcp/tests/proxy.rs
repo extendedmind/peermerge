@@ -42,12 +42,10 @@ async fn tcp_proxy_disk_encrypted() -> anyhow::Result<()> {
         &creator_dir,
     )
     .await;
-    let creator_doc_info = peermerge_creator
-        .create_new_document_disk(
-            NameDescription::new("proxy_test"),
-            vec![("version", 1)],
-            true,
-        )
+    let (creator_doc_info, _) = peermerge_creator
+        .create_new_document_disk(NameDescription::new("proxy_test"), true, |tx| {
+            tx.put(ROOT, "version", 1)
+        })
         .await?;
 
     peermerge_creator

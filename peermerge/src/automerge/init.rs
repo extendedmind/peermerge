@@ -1,6 +1,6 @@
 use automerge::{
-    transaction::{CommitOptions, Transactable},
-    ActorId, AutoCommit, Automerge, AutomergeError, Prop, ScalarValue, ROOT,
+    transaction::{CommitOptions, Transaction},
+    ActorId, AutoCommit, Automerge, AutomergeError,
 };
 use std::collections::HashMap;
 
@@ -12,28 +12,29 @@ use crate::{
 };
 
 /// Convenience method to initialize an Automerge document with root scalars
-pub(crate) fn init_automerge_doc_with_root_scalars<P: Into<Prop>, V: Into<ScalarValue>>(
+pub(crate) fn init_automerge_doc<F, O>(
     peer_name: &str,
     discovery_key: &[u8; 32],
-    root_props: Vec<(P, V)>,
-) -> (AutomergeDoc, Vec<u8>) {
+    init_cb: F,
+) -> Result<(AutomergeDoc, O, Vec<u8>), PeermergeError>
+where
+    F: FnOnce(&mut Transaction) -> Result<O, AutomergeError>,
+{
     let mut actor_id: Vec<u8> = peer_name.as_bytes().to_vec();
     actor_id.extend_from_slice(discovery_key);
+
     let mut automerge_doc = Automerge::new().with_actor(ActorId::from(actor_id));
-    automerge_doc
+    let result = automerge_doc
         .transact_with::<_, _, AutomergeError, _>(
             |_| CommitOptions::default().with_message(format!("init:{PEERMERGE_VERSION}")),
-            |tx| {
-                for root_prop in root_props {
-                    tx.put(ROOT, root_prop.0, root_prop.1).unwrap();
-                }
-                Ok(())
-            },
+            init_cb,
         )
-        .unwrap();
+        .unwrap()
+        .result;
+
     let data = automerge_doc.save();
     let automerge_doc: AutoCommit = AutoCommit::load(&data).unwrap();
-    (automerge_doc, data)
+    Ok((automerge_doc, result, data))
 }
 
 pub(crate) fn init_automerge_doc_from_entries(

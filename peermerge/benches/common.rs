@@ -34,12 +34,10 @@ pub async fn setup_peermerge_mesh_memory(
             Some(state_event_sender.clone()),
         )
         .await;
-    let doc_info = peermerge_creator
-        .create_new_document_memory(
-            NameDescription::new("bench"),
-            vec![("version", 1)],
-            encrypted,
-        )
+    let (doc_info, _) = peermerge_creator
+        .create_new_document_memory(NameDescription::new("bench"), encrypted, |tx| {
+            tx.put(ROOT, "version", 1)
+        })
         .await
         .unwrap();
     let encryption_key = peermerge_creator.encryption_key(&doc_info.id()).await;
@@ -119,12 +117,10 @@ pub async fn setup_peermerge_mesh_disk(
             &creator_dir,
         )
         .await;
-    let doc_info = peermerge_creator
-        .create_new_document_disk(
-            NameDescription::new("bench"),
-            vec![("version", 1)],
-            encrypted,
-        )
+    let (doc_info, _) = peermerge_creator
+        .create_new_document_disk(NameDescription::new("bench"), encrypted, |tx| {
+            tx.put(ROOT, "version", 1)
+        })
         .await
         .unwrap();
     let encryption_key = peermerge_creator.encryption_key(&doc_info.id()).await;

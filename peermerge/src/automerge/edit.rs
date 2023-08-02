@@ -322,7 +322,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        automerge::{init_automerge_doc_from_data, init_automerge_doc_with_root_scalars},
+        automerge::{init_automerge_doc, init_automerge_doc_from_data},
         common::keys::generate_keys,
     };
 
@@ -362,11 +362,10 @@ mod tests {
         let (_, doc_discovery_key) = generate_keys();
         let (_, peer_1_discovery_key) = generate_keys();
         let (_, peer_2_discovery_key) = generate_keys();
-        let (mut doc, data) = init_automerge_doc_with_root_scalars(
-            peer_name,
-            &doc_discovery_key,
-            vec![("version", 1)],
-        );
+        let (mut doc, _, data) = init_automerge_doc(peer_name, &doc_discovery_key, |tx| {
+            tx.put(ROOT, "version", 1)
+        })
+        .unwrap();
 
         // Let's create a tree of depth 5
         let (entry_1, key_1) =
