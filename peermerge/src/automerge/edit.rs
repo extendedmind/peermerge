@@ -291,7 +291,7 @@ pub(crate) fn apply_unapplied_entries_autocommit(
     Ok(result)
 }
 
-pub(crate) fn transact_autocommit<F, O>(
+pub(crate) fn transact_mut_autocommit<F, O>(
     automerge_doc: &mut AutomergeDoc,
     cb: F,
 ) -> Result<(Option<Entry>, O), PeermergeError>
@@ -305,7 +305,7 @@ where
     Ok((entry, result))
 }
 
-pub(crate) fn read_autocommit<F, O>(
+pub(crate) fn transact_autocommit<F, O>(
     automerge_doc: &AutomergeDoc,
     cb: F,
 ) -> Result<O, PeermergeError>

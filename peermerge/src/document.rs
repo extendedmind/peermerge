@@ -14,8 +14,8 @@ use tracing::{debug, instrument, warn};
 
 use crate::automerge::{
     apply_entries_autocommit, apply_unapplied_entries_autocommit, init_automerge_doc,
-    init_automerge_doc_from_data, init_automerge_doc_from_entries, read_autocommit,
-    transact_autocommit, ApplyEntriesFeedChange, AutomergeDoc, UnappliedEntries,
+    init_automerge_doc_from_data, init_automerge_doc_from_entries, transact_autocommit,
+    transact_mut_autocommit, ApplyEntriesFeedChange, AutomergeDoc, UnappliedEntries,
 };
 use crate::common::cipher::{
     decode_doc_url, encode_doc_url, encode_document_id, encode_proxy_doc_url, DecodedDocUrl,
@@ -145,7 +145,7 @@ where
         let result = {
             let document_state = self.document_state.lock().await;
             let result = if let Some(doc) = document_state.automerge_doc() {
-                read_autocommit(doc, cb).unwrap()
+                transact_autocommit(doc, cb).unwrap()
             } else {
                 unimplemented!(
                     "TODO: No proper error code for trying to read before a document is synced"
@@ -172,7 +172,7 @@ where
         let (result, patches) = {
             let mut document_state = self.document_state.lock().await;
             let (entry, result, patches) = if let Some(doc) = document_state.automerge_doc_mut() {
-                let (entry, result) = transact_autocommit(doc, cb).unwrap();
+                let (entry, result) = transact_mut_autocommit(doc, cb).unwrap();
                 let patches = if entry.is_some() {
                     doc.diff_incremental()
                 } else {
