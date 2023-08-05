@@ -1,5 +1,5 @@
 use hypercore_protocol::hypercore::{
-    HypercoreBuilder, Keypair, CacheOptionsBuilder, PartialKeypair, PublicKey, Storage,
+    CacheOptionsBuilder, HypercoreBuilder, Keypair, PartialKeypair, PublicKey, Storage,
 };
 #[cfg(not(target_arch = "wasm32"))]
 use random_access_disk::RandomAccessDisk;
@@ -14,7 +14,7 @@ pub(crate) async fn create_new_write_disk_hypercore(
     prefix: &PathBuf,
     key_pair: Keypair,
     discovery_key: &[u8; 32],
-    init_data: Vec<u8>,
+    init_data: Vec<Vec<u8>>,
     encrypted: bool,
     encryption_key: &Option<Vec<u8>>,
 ) -> (u64, HypercoreWrapper<RandomAccessDisk>, Option<Vec<u8>>) {
@@ -31,7 +31,10 @@ pub(crate) async fn create_new_write_disk_hypercore(
         .unwrap();
     let (mut wrapper, encryption_key) =
         HypercoreWrapper::from_disk_hypercore(hypercore, false, encrypted, encryption_key, true);
-    let len = wrapper.append(&init_data).await.unwrap();
+    let mut len: u64 = 0;
+    for data in init_data {
+        len = wrapper.append(&data).await.unwrap();
+    }
     (len, wrapper, encryption_key)
 }
 
@@ -85,7 +88,7 @@ pub(crate) async fn open_disk_hypercore(
 
 pub(crate) async fn create_new_write_memory_hypercore(
     key_pair: Keypair,
-    init_data: Option<Vec<u8>>,
+    init_data: Option<Vec<Vec<u8>>>,
     encrypted: bool,
     encryption_key: &Option<Vec<u8>>,
 ) -> (u64, HypercoreWrapper<RandomAccessMemory>, Option<Vec<u8>>) {
@@ -124,7 +127,7 @@ pub(crate) async fn create_new_read_memory_hypercore(
 
 async fn create_new_memory_hypercore(
     key_pair: PartialKeypair,
-    init_data: Option<Vec<u8>>,
+    init_data: Option<Vec<Vec<u8>>>,
     proxy: bool,
     encrypted: bool,
     encryption_key: &Option<Vec<u8>>,
@@ -144,7 +147,11 @@ async fn create_new_memory_hypercore(
         init_data.is_some(),
     );
     let len = if let Some(init_data) = init_data {
-        wrapper.append(&init_data).await.unwrap()
+        let mut len: u64 = 0;
+        for data in init_data {
+            len = wrapper.append(&data).await.unwrap();
+        }
+        len
     } else {
         0
     };

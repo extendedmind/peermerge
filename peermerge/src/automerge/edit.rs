@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use super::AutomergeDoc;
 use crate::{
-    common::entry::{Entry, EntryType},
+    common::entry::{Entry, EntryContent},
     NameDescription, PeermergeError,
 };
 
@@ -110,9 +110,8 @@ impl UnappliedEntries {
                 let original_start_index = value.0 - value.1.len() as u64;
                 let mut new_length = original_start_index;
                 for entry in value.1.iter() {
-                    match entry.entry_type {
-                        EntryType::Change => {
-                            let change = entry.change.as_ref().unwrap();
+                    match &entry.content {
+                        EntryContent::Change { change, .. } => {
                             if change.deps().iter().all(|dep| {
                                 if hashes.contains(dep) {
                                     true
@@ -126,7 +125,7 @@ impl UnappliedEntries {
                                 }
                             }) {
                                 new_length += 1;
-                                changes_to_apply.push(change.clone());
+                                changes_to_apply.push(*change.clone());
                                 hashes.insert(change.hash());
                                 if let Some(result_value) = result.get_mut(discovery_key) {
                                     result_value.set_length(new_length);
@@ -143,21 +142,18 @@ impl UnappliedEntries {
                                 break;
                             }
                         }
-                        EntryType::InitPeer => {
+                        EntryContent::InitPeer { peer_header, .. } => {
+                            // TODO: document_header
                             new_length += 1;
-                            let peer_header = NameDescription {
-                                name: entry.name.as_ref().unwrap().to_string(),
-                                description: entry.description.clone(),
-                            };
                             if let Some(result_value) = result.get_mut(discovery_key) {
                                 result_value.set_length(new_length);
-                                result_value.set_peer_header(peer_header);
+                                result_value.set_peer_header(peer_header.clone());
                             } else {
                                 result.insert(
                                     *discovery_key,
                                     ApplyEntriesFeedChange::new_with_peer_header(
                                         new_length,
-                                        peer_header,
+                                        peer_header.clone(),
                                     ),
                                 );
                             }
@@ -197,9 +193,8 @@ pub(crate) fn apply_entries_autocommit(
     let mut length = contiguous_length - len;
     for entry in entries {
         length += 1;
-        match entry.entry_type {
-            EntryType::Change => {
-                let change = entry.change.as_ref().unwrap();
+        match &entry.content {
+            EntryContent::Change { change, .. } => {
                 let reserved: Vec<ObjId> = if !unapplied_entries.reserved_ids.is_empty() {
                     change
                         .decode()
@@ -233,7 +228,7 @@ pub(crate) fn apply_entries_autocommit(
                         .iter()
                         .all(|dep| automerge_doc.get_change_by_hash(dep).is_some())
                 {
-                    changes_to_apply.push(change.clone());
+                    changes_to_apply.push(*change.clone());
                     if let Some(result_value) = result.get_mut(discovery_key) {
                         result_value.set_length(length);
                     } else {
@@ -245,18 +240,15 @@ pub(crate) fn apply_entries_autocommit(
                     unapplied_entries.add(discovery_key, length, entry, reserved);
                 };
             }
-            EntryType::InitPeer => {
-                let peer_header = NameDescription {
-                    name: entry.name.unwrap(),
-                    description: entry.description,
-                };
+            EntryContent::InitPeer { peer_header, .. } => {
+                // TODO: document_header
                 if let Some(result_value) = result.get_mut(discovery_key) {
                     result_value.set_length(length);
-                    result_value.set_peer_header(peer_header);
+                    result_value.set_peer_header(peer_header.clone());
                 } else {
                     result.insert(
                         *discovery_key,
-                        ApplyEntriesFeedChange::new_with_peer_header(length, peer_header),
+                        ApplyEntriesFeedChange::new_with_peer_header(length, peer_header.clone()),
                     );
                 }
             }
@@ -362,7 +354,7 @@ mod tests {
         let (_, doc_discovery_key) = generate_keys();
         let (_, peer_1_discovery_key) = generate_keys();
         let (_, peer_2_discovery_key) = generate_keys();
-        let (mut doc, _, data) = init_automerge_doc(peer_name, &doc_discovery_key, |tx| {
+        let (mut doc, _, data, _) = init_automerge_doc(peer_name, &doc_discovery_key, |tx| {
             tx.put(ROOT, "version", 1)
         })
         .unwrap();

@@ -6,6 +6,7 @@ pub(crate) use crate::common::entry::Entry;
 pub(crate) use crate::common::message::BroadcastMessage;
 pub(crate) use crate::common::state::{DocumentState, PeermergeState};
 
+use super::entry::EntryContent;
 use super::message::{NewPeersCreatedMessage, PeerSyncedMessage};
 use super::state::{DocumentContent, DocumentCursor, DocumentPeerState};
 use crate::NameDescription;
@@ -330,75 +331,233 @@ impl CompactEncoding<PeerSyncedMessage> for State {
     }
 }
 
+#[derive(Copy, Clone, Debug, PartialEq)]
+#[repr(u8)]
+enum EntryType {
+    InitDoc = 0,
+    InitPeer = 1,
+    Doc = 2,
+    Change = 3,
+}
+
+impl EntryType {
+    fn from_entry_content(content: &EntryContent) -> Self {
+        match content {
+            EntryContent::InitDoc { .. } => Self::InitDoc,
+            EntryContent::InitPeer { .. } => Self::InitPeer,
+            EntryContent::DocPart { .. } => Self::Doc,
+            EntryContent::Change { .. } => Self::Change,
+        }
+    }
+}
+
+impl TryFrom<u8> for EntryType {
+    type Error = ();
+    fn try_from(input: u8) -> Result<Self, <Self as TryFrom<u8>>::Error> {
+        match input {
+            0u8 => Ok(Self::InitDoc),
+            1u8 => Ok(Self::InitPeer),
+            2u8 => Ok(Self::Doc),
+            3u8 => Ok(Self::Change),
+            _ => Err(()),
+        }
+    }
+}
+
 impl CompactEncoding<Entry> for State {
     fn preencode(&mut self, value: &Entry) -> Result<usize, EncodingError> {
         self.preencode(&value.version)?;
-        self.preencode(&(value.entry_type as u8))?;
-        self.add_end(1)?; // flags
-        if !value.data.is_empty() {
-            self.preencode(&value.data)?;
-        }
-        if let Some(name) = &value.name {
-            self.preencode(name)?;
-        }
-        if let Some(peer_name) = &value.description {
-            self.preencode(peer_name)?;
+        self.add_end(1)?; // entry_type
+        match &value.content {
+            EntryContent::InitDoc { doc_entry_count } => {
+                self.preencode(doc_entry_count)?;
+            }
+            EntryContent::InitPeer {
+                document_id: _,
+                doc_entry_count,
+                peer_header,
+                document_header,
+                previous_discovery_keys,
+                child_documents,
+            } => {
+                self.add_end(1)?; // flags
+                self.preencode_fixed_32()?;
+                self.preencode(doc_entry_count)?;
+                self.preencode(&peer_header.name)?;
+                if let Some(description) = &peer_header.description {
+                    self.preencode(description)?;
+                }
+                self.preencode(&document_header.name)?;
+                if let Some(description) = &document_header.description {
+                    self.preencode(description)?;
+                }
+                if !previous_discovery_keys.is_empty() {
+                    self.preencode(previous_discovery_keys)?;
+                }
+                if !child_documents.is_empty() {
+                    self.preencode(&child_documents.len())?;
+                    for (_id, encryption_key) in child_documents.iter() {
+                        self.add_end(1)?; // flags
+                        self.preencode_fixed_32()?;
+                        if let Some(key) = encryption_key {
+                            self.preencode(key)?;
+                        }
+                    }
+                }
+            }
+            EntryContent::DocPart { index, data } => {
+                self.preencode(index)?;
+                self.preencode(data)?;
+            }
+            EntryContent::Change { data, .. } => {
+                self.preencode(data)?;
+            }
         }
         Ok(self.end())
     }
 
     fn encode(&mut self, value: &Entry, buffer: &mut [u8]) -> Result<usize, EncodingError> {
         self.encode(&value.version, buffer)?;
-        self.encode(&(value.entry_type as u8), buffer)?;
+        self.encode(
+            &(EntryType::from_entry_content(&value.content) as u8),
+            buffer,
+        )?;
 
-        let flags_index = self.start();
-        let mut flags: u8 = 0;
-        self.add_start(1)?;
-        if !value.data.is_empty() {
-            flags |= 1;
-            self.encode(&value.data, buffer)?;
+        match &value.content {
+            EntryContent::InitDoc { doc_entry_count } => {
+                self.encode(doc_entry_count, buffer)?;
+            }
+            EntryContent::InitPeer {
+                document_id,
+                doc_entry_count,
+                peer_header,
+                document_header,
+                previous_discovery_keys,
+                child_documents,
+            } => {
+                let flags_index = self.start();
+                let mut flags: u8 = 0;
+                self.add_start(1)?;
+                self.encode_fixed_32(document_id, buffer)?;
+                self.encode(doc_entry_count, buffer)?;
+                self.encode(&peer_header.name, buffer)?;
+                if let Some(description) = &peer_header.description {
+                    flags |= 1;
+                    self.encode(description, buffer)?;
+                }
+                self.encode(&document_header.name, buffer)?;
+                if let Some(description) = &document_header.description {
+                    flags |= 2;
+                    self.encode(description, buffer)?;
+                }
+                if !previous_discovery_keys.is_empty() {
+                    flags |= 4;
+                    self.encode(previous_discovery_keys, buffer)?;
+                }
+                if !child_documents.is_empty() {
+                    flags |= 8;
+                    for (id, encryption_key) in child_documents.iter() {
+                        let doc_flag_index = self.start();
+                        let mut doc_flag: u8 = 0;
+                        self.add_start(1)?;
+                        self.encode_fixed_32(id, buffer)?;
+                        if let Some(key) = encryption_key {
+                            doc_flag |= 1;
+                            self.encode(key, buffer)?;
+                        }
+                        buffer[doc_flag_index] = doc_flag;
+                    }
+                }
+                buffer[flags_index] = flags;
+            }
+            EntryContent::DocPart { index, data } => {
+                self.encode(index, buffer)?;
+                self.encode(data, buffer)?;
+            }
+            EntryContent::Change { data, .. } => {
+                self.encode(data, buffer)?;
+            }
         }
-        if let Some(name) = &value.name {
-            flags |= 2;
-            self.encode(name, buffer)?;
-        }
-        if let Some(peer_name) = &value.description {
-            flags |= 4;
-            self.encode(peer_name, buffer)?;
-        }
-        buffer[flags_index] = flags;
         Ok(self.start())
     }
 
     fn decode(&mut self, buffer: &[u8]) -> Result<Entry, EncodingError> {
         let version: u8 = self.decode(buffer)?;
-        let entry_type: u8 = self.decode(buffer)?;
-        let flags: u8 = self.decode(buffer)?;
+        let entry_type: EntryType = self.decode_u8(buffer)?.try_into().unwrap();
+        let content = match entry_type {
+            EntryType::InitDoc => {
+                let doc_entry_count: u32 = self.decode(buffer)?;
+                EntryContent::InitDoc { doc_entry_count }
+            }
+            EntryType::InitPeer => {
+                let flags: u8 = self.decode(buffer)?;
+                let document_id: [u8; 32] =
+                    self.decode_fixed_32(buffer)?.to_vec().try_into().unwrap();
+                let doc_entry_count: u32 = self.decode(buffer)?;
+                let peer_name: String = self.decode(buffer)?;
+                let peer_description: Option<String> = if flags & 1 != 0 {
+                    Some(self.decode(buffer)?)
+                } else {
+                    None
+                };
+                let document_name: String = self.decode(buffer)?;
+                let document_description: Option<String> = if flags & 2 != 0 {
+                    Some(self.decode(buffer)?)
+                } else {
+                    None
+                };
 
-        let data: Vec<u8> = if flags & 1 != 0 {
-            self.decode(buffer)?
-        } else {
-            vec![]
+                let previous_discovery_keys: Vec<[u8; 32]> = if flags & 4 != 0 {
+                    self.decode(buffer)?
+                } else {
+                    vec![]
+                };
+
+                let child_documents = if flags & 8 != 0 {
+                    let len: usize = self.decode(buffer)?;
+                    let mut docs = Vec::with_capacity(len);
+                    for _i in 0..len {
+                        let doc_flag: u8 = self.decode(buffer)?;
+                        let doc_id: [u8; 32] =
+                            self.decode_fixed_32(buffer)?.to_vec().try_into().unwrap();
+                        let encryption_key: Option<Vec<u8>> = if doc_flag & 1 != 0 {
+                            Some(self.decode(buffer)?)
+                        } else {
+                            None
+                        };
+                        docs.push((doc_id, encryption_key))
+                    }
+                    docs
+                } else {
+                    vec![]
+                };
+                EntryContent::InitPeer {
+                    peer_header: NameDescription {
+                        name: peer_name,
+                        description: peer_description,
+                    },
+                    document_id,
+                    document_header: NameDescription {
+                        name: document_name,
+                        description: document_description,
+                    },
+                    doc_entry_count,
+                    previous_discovery_keys,
+                    child_documents,
+                }
+            }
+            EntryType::Doc => {
+                let index: u32 = self.decode(buffer)?;
+                let data: Vec<u8> = self.decode(buffer)?;
+                EntryContent::DocPart { index, data }
+            }
+            EntryType::Change => {
+                let data: Vec<u8> = self.decode(buffer)?;
+                EntryContent::new_change(data)
+            }
         };
 
-        let name: Option<String> = if flags & 2 != 0 {
-            Some(self.decode(buffer)?)
-        } else {
-            None
-        };
-
-        let description: Option<String> = if flags & 4 != 0 {
-            Some(self.decode(buffer)?)
-        } else {
-            None
-        };
-        Ok(Entry::new(
-            version,
-            entry_type.try_into().unwrap(),
-            name,
-            description,
-            data,
-        ))
+        Ok(Entry::new(version, content))
     }
 }
 

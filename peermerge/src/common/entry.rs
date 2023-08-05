@@ -1,28 +1,59 @@
-use std::convert::TryFrom;
-
 use automerge::Change;
 
-use crate::NameDescription;
+use crate::{DocumentId, NameDescription};
 
 use super::constants::PEERMERGE_VERSION;
 
-/// Type of entry stored to a hypercore.
-#[derive(Copy, Clone, Debug, PartialEq)]
-#[repr(u8)]
-pub(crate) enum EntryType {
-    InitDoc = 0,
-    InitPeer = 1,
-    Change = 2,
+/// Content of an entry stored to a hypercore.
+#[derive(Debug, Clone)]
+pub(crate) enum EntryContent {
+    /// First message of the doc feed.
+    InitDoc {
+        /// Number of Doc entries coming after this entry.
+        doc_entry_count: u32,
+    },
+    /// First message of a write peer feed.
+    InitPeer {
+        peer_header: NameDescription,
+        document_id: DocumentId,
+        /// Document header, stored to each peer instead of
+        /// InitDoc to make the values mutable. Changing the
+        /// value on one peer cascades a new feed to all the
+        /// other peers.
+        document_header: NameDescription,
+        /// Number of DocPart entries coming after this entry. If this is
+        /// the introduction of a brand new peer, then this is 0 and
+        /// previous_discovery_keys is empty.
+        doc_entry_count: u32,
+        /// Previous write feed discovery keys for this Peer,
+        /// in reverse chronological order, meaning the first
+        /// discovery key points to the feed that was active right
+        /// before this.
+        previous_discovery_keys: Vec<[u8; 32]>,
+        /// Child documents to this document and their encryption
+        /// keys if encrypted. Needed to be able to automatically
+        /// unencrypt child documents if the main document encryption
+        /// key is known. The encryption key can't be in the broadcast
+        /// message because then proxies would know it, hence store it
+        /// here.
+        child_documents: Vec<(DocumentId, Option<Vec<u8>>)>,
+    },
+    DocPart {
+        index: u32,
+        data: Vec<u8>,
+    },
+    Change {
+        change: Box<Change>,
+        data: Vec<u8>,
+    },
 }
 
-impl TryFrom<u8> for EntryType {
-    type Error = ();
-    fn try_from(input: u8) -> Result<Self, <Self as TryFrom<u8>>::Error> {
-        match input {
-            0u8 => Ok(Self::InitDoc),
-            1u8 => Ok(Self::InitPeer),
-            2u8 => Ok(Self::Change),
-            _ => Err(()),
+impl EntryContent {
+    pub(crate) fn new_change(data: Vec<u8>) -> Self {
+        let change = Change::from_bytes(data.clone()).unwrap();
+        EntryContent::Change {
+            change: Box::new(change),
+            data,
         }
     }
 }
@@ -31,67 +62,50 @@ impl TryFrom<u8> for EntryType {
 #[derive(Debug, Clone)]
 pub(crate) struct Entry {
     pub(crate) version: u8,
-    pub(crate) entry_type: EntryType,
-    pub(crate) name: Option<String>,
-    pub(crate) description: Option<String>,
-    pub(crate) data: Vec<u8>,
-    pub(crate) change: Option<Change>,
+    pub(crate) content: EntryContent,
 }
 impl Entry {
-    pub(crate) fn new_init_doc(document_header: NameDescription, data: Vec<u8>) -> Self {
-        Self::new(
-            PEERMERGE_VERSION,
-            EntryType::InitDoc,
-            Some(document_header.name),
-            document_header.description,
-            data,
-        )
+    pub(crate) fn new_init_doc(doc_entry_count: u32) -> Self {
+        Self::new(PEERMERGE_VERSION, EntryContent::InitDoc { doc_entry_count })
     }
 
     pub(crate) fn new_init_peer(
         peer_header: NameDescription,
-        root_discovery_key: [u8; 32],
+        document_id: [u8; 32],
+        document_header: NameDescription,
+        doc_entry_count: u32,
+        previous_discovery_keys: Vec<[u8; 32]>,
+        child_documents: Vec<(DocumentId, Option<Vec<u8>>)>,
     ) -> Self {
         Self::new(
             PEERMERGE_VERSION,
-            EntryType::InitPeer,
-            Some(peer_header.name),
-            peer_header.description,
-            root_discovery_key.to_vec(),
+            EntryContent::InitPeer {
+                peer_header,
+                document_id,
+                document_header,
+                doc_entry_count,
+                previous_discovery_keys,
+                child_documents,
+            },
         )
+    }
+
+    pub(crate) fn new_doc_part(index: u32, data: Vec<u8>) -> Self {
+        Self::new(PEERMERGE_VERSION, EntryContent::DocPart { index, data })
     }
 
     pub(crate) fn new_change(mut change: Change) -> Self {
         let data = change.bytes().to_vec();
-        Self {
-            version: PEERMERGE_VERSION,
-            entry_type: EntryType::Change,
-            name: None,
-            description: None,
-            data,
-            change: Some(change),
-        }
+        Self::new(
+            PEERMERGE_VERSION,
+            EntryContent::Change {
+                data,
+                change: Box::new(change),
+            },
+        )
     }
 
-    pub(crate) fn new(
-        version: u8,
-        entry_type: EntryType,
-        name: Option<String>,
-        description: Option<String>,
-        data: Vec<u8>,
-    ) -> Self {
-        let change: Option<Change> = if entry_type == EntryType::Change {
-            Some(Change::from_bytes(data.clone()).unwrap())
-        } else {
-            None
-        };
-        Self {
-            version,
-            entry_type,
-            name,
-            description,
-            data,
-            change,
-        }
+    pub(crate) fn new(version: u8, content: EntryContent) -> Self {
+        Self { version, content }
     }
 }
