@@ -43,15 +43,22 @@ async fn tcp_proxy_disk_encrypted() -> anyhow::Result<()> {
     )
     .await;
     let (creator_doc_info, _) = peermerge_creator
-        .create_new_document_disk(NameDescription::new("proxy_test"), true, |tx| {
-            tx.put(ROOT, "version", 1)
-        })
+        .create_new_document_disk(
+            "test",
+            Some(NameDescription::new("tcp_proxy_test")),
+            true,
+            |tx| tx.put(ROOT, "version", 1),
+        )
         .await?;
 
     peermerge_creator
         .watch(&creator_doc_info.id(), Some(vec![ROOT]))
         .await;
-    let doc_url = peermerge_creator.doc_url(&creator_doc_info.id()).await;
+    let doc_url = peermerge_creator
+        .sharing_info(&creator_doc_info.id())
+        .await?
+        .doc_url
+        .unwrap();
     let encryption_key = peermerge_creator
         .encryption_key(&creator_doc_info.id())
         .await;

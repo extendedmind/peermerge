@@ -37,28 +37,28 @@ async fn proxy_disk_encrypted() -> anyhow::Result<()> {
     )
     .await;
     let (creator_doc_info, _) = peermerge_creator
-        .create_new_document_memory(NameDescription::new("proxy_test"), true, |tx| {
-            tx.put(ROOT, "version", 1)
-        })
+        .create_new_document_memory(
+            "test",
+            Some(NameDescription::new("proxy_test")),
+            true,
+            |tx| tx.put(ROOT, "version", 1),
+        )
         .await?;
     peermerge_creator
         .watch(&creator_doc_info.id(), Some(vec![ROOT]))
         .await;
-    let doc_url = peermerge_creator.doc_url(&creator_doc_info.id()).await;
-    let proxy_doc_url = peermerge_creator
-        .proxy_doc_url(&creator_doc_info.id())
-        .await;
+    let sharing_info = peermerge_creator
+        .sharing_info(&creator_doc_info.id())
+        .await?;
+    let doc_url = sharing_info.doc_url.unwrap();
+    let proxy_doc_url = sharing_info.proxy_doc_url;
     let encryption_key = peermerge_creator
         .encryption_key(&creator_doc_info.id())
         .await;
     let doc_url_info = get_doc_url_info(&doc_url);
     assert_eq!(doc_url_info.encrypted, Some(true));
     assert!(encryption_key.is_some());
-    let sharing_info = peermerge_creator
-        .sharing_info(&doc_url_info.document_id)
-        .await;
     assert!(!sharing_info.proxy);
-    assert!(sharing_info.doc_url.is_some());
 
     let mut peermerge_creator_for_task = peermerge_creator.clone();
     let creator_connect = task::spawn(async move {
@@ -83,7 +83,7 @@ async fn proxy_disk_encrypted() -> anyhow::Result<()> {
     let proxy_doc_info = peermerge_proxy
         .attach_proxy_document_disk(&proxy_doc_url)
         .await;
-    let sharing_info = peermerge_proxy.sharing_info(&proxy_doc_info.id()).await;
+    let sharing_info = peermerge_proxy.sharing_info(&proxy_doc_info.id()).await?;
     assert!(sharing_info.proxy);
     assert!(sharing_info.doc_url.is_none());
 

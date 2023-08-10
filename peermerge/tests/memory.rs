@@ -49,9 +49,12 @@ async fn memory_three_writers() -> anyhow::Result<()> {
     )
     .await;
     let (creator_doc_info, _) = peermerge_creator
-        .create_new_document_memory(NameDescription::new("memory_test"), false, |tx| {
-            tx.put(ROOT, "version", 1)
-        })
+        .create_new_document_memory(
+            "test",
+            Some(NameDescription::new("memory_test")),
+            false,
+            |tx| tx.put(ROOT, "version", 1),
+        )
         .await?;
     assert_eq!(
         peermerge_creator
@@ -101,7 +104,11 @@ async fn memory_three_writers() -> anyhow::Result<()> {
     .await;
     let joiner_doc_info = peermerge_joiner
         .attach_writer_document_memory(
-            &peermerge_creator.doc_url(&creator_doc_info.id()).await,
+            &peermerge_creator
+                .sharing_info(&creator_doc_info.id())
+                .await?
+                .doc_url
+                .unwrap(),
             &None,
         )
         .await?;
@@ -437,7 +444,10 @@ async fn process_creator_state_events(
                         )
                         .await;
                         let latecomer_doc_info = peermerge_latecomer
-                            .attach_writer_document_memory(&peermerge.doc_url(&doc_id).await, &None)
+                            .attach_writer_document_memory(
+                                &peermerge.sharing_info(&doc_id).await?.doc_url.unwrap(),
+                                &None,
+                            )
                             .await?;
                         peermerge_latecomer.watch(&doc_id, Some(vec![])).await;
                         let peermerge_latecomer_for_task = peermerge_latecomer.clone();

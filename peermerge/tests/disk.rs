@@ -52,11 +52,18 @@ async fn disk_two_peers(encrypted: bool) -> anyhow::Result<()> {
         Peermerge::create_new_disk(NameDescription::new("creator"), None, &creator_dir).await;
     let document_name = "disk_test";
     let (creator_doc_info, _) = peermerge_creator
-        .create_new_document_disk(NameDescription::new(document_name), encrypted, |tx| {
-            tx.put(ROOT, "version", 1)
-        })
+        .create_new_document_disk(
+            "test",
+            Some(NameDescription::new(document_name)),
+            encrypted,
+            |tx| tx.put(ROOT, "version", 1),
+        )
         .await?;
-    let doc_url = peermerge_creator.doc_url(&creator_doc_info.id()).await;
+    let doc_url = peermerge_creator
+        .sharing_info(&creator_doc_info.id())
+        .await?
+        .doc_url
+        .unwrap();
     let encryption_key = peermerge_creator
         .encryption_key(&creator_doc_info.id())
         .await;
