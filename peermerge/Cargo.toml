@@ -9,7 +9,7 @@ license = "AGPL-3.0-only"
 authors = ["Timo Tiuraniemi <timo.tiuraniemi@iki.fi>"]
 
 [dependencies]
-automerge = { git = "https://github.com/automerge/automerge", rev = "00827f1", features = ["wasm"] }
+automerge = { git = "https://github.com/automerge/automerge", rev = "00827f1" }
 hypercore-protocol = { git = "https://github.com/datrs/hypercore-protocol-rs", branch = "v10", default-features = false, features = ["cache", "sparse"] }
 random-access-storage = "5.0.0"
 random-access-memory = "3.0.0"
@@ -22,6 +22,7 @@ dashmap = "5.4.0"
 tracing = "0.1.37"
 chacha20poly1305 = "0.10.1"
 compact-encoding = "1"
+uuid = "1.4.1"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 random-access-disk = { version = "3.0.0", default-features = false, features = ["sparse"] }
@@ -42,7 +43,9 @@ anyhow = "1.0.28"
 default =  ["tokio-runtime", "wasm-bindgen"]
 wasm-bindgen = [
   "wasm-bindgen-futures", 
-  "hypercore-protocol/wasm-bindgen"
+  "hypercore-protocol/wasm-bindgen",
+  "automerge/wasm",
+  "uuid/js"
 ]
 log = ["tracing/log"]
 async-std-runtime = ["async-std", "hypercore-protocol/async-std", "random-access-disk/async-std"]

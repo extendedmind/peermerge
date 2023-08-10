@@ -2,6 +2,8 @@ use automerge::Patch;
 
 use crate::{DocumentId, NameDescription};
 
+use super::state::DocumentPeer;
+
 #[derive(Clone, Debug)]
 pub struct StateEvent {
     pub document_id: DocumentId,
@@ -27,7 +29,7 @@ pub enum StateEventContent {
 }
 
 #[derive(Clone, Debug)]
-pub struct PeerEvent {
+pub(crate) struct PeerEvent {
     // FIXME: Rename to document_id: DocumentId
     pub doc_discovery_key: [u8; 32],
     pub content: PeerEventContent,
@@ -43,8 +45,8 @@ impl PeerEvent {
 }
 
 #[derive(Clone, Debug)]
-pub enum PeerEventContent {
-    NewPeersBroadcasted(Vec<[u8; 32]>),
+pub(crate) enum PeerEventContent {
+    NewPeersBroadcasted(Vec<DocumentPeer>),
     PeerSynced(([u8; 32], u64)),
     PeerDisconnected(u64),
     RemotePeerSynced(([u8; 32], u64)),

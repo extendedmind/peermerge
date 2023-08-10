@@ -1,36 +1,52 @@
 use std::fmt::Debug;
 
+use automerge::{ReadDoc, ROOT};
+use uuid::Uuid;
+
 use crate::{
-    automerge::{save_automerge_doc, AutomergeDoc},
-    DocUrlInfo, DocumentId, DocumentInfo, NameDescription,
+    automerge::{save_automerge_doc, AutomergeDoc, DocsChangeResult},
+    feed::{FeedDiscoveryKey, FeedPublicKey},
+    DocUrlInfo, DocumentId, DocumentInfo, NameDescription, PeerId,
 };
 
 use super::{
-    cipher::{decode_doc_url, encode_doc_url, DecodedDocUrl},
+    cipher::{encode_doc_url, DocUrlAppendix},
     constants::PEERMERGE_VERSION,
-    keys::discovery_key_from_public_key,
+    keys::{discovery_key_from_public_key, document_id_from_discovery_key},
 };
 
 /// Stores serialized information about all of the documents.
 #[derive(Debug)]
 pub(crate) struct PeermergeState {
     pub(crate) version: u8,
-    pub(crate) peer_header: NameDescription,
+    pub(crate) peer_id: PeerId,
+    pub(crate) default_peer_header: NameDescription,
     pub(crate) document_ids: Vec<DocumentId>,
 }
 impl PeermergeState {
-    pub(crate) fn new(peer_header: &NameDescription, document_ids: Vec<DocumentId>) -> Self {
-        Self::new_with_version(PEERMERGE_VERSION, peer_header.clone(), document_ids)
+    pub(crate) fn new(
+        default_peer_header: &NameDescription,
+        document_ids: Vec<DocumentId>,
+    ) -> Self {
+        let peer_id: PeerId = *Uuid::new_v4().as_bytes();
+        Self::new_with_version(
+            PEERMERGE_VERSION,
+            peer_id,
+            default_peer_header.clone(),
+            document_ids,
+        )
     }
 
     pub(crate) fn new_with_version(
         version: u8,
-        peer_header: NameDescription,
+        peer_id: PeerId,
+        default_peer_header: NameDescription,
         document_ids: Vec<DocumentId>,
     ) -> Self {
         Self {
             version,
-            peer_header,
+            peer_id,
+            default_peer_header,
             document_ids,
         }
     }
@@ -40,103 +56,105 @@ impl PeermergeState {
 #[derive(Debug)]
 pub(crate) struct DocumentState {
     pub(crate) version: u8,
-    /// Document URL, always plain. Contains many of the other fields.
-    pub(crate) plain_doc_url: String,
-    /// Document's name and description. None if proxy. Derived from doc_url.
-    pub(crate) document_header: Option<NameDescription>,
-    /// Root feed's public key. Derived from doc_url.
-    pub(crate) root_public_key: [u8; 32],
-    /// Root feed's discovery key. Derived from root_public_key.
-    pub(crate) root_discovery_key: [u8; 32],
+    /// Doc feed's public key
+    pub(crate) doc_public_key: FeedPublicKey,
+    /// Doc feed's discovery key. Derived from doc_public_key.
+    pub(crate) doc_discovery_key: FeedDiscoveryKey,
+    /// Document id. Derived from doc_discovery_key.
+    pub(crate) document_id: DocumentId,
     /// Is the document encrypted. If None it is unknown and proxy must be true.
-    /// Derived from doc_url.
     pub(crate) encrypted: Option<bool>,
     /// Is this a proxy document.
     pub(crate) proxy: bool,
-    /// The state of the other peers.
-    pub(crate) peers: Vec<DocumentPeerState>,
-    /// Public key of personal writeable feed. None if proxy.
-    pub(crate) write_public_key: Option<[u8; 32]>,
-    /// Content of the document. None means content hasn't been synced yet.
+    /// State for all of the peers.
+    pub(crate) peers_state: DocumentPeersState,
+    /// Content of the document. None for proxy.
     pub(crate) content: Option<DocumentContent>,
 }
 impl DocumentState {
     pub(crate) fn new(
-        decoded_doc_url: DecodedDocUrl,
         proxy: bool,
-        peers: Vec<DocumentPeerState>,
-        write_public_key: Option<[u8; 32]>,
+        doc_public_key: FeedPublicKey,
+        encrypted: Option<bool>,
+        peers_state: DocumentPeersState,
         content: Option<DocumentContent>,
     ) -> Self {
         Self::new_with_version(
             PEERMERGE_VERSION,
-            decoded_doc_url,
             proxy,
-            peers,
-            write_public_key,
+            doc_public_key,
+            encrypted,
+            peers_state,
             content,
         )
     }
 
-    pub(crate) fn new_from_plain_doc_url(
-        version: u8,
-        plain_doc_url: String,
-        proxy: bool,
-        encrypted: Option<bool>,
-        peers: Vec<DocumentPeerState>,
-        write_public_key: Option<[u8; 32]>,
-        content: Option<DocumentContent>,
-    ) -> Self {
-        let decoded_doc_url = decode_doc_url(&plain_doc_url, &None);
-        Self {
-            version,
-            plain_doc_url: decoded_doc_url.plain_doc_url,
-            document_header: decoded_doc_url.document_header,
-            root_public_key: decoded_doc_url.root_public_key,
-            root_discovery_key: discovery_key_from_public_key(&decoded_doc_url.root_public_key),
-            encrypted,
-            proxy,
-            peers,
-            write_public_key,
-            content,
-        }
-    }
-
     pub(crate) fn new_with_version(
         version: u8,
-        decoded_doc_url: DecodedDocUrl,
         proxy: bool,
-        peers: Vec<DocumentPeerState>,
-        write_public_key: Option<[u8; 32]>,
+        doc_public_key: FeedPublicKey,
+        encrypted: Option<bool>,
+        peers_state: DocumentPeersState,
         content: Option<DocumentContent>,
     ) -> Self {
+        let doc_discovery_key = discovery_key_from_public_key(&doc_public_key);
+        let document_id = document_id_from_discovery_key(&doc_discovery_key);
         Self {
             version,
-            plain_doc_url: decoded_doc_url.plain_doc_url,
-            document_header: decoded_doc_url.document_header,
-            root_public_key: decoded_doc_url.root_public_key,
-            root_discovery_key: discovery_key_from_public_key(&decoded_doc_url.root_public_key),
-            encrypted: decoded_doc_url.encrypted,
+            doc_public_key,
+            doc_discovery_key,
+            document_id,
+            encrypted,
             proxy,
-            peers,
-            write_public_key,
+            peers_state,
             content,
         }
     }
 
     pub(crate) fn info(&self) -> DocumentInfo {
-        DocumentInfo {
-            doc_url_info: self.doc_url_info(),
-            document_header: self.document_header.clone(),
-            parent_document_id: None, // TODO: Support for document hierarchies
+        let doc_url_info = self.doc_url_info();
+        if let Some((document_type, document_header)) = self.document_type_and_header() {
+            DocumentInfo {
+                doc_url_info,
+                document_type: Some(document_type),
+                document_header,
+                parent_document_id: None, // TODO: Support for document hierarchies
+            }
+        } else {
+            DocumentInfo {
+                doc_url_info,
+                document_type: None,
+                document_header: None,
+                parent_document_id: None, // TODO: Support for document hierarchies
+            }
         }
     }
 
-    pub(crate) fn doc_url(&self, encryption_key: &Option<Vec<u8>>) -> String {
-        if let Some(document_header) = &self.document_header {
-            encode_doc_url(&self.root_public_key, document_header, encryption_key)
+    pub(crate) fn proxy_doc_url(&self) -> String {
+        encode_doc_url(&self.doc_public_key, false, &None, &None)
+    }
+
+    pub(crate) fn doc_url(
+        &self,
+        initial_meta_doc_data: Vec<u8>,
+        encryption_key: &Option<Vec<u8>>,
+    ) -> String {
+        if self.proxy {
+            panic!("Can't encode doc url for proxy");
+        }
+        if let Some((document_type, document_header)) = self.document_type_and_header() {
+            encode_doc_url(
+                &self.doc_public_key,
+                false,
+                &Some(DocUrlAppendix {
+                    meta_doc_data: initial_meta_doc_data,
+                    document_type,
+                    document_header,
+                }),
+                encryption_key,
+            )
         } else {
-            self.plain_doc_url.clone()
+            panic!("Can't encode doc url as there is no document type or header info");
         }
     }
 
@@ -144,44 +162,262 @@ impl DocumentState {
         if self.proxy {
             DocUrlInfo::new_proxy_only(
                 self.version,
-                true, // TODO: Child documents
+                false, // TODO: Child documents
                 crate::FeedType::Hypercore,
-                self.root_public_key,
-                self.root_discovery_key,
+                self.doc_public_key,
+                self.doc_discovery_key,
+                self.document_id,
             )
         } else {
             DocUrlInfo::new(
                 self.version,
-                true, // TODO: child documents
+                false, // TODO: child documents
                 crate::FeedType::Hypercore,
-                self.root_public_key,
-                self.root_discovery_key,
+                self.doc_public_key,
+                self.doc_discovery_key,
+                self.document_id,
                 self.encrypted.unwrap(),
             )
+        }
+    }
+
+    pub(crate) fn document_type_and_header(&self) -> Option<(String, Option<NameDescription>)> {
+        if let Some(content) = &self.content {
+            if let Some(meta_automerge_doc) = &content.meta_automerge_doc {
+                let document_header_id = meta_automerge_doc
+                    .get(ROOT, "h")
+                    .unwrap()
+                    .map(|result| result.1)
+                    .unwrap();
+
+                let document_header_keys: Vec<_> =
+                    meta_automerge_doc.keys(&document_header_id).collect();
+                if document_header_keys.iter().any(|key| key == "t") {
+                    let document_type: String = meta_automerge_doc
+                        .get(&document_header_id, "t")
+                        .unwrap()
+                        .and_then(|result| result.0.to_scalar().cloned())
+                        .unwrap()
+                        .into_string()
+                        .unwrap();
+
+                    let document_header: Option<NameDescription> =
+                        if document_header_keys.iter().any(|key| key == "n") {
+                            let name: String = meta_automerge_doc
+                                .get(&document_header_id, "n")
+                                .unwrap()
+                                .and_then(|result| result.0.to_scalar().cloned())
+                                .unwrap()
+                                .into_string()
+                                .unwrap();
+                            let description: Option<String> =
+                                if document_header_keys.iter().any(|key| key == "d") {
+                                    let description: String = meta_automerge_doc
+                                        .get(&document_header_id, "d")
+                                        .unwrap()
+                                        .and_then(|result| result.0.to_scalar().cloned())
+                                        .unwrap()
+                                        .into_string()
+                                        .unwrap();
+                                    Some(description)
+                                } else {
+                                    None
+                                };
+                            Some(NameDescription { name, description })
+                        } else {
+                            None
+                        };
+                    Some((document_type, document_header))
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
         }
     }
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct DocumentPeerState {
-    pub(crate) public_key: [u8; 32],
-    pub(crate) discovery_key: [u8; 32],
-    pub(crate) peer_header: Option<NameDescription>,
+pub(crate) struct DocumentPeersState {
+    /// Id and public key of personal writeable feed. None if proxy.
+    pub(crate) write_peer: Option<DocumentPeer>,
+    /// Keys of the other peers.
+    pub(crate) peers: Vec<DocumentPeer>,
 }
-impl DocumentPeerState {
-    pub(crate) fn new(public_key: [u8; 32], peer_header: Option<NameDescription>) -> Self {
-        let discovery_key = discovery_key_from_public_key(&public_key);
+
+impl DocumentPeersState {
+    pub(crate) fn new() -> Self {
         Self {
-            discovery_key,
+            write_peer: None,
+            peers: vec![],
+        }
+    }
+
+    pub(crate) fn new_writer(peer_id: &PeerId, write_public_key: &FeedPublicKey) -> Self {
+        Self {
+            write_peer: Some(DocumentPeer::new(*peer_id, *write_public_key, None)),
+            peers: vec![],
+        }
+    }
+
+    pub(crate) fn filter_new_peers(
+        &self,
+        remote_write_peer: &Option<DocumentPeer>,
+        remote_peers: &[DocumentPeer],
+    ) -> Vec<DocumentPeer> {
+        let mut new_remote_peers: Vec<DocumentPeer> = remote_peers
+            .iter()
+            .filter(|remote_peer| {
+                let writable_matches: bool = if let Some(write_peer) = &self.write_peer {
+                    write_peer == *remote_peer
+                } else {
+                    false
+                };
+                !writable_matches && !self.peers.contains(remote_peer)
+            })
+            .cloned()
+            .collect();
+        if let Some(remote_write_peer) = remote_write_peer {
+            if !self
+                .peers
+                .iter()
+                .any(|peer| peer.public_key == remote_write_peer.public_key)
+            {
+                new_remote_peers.push(remote_write_peer.clone());
+            }
+        }
+        new_remote_peers
+    }
+
+    /// Do the public keys match those given
+    pub(crate) fn peers_match(
+        &self,
+        remote_write_peer: &Option<DocumentPeer>,
+        remote_peers: &[DocumentPeer],
+    ) -> bool {
+        let mut remote_peers: Vec<DocumentPeer> = remote_peers.to_vec();
+        if let Some(remote_write_peer) = remote_write_peer {
+            remote_peers.push(remote_write_peer.clone());
+        }
+        remote_peers.sort();
+
+        let mut peers: Vec<DocumentPeer> = self.peers.clone();
+
+        if let Some(write_peer) = &self.write_peer {
+            peers.push(write_peer.clone());
+        }
+        peers.sort();
+        remote_peers == peers
+    }
+
+    /// Merge incoming peers into existing peers
+    pub(crate) fn merge_incoming_peers(
+        &mut self,
+        incoming_peers: &[DocumentPeer],
+    ) -> (bool, Vec<DocumentPeer>, Vec<DocumentPeer>) {
+        let new_peers: Vec<DocumentPeer> = incoming_peers
+            .iter()
+            .filter(|incoming_peer| {
+                self.peers
+                    .iter()
+                    .any(|stored_peer| stored_peer != *incoming_peer)
+            })
+            .cloned()
+            .collect();
+
+        let (changed, replaced_peers, peers_to_create): (
+            bool,
+            Vec<DocumentPeer>,
+            Vec<DocumentPeer>,
+        ) = {
+            if new_peers.is_empty() {
+                (false, vec![], vec![])
+            } else {
+                // Find out if there are values currently which
+                // differ only in that replaced_by_public_key has
+                // been set.
+                let to_be_changed_peers: Vec<DocumentPeer> = self
+                    .peers
+                    .iter()
+                    .filter(|peer| {
+                        new_peers.iter().any(|new_peer| {
+                            new_peer.id == peer.id
+                                && new_peer.public_key == peer.public_key
+                                && peer.replaced_by_public_key != new_peer.replaced_by_public_key
+                        })
+                    })
+                    .cloned()
+                    .collect();
+                if to_be_changed_peers.is_empty() {
+                    // Just append the new peers to the end
+                    self.peers.extend(new_peers.clone());
+                    (true, vec![], new_peers)
+                } else {
+                    // Get the peers that were replaced
+                    let replaced_peers = to_be_changed_peers
+                        .iter()
+                        .map(|to_be_changed_peer| {
+                            new_peers
+                                .iter()
+                                .find(|new_peer| {
+                                    new_peer.id == to_be_changed_peer.id
+                                        && new_peer.public_key == to_be_changed_peer.public_key
+                                })
+                                .unwrap()
+                                .clone()
+                        })
+                        .collect();
+                    let peers_to_create = new_peers
+                        .iter()
+                        .filter(|new_peer| {
+                            to_be_changed_peers.iter().any(|to_be_changed_peer| {
+                                new_peer.id == to_be_changed_peer.id
+                                    && new_peer.public_key == to_be_changed_peer.public_key
+                            })
+                        })
+                        .cloned()
+                        .collect();
+
+                    (true, replaced_peers, peers_to_create)
+                }
+            }
+        };
+        (changed, replaced_peers, peers_to_create)
+    }
+}
+
+#[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord)]
+pub(crate) struct DocumentPeer {
+    /// Id of the peer.
+    pub(crate) id: PeerId,
+    /// Public key of the peer's write feed.
+    pub(crate) public_key: FeedPublicKey,
+    /// Key that replaced the above public_key for the same
+    /// id. Needed when write feed is rotated for efficiency,
+    /// but needs to be stored/sent to make sure stale peers will
+    /// always find the latest feed.
+    pub(crate) replaced_by_public_key: Option<FeedPublicKey>,
+}
+impl DocumentPeer {
+    pub(crate) fn new(
+        id: PeerId,
+        public_key: [u8; 32],
+        replaced_by_public_key: Option<FeedPublicKey>,
+    ) -> Self {
+        Self {
+            id,
             public_key,
-            peer_header,
+            replaced_by_public_key,
         }
     }
 }
 
 #[derive(Clone, Debug)]
 pub(crate) struct DocumentCursor {
-    pub(crate) discovery_key: [u8; 32],
+    pub(crate) discovery_key: FeedDiscoveryKey,
     pub(crate) length: u64,
 }
 impl DocumentCursor {
@@ -195,22 +431,74 @@ impl DocumentCursor {
 
 #[derive(Debug)]
 pub(crate) struct DocumentContent {
-    pub(crate) data: Vec<u8>,
+    /// Cursors of feeds which have been read to get the below fields.
+    /// Can also be empty when meta_doc_data is read from a doc URL.
     pub(crate) cursors: Vec<DocumentCursor>,
-    /// Transient reflection of the saved state, created from
-    /// data the first time it is accessed.
-    pub(crate) automerge_doc: Option<AutomergeDoc>,
+    /// Data blob containing meta_automerge_doc. None for proxy.
+    pub(crate) meta_doc_data: Option<Vec<u8>>,
+    /// Data blob containing user_doc_data. Is missing on
+    /// peers until the doc feed is replicated.
+    pub(crate) user_doc_data: Option<Vec<u8>>,
+
+    /// Meta CRDT containing the name and description for the
+    /// user document, name and description for all of the peers,
+    /// and ids and encryption keys of child document databases.
+    /// Transient reflection of the saved meta state, created from
+    /// meta_doc_data the first time it is accessed.
+    pub(crate) meta_automerge_doc: Option<AutomergeDoc>,
+    /// CRDT for userspace data. Transient reflection of the saved
+    /// meta state, created from user_doc_data the first time it is
+    /// accessed.
+    pub(crate) user_automerge_doc: Option<AutomergeDoc>,
 }
 impl DocumentContent {
+    pub(crate) fn new_writer(
+        doc_discovery_key: &FeedDiscoveryKey,
+        doc_feed_length: usize,
+        write_discovery_key: &FeedDiscoveryKey,
+        write_feed_length: usize,
+        meta_doc_data: Vec<u8>,
+        user_doc_data: Option<Vec<u8>>,
+        meta_automerge_doc: AutomergeDoc,
+        user_automerge_doc: Option<AutomergeDoc>,
+    ) -> Self {
+        let cursors: Vec<DocumentCursor> = vec![
+            DocumentCursor::new(*doc_discovery_key, doc_feed_length.try_into().unwrap()),
+            DocumentCursor::new(*write_discovery_key, write_feed_length.try_into().unwrap()),
+        ];
+        Self {
+            cursors,
+            meta_doc_data: Some(meta_doc_data),
+            user_doc_data,
+            meta_automerge_doc: Some(meta_automerge_doc),
+            user_automerge_doc,
+        }
+    }
+
+    pub(crate) fn new_proxy(doc_discovery_key: &FeedDiscoveryKey) -> Self {
+        let cursors: Vec<DocumentCursor> = vec![DocumentCursor::new(*doc_discovery_key, 0)];
+        Self {
+            cursors,
+            meta_doc_data: None,
+            user_doc_data: None,
+            meta_automerge_doc: None,
+            user_automerge_doc: None,
+        }
+    }
+
     pub(crate) fn new(
-        data: Vec<u8>,
         cursors: Vec<DocumentCursor>,
-        automerge_doc: AutomergeDoc,
+        meta_doc_data: Vec<u8>,
+        user_doc_data: Vec<u8>,
+        meta_automerge_doc: AutomergeDoc,
+        user_automerge_doc: AutomergeDoc,
     ) -> Self {
         Self {
-            data,
             cursors,
-            automerge_doc: Some(automerge_doc),
+            meta_doc_data: Some(meta_doc_data),
+            user_doc_data: Some(user_doc_data),
+            meta_automerge_doc: Some(meta_automerge_doc),
+            user_automerge_doc: Some(user_automerge_doc),
         }
     }
 
@@ -226,11 +514,20 @@ impl DocumentContent {
         }
     }
 
-    pub(crate) fn set_cursor_and_save_data(&mut self, discovery_key: [u8; 32], length: u64) {
-        self.set_cursors_and_save_data(vec![(discovery_key, length)]);
+    pub(crate) fn set_cursor_and_save_data(
+        &mut self,
+        discovery_key: [u8; 32],
+        length: u64,
+        change_result: DocsChangeResult,
+    ) {
+        self.set_cursors_and_save_data(vec![(discovery_key, length)], change_result);
     }
 
-    pub(crate) fn set_cursors_and_save_data(&mut self, cursor_changes: Vec<([u8; 32], u64)>) {
+    pub(crate) fn set_cursors_and_save_data(
+        &mut self,
+        cursor_changes: Vec<([u8; 32], u64)>,
+        change_result: DocsChangeResult,
+    ) {
         for (discovery_key, length) in cursor_changes {
             if let Some(cursor) = self
                 .cursors
@@ -243,10 +540,19 @@ impl DocumentContent {
                     .push(DocumentCursor::new(discovery_key, length));
             }
         }
-        let automerge_doc = self
-            .automerge_doc
-            .as_mut()
-            .expect("Document must be present when setting cursor");
-        self.data = save_automerge_doc(automerge_doc);
+        if change_result.meta_changed {
+            let meta_automerge_doc = self
+                .meta_automerge_doc
+                .as_mut()
+                .expect("Meta document must be present when setting cursor");
+            self.meta_doc_data = Some(save_automerge_doc(meta_automerge_doc));
+        }
+        if change_result.user_changed {
+            let user_automerge_doc = self
+                .user_automerge_doc
+                .as_mut()
+                .expect("User document must be present when setting cursor");
+            self.user_doc_data = Some(save_automerge_doc(user_automerge_doc));
+        }
     }
 }

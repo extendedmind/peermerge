@@ -4,42 +4,28 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use super::AutomergeDoc;
 use crate::{
     common::entry::{Entry, EntryContent},
-    NameDescription, PeermergeError,
+    feed::FeedDiscoveryKey,
+    PeermergeError,
 };
 
 #[derive(Debug)]
 pub(crate) struct ApplyEntriesFeedChange {
     pub(crate) length: u64,
-    pub(crate) peer_header: Option<NameDescription>,
 }
 
 impl ApplyEntriesFeedChange {
     pub(crate) fn new(length: u64) -> Self {
-        Self {
-            length,
-            peer_header: None,
-        }
-    }
-
-    pub(crate) fn new_with_peer_header(length: u64, peer_header: NameDescription) -> Self {
-        Self {
-            length,
-            peer_header: Some(peer_header),
-        }
+        Self { length }
     }
 
     pub(crate) fn set_length(&mut self, length: u64) {
         self.length = length;
     }
-
-    pub(crate) fn set_peer_header(&mut self, peer_header: NameDescription) {
-        self.peer_header = Some(peer_header);
-    }
 }
 
 #[derive(Debug)]
 pub(crate) struct UnappliedEntries {
-    data: HashMap<[u8; 32], (u64, VecDeque<Entry>, Vec<ObjId>)>,
+    data: HashMap<FeedDiscoveryKey, (u64, VecDeque<Entry>, Vec<ObjId>)>,
     pub(crate) reserved_ids: HashSet<ObjId>,
 }
 
@@ -61,7 +47,7 @@ impl UnappliedEntries {
 
     pub(crate) fn add(
         &mut self,
-        discovery_key: &[u8; 32],
+        discovery_key: &FeedDiscoveryKey,
         length: u64,
         entry: Entry,
         reserved: Vec<ObjId>,
@@ -79,11 +65,17 @@ impl UnappliedEntries {
 
     pub(crate) fn consolidate(
         &mut self,
-        automerge_doc: &mut AutomergeDoc,
-        changes_to_apply: &mut Vec<Change>,
+        meta_automerge_doc: &mut AutomergeDoc,
+        user_automerge_doc: &mut AutomergeDoc,
+        meta_changes_to_apply: &mut Vec<Change>,
+        user_changes_to_apply: &mut Vec<Change>,
         result: &mut HashMap<[u8; 32], ApplyEntriesFeedChange>,
     ) {
-        let mut hashes: HashSet<ChangeHash> = changes_to_apply
+        let mut meta_hashes: HashSet<ChangeHash> = meta_changes_to_apply
+            .iter()
+            .map(|change| change.hash())
+            .collect();
+        let mut user_hashes: HashSet<ChangeHash> = user_changes_to_apply
             .iter()
             .map(|change| change.hash())
             .collect();
@@ -111,22 +103,27 @@ impl UnappliedEntries {
                 let mut new_length = original_start_index;
                 for entry in value.1.iter() {
                     match &entry.content {
-                        EntryContent::Change { change, .. } => {
+                        EntryContent::Change { meta, change, .. } => {
                             if change.deps().iter().all(|dep| {
-                                if hashes.contains(dep) {
+                                if user_hashes.contains(dep) {
                                     true
-                                } else if automerge_doc.get_change_by_hash(dep).is_some() {
+                                } else if user_automerge_doc.get_change_by_hash(dep).is_some() {
                                     // For the next rounds to be faster, let's push this
                                     // to the hashes array to avoid searching the doc again
-                                    hashes.insert(*dep);
+                                    user_hashes.insert(*dep);
                                     true
                                 } else {
                                     false
                                 }
                             }) {
                                 new_length += 1;
-                                changes_to_apply.push(*change.clone());
-                                hashes.insert(change.hash());
+                                if *meta {
+                                    meta_changes_to_apply.push(*change.clone());
+                                    meta_hashes.insert(change.hash());
+                                } else {
+                                    user_changes_to_apply.push(*change.clone());
+                                    user_hashes.insert(change.hash());
+                                }
                                 if let Some(result_value) = result.get_mut(discovery_key) {
                                     result_value.set_length(new_length);
                                 } else {
@@ -142,19 +139,30 @@ impl UnappliedEntries {
                                 break;
                             }
                         }
-                        EntryContent::InitPeer { peer_header, .. } => {
-                            // TODO: document_header
+                        EntryContent::InitPeer {
+                            meta_doc_data,
+                            user_doc_data,
+                            ..
+                        } => {
+                            let mut changed_meta_automerge_doc =
+                                AutomergeDoc::load(meta_doc_data).unwrap();
+                            meta_automerge_doc
+                                .merge(&mut changed_meta_automerge_doc)
+                                .unwrap();
+                            if let Some(user_doc_data) = user_doc_data {
+                                let mut changed_user_automerge_doc =
+                                    AutomergeDoc::load(user_doc_data).unwrap();
+                                user_automerge_doc
+                                    .merge(&mut changed_user_automerge_doc)
+                                    .unwrap();
+                            }
                             new_length += 1;
                             if let Some(result_value) = result.get_mut(discovery_key) {
                                 result_value.set_length(new_length);
-                                result_value.set_peer_header(peer_header.clone());
                             } else {
                                 result.insert(
                                     *discovery_key,
-                                    ApplyEntriesFeedChange::new_with_peer_header(
-                                        new_length,
-                                        peer_header.clone(),
-                                    ),
+                                    ApplyEntriesFeedChange::new(new_length),
                                 );
                             }
                             changed = true;
@@ -177,25 +185,33 @@ impl UnappliedEntries {
     }
 }
 
-/// Applies new entries to document taking all unapplied entries in given param. Returns what
-/// should be persisted. Returns for all of the affected discovery keys that were changed, the length
-/// where the cursor should be moved to and/or peer name change.
+#[derive(Debug)]
+pub(crate) struct DocsChangeResult {
+    pub(crate) meta_changed: bool,
+    pub(crate) user_changed: bool,
+}
+
+/// Applies new entries to documents taking all unapplied entries in given param. Returns what
+/// should be persisted. Returns for all of the affected discovery keys that were changed and the
+/// length where the cursor should be moved to.
 pub(crate) fn apply_entries_autocommit(
-    automerge_doc: &mut AutomergeDoc,
-    discovery_key: &[u8; 32],
+    meta_automerge_doc: &mut AutomergeDoc,
+    user_automerge_doc: &mut AutomergeDoc,
+    discovery_key: &FeedDiscoveryKey,
     contiguous_length: u64,
     entries: Vec<Entry>,
     unapplied_entries: &mut UnappliedEntries,
 ) -> Result<HashMap<[u8; 32], ApplyEntriesFeedChange>, PeermergeError> {
     let mut result: HashMap<[u8; 32], ApplyEntriesFeedChange> = HashMap::new();
-    let mut changes_to_apply: Vec<Change> = vec![];
+    let mut meta_changes_to_apply: Vec<Change> = vec![];
+    let mut user_changes_to_apply: Vec<Change> = vec![];
     let len = entries.len() as u64;
     let mut length = contiguous_length - len;
     for entry in entries {
         length += 1;
         match &entry.content {
-            EntryContent::Change { change, .. } => {
-                let reserved: Vec<ObjId> = if !unapplied_entries.reserved_ids.is_empty() {
+            EntryContent::Change { meta, change, .. } => {
+                let reserved: Vec<ObjId> = if !meta && !unapplied_entries.reserved_ids.is_empty() {
                     change
                         .decode()
                         .operations
@@ -206,7 +222,7 @@ pub(crate) fn apply_entries_autocommit(
                             // point in history so that we could just always apply changes without
                             // a need to reserve/unreserve the object id.
                             let obj_id_as_string: &str = &op.obj.to_string();
-                            if let Ok((obj, _)) = automerge_doc.import(obj_id_as_string) {
+                            if let Ok((obj, _)) = user_automerge_doc.import(obj_id_as_string) {
                                 if unapplied_entries.reserved_ids.contains(&obj) {
                                     Some(obj)
                                 } else {
@@ -226,9 +242,13 @@ pub(crate) fn apply_entries_autocommit(
                     && change
                         .deps()
                         .iter()
-                        .all(|dep| automerge_doc.get_change_by_hash(dep).is_some())
+                        .all(|dep| user_automerge_doc.get_change_by_hash(dep).is_some())
                 {
-                    changes_to_apply.push(*change.clone());
+                    if *meta {
+                        meta_changes_to_apply.push(*change.clone());
+                    } else {
+                        user_changes_to_apply.push(*change.clone());
+                    }
                     if let Some(result_value) = result.get_mut(discovery_key) {
                         result_value.set_length(length);
                     } else {
@@ -240,27 +260,49 @@ pub(crate) fn apply_entries_autocommit(
                     unapplied_entries.add(discovery_key, length, entry, reserved);
                 };
             }
-            EntryContent::InitPeer { peer_header, .. } => {
-                // TODO: document_header
+            EntryContent::InitPeer {
+                meta_doc_data,
+                user_doc_data,
+                ..
+            } => {
+                // Just merge the data into the current docs. This does not mean that
+                // all entries are applied, but they do now end up in what comes out
+                // of save() so they aren't lost.
+                let mut changed_meta_automerge_doc = AutomergeDoc::load(meta_doc_data).unwrap();
+                meta_automerge_doc
+                    .merge(&mut changed_meta_automerge_doc)
+                    .unwrap();
+                if let Some(user_doc_data) = user_doc_data {
+                    let mut changed_user_automerge_doc = AutomergeDoc::load(user_doc_data).unwrap();
+                    user_automerge_doc
+                        .merge(&mut changed_user_automerge_doc)
+                        .unwrap();
+                }
+
                 if let Some(result_value) = result.get_mut(discovery_key) {
                     result_value.set_length(length);
-                    result_value.set_peer_header(peer_header.clone());
                 } else {
-                    result.insert(
-                        *discovery_key,
-                        ApplyEntriesFeedChange::new_with_peer_header(length, peer_header.clone()),
-                    );
+                    result.insert(*discovery_key, ApplyEntriesFeedChange::new(length));
                 }
             }
-            _ => panic!("Unexpected entry {entry:?}"),
+            _ => {
+                // Because of shrink_entries, there will never be other entries here
+                panic!("Unexpected entry {entry:?}");
+            }
         }
     }
 
     // Consolidate unapplied entries and add them to changes and result
-    unapplied_entries.consolidate(automerge_doc, &mut changes_to_apply, &mut result);
+    unapplied_entries.consolidate(
+        meta_automerge_doc,
+        user_automerge_doc,
+        &mut meta_changes_to_apply,
+        &mut user_changes_to_apply,
+        &mut result,
+    );
 
-    if !changes_to_apply.is_empty() {
-        automerge_doc.apply_changes(changes_to_apply)?;
+    if !user_changes_to_apply.is_empty() {
+        user_automerge_doc.apply_changes(user_changes_to_apply)?;
     }
     Ok(result)
 }
@@ -269,21 +311,30 @@ pub(crate) fn apply_entries_autocommit(
 /// Returns for all of the affected discovery keys that were changed, the length
 /// where the cursor should be moved to and/or peer name change.
 pub(crate) fn apply_unapplied_entries_autocommit(
-    automerge_doc: &mut AutomergeDoc,
+    meta_automerge_doc: &mut AutomergeDoc,
+    user_automerge_doc: &mut AutomergeDoc,
     unapplied_entries: &mut UnappliedEntries,
 ) -> Result<HashMap<[u8; 32], ApplyEntriesFeedChange>, PeermergeError> {
     let mut result: HashMap<[u8; 32], ApplyEntriesFeedChange> = HashMap::new();
-    let mut changes_to_apply: Vec<Change> = vec![];
+    let mut meta_changes_to_apply: Vec<Change> = vec![];
+    let mut user_changes_to_apply: Vec<Change> = vec![];
 
     // Consolidate unapplied entries and add them to changes and result
-    unapplied_entries.consolidate(automerge_doc, &mut changes_to_apply, &mut result);
-    if !changes_to_apply.is_empty() {
-        automerge_doc.apply_changes(changes_to_apply)?;
+    unapplied_entries.consolidate(
+        meta_automerge_doc,
+        user_automerge_doc,
+        &mut meta_changes_to_apply,
+        &mut user_changes_to_apply,
+        &mut result,
+    );
+    if !user_changes_to_apply.is_empty() {
+        user_automerge_doc.apply_changes(user_changes_to_apply)?;
     }
     Ok(result)
 }
 
 pub(crate) fn transact_mut_autocommit<F, O>(
+    meta: bool,
     automerge_doc: &mut AutomergeDoc,
     cb: F,
 ) -> Result<(Option<Entry>, O), PeermergeError>
@@ -293,7 +344,7 @@ where
     let result = cb(automerge_doc).unwrap();
     let entry = automerge_doc
         .get_last_local_change()
-        .map(|change| Entry::new_change(change.clone()));
+        .map(|change| Entry::new_change(meta, change.clone()));
     Ok((entry, result))
 }
 
@@ -314,8 +365,9 @@ mod tests {
 
     use super::*;
     use crate::{
-        automerge::{init_automerge_doc, init_automerge_doc_from_data},
+        automerge::{init_automerge_doc_from_data, init_automerge_docs},
         common::keys::generate_keys,
+        uuid::Uuid,
     };
 
     fn assert_int_value(doc: &AutomergeDoc, key: &ObjId, prop: &str, expected: i64) {
@@ -332,7 +384,7 @@ mod tests {
     ) -> Result<(Entry, ObjId), PeermergeError> {
         let id = automerge_doc.put_object(obj, prop, object)?;
         let change = automerge_doc.get_last_local_change().unwrap().clone();
-        Ok((Entry::new_change(change), id))
+        Ok((Entry::new_change(false, change), id))
     }
 
     fn put_scalar_autocommit<O: AsRef<ObjId>, P: Into<Prop>, V: Into<ScalarValue>>(
@@ -343,41 +395,49 @@ mod tests {
     ) -> Result<Entry, PeermergeError> {
         automerge_doc.put(obj, prop, value)?;
         let change = automerge_doc.get_last_local_change().unwrap().clone();
-        Ok(Entry::new_change(change))
+        Ok(Entry::new_change(false, change))
     }
 
     #[test]
     fn automerge_edit_apply_entries() -> anyhow::Result<()> {
-        let peer_name = "test";
+        let peer_id = Uuid::new_v4().as_bytes();
         let int_prop = "number";
         let int_value = 1;
         let (_, doc_discovery_key) = generate_keys();
         let (_, peer_1_discovery_key) = generate_keys();
         let (_, peer_2_discovery_key) = generate_keys();
-        let (mut doc, _, data, _) = init_automerge_doc(peer_name, &doc_discovery_key, |tx| {
-            tx.put(ROOT, "version", 1)
-        })
+        let (mut result, _, _) = init_automerge_docs(
+            doc_discovery_key,
+            &peer_id,
+            &doc_discovery_key,
+            false,
+            |tx| tx.put(ROOT, "version", 1),
+        )
         .unwrap();
+
+        let mut meta_doc = result.meta_automerge_doc;
+        let mut user_doc = result.user_automerge_doc;
 
         // Let's create a tree of depth 5
         let (entry_1, key_1) =
-            put_object_autocommit(&mut doc, ROOT, "level_1", automerge::ObjType::Map)?;
+            put_object_autocommit(&mut user_doc, ROOT, "level_1", automerge::ObjType::Map)?;
         let (entry_2, key_2) =
-            put_object_autocommit(&mut doc, &key_1, "level_2", automerge::ObjType::Map)?;
+            put_object_autocommit(&mut user_doc, &key_1, "level_2", automerge::ObjType::Map)?;
         let (entry_3, key_3) =
-            put_object_autocommit(&mut doc, &key_2, "level_3", automerge::ObjType::Map)?;
+            put_object_autocommit(&mut user_doc, &key_2, "level_3", automerge::ObjType::Map)?;
         let (entry_4, key_4) =
-            put_object_autocommit(&mut doc, &key_3, "level_4", automerge::ObjType::Map)?;
+            put_object_autocommit(&mut user_doc, &key_3, "level_4", automerge::ObjType::Map)?;
         let (entry_5, key_5) =
-            put_object_autocommit(&mut doc, &key_4, "level_5", automerge::ObjType::Map)?;
-        let entry_scalar = put_scalar_autocommit(&mut doc, &key_5, int_prop, int_value)?;
+            put_object_autocommit(&mut user_doc, &key_4, "level_5", automerge::ObjType::Map)?;
+        let entry_scalar = put_scalar_autocommit(&mut user_doc, &key_5, int_prop, int_value)?;
 
         // Different consolidations
         let mut unapplied_entries = UnappliedEntries::new();
 
         // All in order, should result in no unapplied entries
         apply_entries_autocommit(
-            &mut doc,
+            &mut meta_doc,
+            &mut user_doc,
             &doc_discovery_key,
             7,
             vec![
@@ -391,12 +451,14 @@ mod tests {
             &mut unapplied_entries,
         )?;
         assert_eq!(unapplied_entries.data.len(), 0);
-        assert_int_value(&doc, &key_5, int_prop, int_value);
+        assert_int_value(&user_doc, &key_5, int_prop, int_value);
 
         // In chunks
-        doc = init_automerge_doc_from_data(peer_name, &doc_discovery_key, &data);
+        user_doc =
+            init_automerge_doc_from_data(&peer_id, &doc_discovery_key, &result.user_doc_data);
         apply_entries_autocommit(
-            &mut doc,
+            &mut meta_doc,
+            &mut user_doc,
             &doc_discovery_key,
             3,
             vec![entry_1.clone(), entry_2.clone()],
@@ -404,7 +466,8 @@ mod tests {
         )?;
         assert_eq!(unapplied_entries.data.len(), 0);
         apply_entries_autocommit(
-            &mut doc,
+            &mut meta_doc,
+            &mut user_doc,
             &doc_discovery_key,
             5,
             vec![entry_3.clone(), entry_4.clone()],
@@ -412,19 +475,22 @@ mod tests {
         )?;
         assert_eq!(unapplied_entries.data.len(), 0);
         apply_entries_autocommit(
-            &mut doc,
+            &mut meta_doc,
+            &mut user_doc,
             &doc_discovery_key,
             7,
             vec![entry_5.clone(), entry_scalar.clone()],
             &mut unapplied_entries,
         )?;
         assert_eq!(unapplied_entries.data.len(), 0);
-        assert_int_value(&doc, &key_5, int_prop, int_value);
+        assert_int_value(&user_doc, &key_5, int_prop, int_value);
 
         // Missing first, should first result in all going to unapplied entries, then consolidate
-        doc = init_automerge_doc_from_data(peer_name, &doc_discovery_key, &data);
+        user_doc =
+            init_automerge_doc_from_data(&peer_id, &doc_discovery_key, &result.user_doc_data);
         apply_entries_autocommit(
-            &mut doc,
+            &mut meta_doc,
+            &mut user_doc,
             &doc_discovery_key,
             6,
             vec![
@@ -447,19 +513,22 @@ mod tests {
             5
         );
         apply_entries_autocommit(
-            &mut doc,
+            &mut meta_doc,
+            &mut user_doc,
             &peer_1_discovery_key,
             1,
             vec![entry_1.clone()],
             &mut unapplied_entries,
         )?;
         assert_eq!(unapplied_entries.data.len(), 0);
-        assert_int_value(&doc, &key_5, int_prop, int_value);
+        assert_int_value(&user_doc, &key_5, int_prop, int_value);
 
         // Mixture of two peers having every other change
-        doc = init_automerge_doc_from_data(peer_name, &doc_discovery_key, &data);
+        user_doc =
+            init_automerge_doc_from_data(&peer_id, &doc_discovery_key, &result.user_doc_data);
         apply_entries_autocommit(
-            &mut doc,
+            &mut meta_doc,
+            &mut user_doc,
             &peer_1_discovery_key,
             4,
             vec![entry_2, entry_4, entry_scalar],
@@ -476,7 +545,8 @@ mod tests {
             3
         );
         apply_entries_autocommit(
-            &mut doc,
+            &mut meta_doc,
+            &mut user_doc,
             &peer_2_discovery_key,
             3,
             vec![entry_3, entry_5],
@@ -502,14 +572,15 @@ mod tests {
             2
         );
         apply_entries_autocommit(
-            &mut doc,
+            &mut meta_doc,
+            &mut user_doc,
             &doc_discovery_key,
             2,
             vec![entry_1],
             &mut unapplied_entries,
         )?;
         assert_eq!(unapplied_entries.data.len(), 0);
-        assert_int_value(&doc, &key_5, int_prop, int_value);
+        assert_int_value(&user_doc, &key_5, int_prop, int_value);
 
         Ok(())
     }

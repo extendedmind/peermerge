@@ -4,9 +4,11 @@ use std::sync::Arc;
 use crate::common::utils::{Mutex, YieldNow};
 use crate::feed::{Feed, FeedPersistence};
 
+use super::FeedDiscoveryKey;
+
 pub(crate) async fn get_feed<T>(
     feeds: &Arc<DashMap<[u8; 32], Arc<Mutex<Feed<T>>>>>,
-    discovery_key: &[u8; 32],
+    discovery_key: &FeedDiscoveryKey,
 ) -> Option<Arc<Mutex<Feed<T>>>>
 where
     T: FeedPersistence,

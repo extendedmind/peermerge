@@ -7,14 +7,15 @@ use random_access_storage::RandomAccess;
 use std::{fmt::Debug, path::PathBuf};
 
 use crate::{
-    automerge::{AutomergeDoc, UnappliedEntries},
+    automerge::{AutomergeDoc, DocsChangeResult, UnappliedEntries},
     common::state::{DocumentState, PeermergeState},
+    feed::FeedDiscoveryKey,
     DocumentId, NameDescription, PeermergeError,
 };
 
 use super::{
     keys::discovery_key_from_public_key,
-    state::{DocumentContent, DocumentPeerState},
+    state::{DocumentContent, DocumentPeer},
 };
 #[derive(Debug)]
 pub(crate) struct PeermergeStateWrapper<T>
@@ -95,15 +96,16 @@ impl<T> DocStateWrapper<T>
 where
     T: RandomAccess + Debug + Send,
 {
-    pub(crate) async fn add_peer_public_keys_to_state(
+    pub(crate) async fn process_incoming_peers(
         &mut self,
-        public_keys: Vec<[u8; 32]>,
-    ) -> bool {
-        let added = add_peer_public_keys_to_document_state(&mut self.state, public_keys);
-        if added {
+        incoming_peers: &Vec<DocumentPeer>,
+    ) -> (bool, Vec<DocumentPeer>, Vec<DocumentPeer>) {
+        let (changed, replaced_peers, peers_to_create) =
+            self.state.peers_state.merge_incoming_peers(incoming_peers);
+        if changed {
             write_document_state(&self.state, &mut self.storage).await;
         }
-        added
+        (changed, replaced_peers, peers_to_create)
     }
 
     pub(crate) fn content_and_unapplied_entries_mut(
@@ -127,39 +129,23 @@ where
         }
     }
 
-    pub(crate) async fn set_content_and_new_peer_headers(
-        &mut self,
-        content: DocumentContent,
-        new_peer_headers: Vec<([u8; 32], NameDescription)>,
-    ) {
+    pub(crate) async fn set_content(&mut self, content: DocumentContent) {
         self.state.content = Some(content);
-        for (discovery_key, peer_header) in new_peer_headers {
-            self.set_peer_header(&discovery_key, peer_header);
-        }
         write_document_state(&self.state, &mut self.storage).await;
     }
 
-    pub(crate) fn peer_name(&self, discovery_key: &[u8; 32]) -> Option<String> {
-        self.state
-            .peers
-            .iter()
-            .find(|peer| &peer.discovery_key == discovery_key)
-            .and_then(|peer| peer.peer_header.as_ref().map(|header| header.name.clone()))
+    pub(crate) async fn persist_content(&mut self) {
+        write_document_state(&self.state, &mut self.storage).await;
     }
 
-    pub(crate) async fn persist_content_and_new_peer_headers(
+    pub(crate) async fn set_cursor_and_save_data(
         &mut self,
-        new_peer_names: Vec<([u8; 32], NameDescription)>,
+        discovery_key: &FeedDiscoveryKey,
+        length: u64,
+        change_result: DocsChangeResult,
     ) {
-        for (discovery_key, peer_header) in new_peer_names {
-            self.set_peer_header(&discovery_key, peer_header);
-        }
-        write_document_state(&self.state, &mut self.storage).await;
-    }
-
-    pub(crate) async fn set_cursor_and_save_data(&mut self, discovery_key: &[u8; 32], length: u64) {
         if let Some(content) = self.state.content.as_mut() {
-            content.set_cursor_and_save_data(*discovery_key, length);
+            content.set_cursor_and_save_data(*discovery_key, length, change_result);
             write_document_state(&self.state, &mut self.storage).await;
         } else {
             unimplemented!("This shouldn't happen")
@@ -170,8 +156,11 @@ where
         discovery_key_from_public_key(
             &self
                 .state
-                .write_public_key
-                .expect("TODO: read-only hypercore"),
+                .peers_state
+                .write_peer
+                .clone()
+                .expect("TODO: read-only hypercore")
+                .public_key,
         )
     }
 
@@ -179,18 +168,18 @@ where
         &self.state
     }
 
-    pub(crate) fn automerge_doc(&self) -> Option<&AutomergeDoc> {
+    pub(crate) fn user_automerge_doc(&self) -> Option<&AutomergeDoc> {
         self.state
             .content
             .as_ref()
-            .and_then(|content| content.automerge_doc.as_ref())
+            .and_then(|content| content.user_automerge_doc.as_ref())
     }
 
-    pub(crate) fn automerge_doc_mut(&mut self) -> Option<&mut AutomergeDoc> {
+    pub(crate) fn user_automerge_doc_mut(&mut self) -> Option<&mut AutomergeDoc> {
         self.state
             .content
             .as_mut()
-            .and_then(|content| content.automerge_doc.as_mut())
+            .and_then(|content| content.user_automerge_doc.as_mut())
     }
 
     pub(crate) fn watch(&mut self, ids: Option<Vec<ObjId>>) {
@@ -206,26 +195,6 @@ where
 
     pub(crate) fn unreserve_object<O: AsRef<ObjId>>(&mut self, obj: O) {
         self.unapplied_entries.reserved_ids.remove(obj.as_ref());
-    }
-
-    fn set_peer_header(&mut self, discovery_key: &[u8; 32], peer_header: NameDescription) -> bool {
-        let changed = if let Some(mut doc_peer_state) = self
-            .state
-            .peers
-            .iter_mut()
-            .find(|peer| &peer.discovery_key == discovery_key)
-        {
-            let changed = doc_peer_state.peer_header.as_ref() != Some(&peer_header);
-            if changed {
-                doc_peer_state.peer_header = Some(peer_header)
-            }
-            changed
-        } else {
-            panic!(
-                "Could not find a pre-existing peer with discovery key {discovery_key:02X?} to set header {peer_header:?}",
-            );
-        };
-        changed
     }
 }
 
@@ -291,27 +260,6 @@ where
         .encode(repo_state, &mut buffer)
         .expect("Encoding repo state should not fail");
     storage.write(0, &buffer).await.unwrap();
-}
-
-fn add_peer_public_keys_to_document_state(
-    document_state: &mut DocumentState,
-    public_keys: Vec<[u8; 32]>,
-) -> bool {
-    // Need to check if another thread has already added these keys to the state
-    let need_to_add = document_state
-        .peers
-        .iter()
-        .filter(|peer_state| public_keys.contains(&peer_state.public_key))
-        .count()
-        == 0;
-    if need_to_add {
-        let new_peers: Vec<DocumentPeerState> = public_keys
-            .iter()
-            .map(|public_key| DocumentPeerState::new(*public_key, None))
-            .collect();
-        document_state.peers.extend(new_peers);
-    }
-    need_to_add
 }
 
 async fn write_document_state<T>(document_state: &DocumentState, storage: &mut T)

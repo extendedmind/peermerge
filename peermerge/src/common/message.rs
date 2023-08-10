@@ -1,30 +1,40 @@
+use crate::feed::FeedDiscoveryKey;
+
+use super::state::DocumentPeer;
+
 /// An BroadcastMessage transmits all of the active public keys the peer knows to the other peer
 #[derive(Debug)]
 pub(crate) struct BroadcastMessage {
-    pub(crate) write_public_key: Option<[u8; 32]>,
-    pub(crate) peer_public_keys: Vec<[u8; 32]>,
+    pub(crate) write_peer: Option<DocumentPeer>,
+    pub(crate) peers: Vec<DocumentPeer>,
 }
 impl BroadcastMessage {
-    pub(crate) fn new(public_key: Option<[u8; 32]>, peer_public_keys: Vec<[u8; 32]>) -> Self {
-        Self {
-            write_public_key: public_key,
-            peer_public_keys,
-        }
+    pub(crate) fn new(write_peer: Option<DocumentPeer>, peers: Vec<DocumentPeer>) -> Self {
+        Self { write_peer, peers }
     }
 }
 
 /// An NewPeersCreatedMessage is an internal message that contains all of the
-/// public keys of created peer hypercores.
+/// ids and public keys of created and changed peer hypercores.
 #[derive(Debug)]
-pub(crate) struct NewPeersCreatedMessage {
-    pub(crate) doc_discovery_key: [u8; 32],
-    pub(crate) public_keys: Vec<[u8; 32]>,
+pub(crate) struct PeersChangedMessage {
+    pub(crate) doc_discovery_key: FeedDiscoveryKey,
+    pub(crate) incoming_peers: Vec<DocumentPeer>,
+    pub(crate) replaced_peers: Vec<DocumentPeer>,
+    pub(crate) peers_to_create: Vec<DocumentPeer>,
 }
-impl NewPeersCreatedMessage {
-    pub(crate) fn new(doc_discovery_key: [u8; 32], public_keys: Vec<[u8; 32]>) -> Self {
+impl PeersChangedMessage {
+    pub(crate) fn new(
+        doc_discovery_key: FeedDiscoveryKey,
+        incoming_peers: Vec<DocumentPeer>,
+        replaced_peers: Vec<DocumentPeer>,
+        peers_to_create: Vec<DocumentPeer>,
+    ) -> Self {
         Self {
             doc_discovery_key,
-            public_keys,
+            incoming_peers,
+            replaced_peers,
+            peers_to_create,
         }
     }
 }

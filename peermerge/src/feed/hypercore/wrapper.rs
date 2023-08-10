@@ -21,13 +21,20 @@ use wasm_bindgen_futures::spawn_local;
 
 use super::{
     messaging::{
-        create_append_local_signal, create_closed_local_signal,
-        create_new_peers_created_local_signal, create_peer_synced_local_signal,
+        create_append_local_signal, create_closed_local_signal, create_peer_synced_local_signal,
+        create_peers_changed_local_signal,
     },
     on_doc_peer, on_peer, PeerState,
 };
 use crate::{
-    common::{cipher::EntryCipher, entry::Entry, utils::Mutex, PeerEvent},
+    common::{
+        cipher::EntryCipher,
+        entry::{shrink_entries, Entry},
+        state::{DocumentPeer, DocumentPeersState},
+        utils::Mutex,
+        PeerEvent,
+    },
+    feed::FeedDiscoveryKey,
     PeermergeError,
 };
 
@@ -138,13 +145,20 @@ where
         Ok(())
     }
 
-    pub(crate) async fn notify_new_peers_created(
+    pub(crate) async fn notify_peers_changed(
         &mut self,
-        doc_discovery_key: [u8; 32],
-        public_keys: Vec<[u8; 32]>,
+        doc_discovery_key: FeedDiscoveryKey,
+        incoming_peers: Vec<DocumentPeer>,
+        replaced_peers: Vec<DocumentPeer>,
+        new_peers: Vec<DocumentPeer>,
     ) -> Result<(), PeermergeError> {
         if !self.channel_senders.is_empty() {
-            let message = create_new_peers_created_local_signal(doc_discovery_key, public_keys);
+            let message = create_peers_changed_local_signal(
+                doc_discovery_key,
+                incoming_peers,
+                replaced_peers,
+                new_peers,
+            );
             self.notify_listeners(&message).await?;
         }
         Ok(())
@@ -158,11 +172,16 @@ where
         Ok(())
     }
 
+    /// Gets entries. Merges DocParts into InitDoc and InitPeer, which means the number
+    /// of entries returned may be less than the given range. Returns the entries and
+    /// an offset in the feed that can be used for the first entry (meaning if
+    /// [InitDoc, DocPart, DocPart, Change], then it's 2, if [InitDoc, Change] then 0,
+    /// if [Change, Change], then 0).
     pub(crate) async fn entries(
         &mut self,
         index: u64,
         len: u64,
-    ) -> Result<Vec<Entry>, PeermergeError> {
+    ) -> Result<(Vec<Entry>, u64), PeermergeError> {
         if self.proxy {
             panic!("Can not get entries from a proxy");
         }
@@ -179,7 +198,7 @@ where
             let entry: Entry = dec_state.decode(&data)?;
             entries.push(entry);
         }
-        Ok(entries)
+        Ok(shrink_entries(entries))
     }
 
     pub(crate) async fn key_pair(&self) -> PartialKeypair {
@@ -195,22 +214,16 @@ where
     pub(super) fn on_channel(
         &mut self,
         is_doc: bool,
-        doc_discovery_key: [u8; 32],
+        doc_discovery_key: FeedDiscoveryKey,
         channel: Channel,
         channel_receiver: ChannelReceiver<Message>,
         channel_sender: ChannelSender<Message>,
-        write_public_key: Option<[u8; 32]>,
-        peer_public_keys: Vec<[u8; 32]>,
+        peers_state: DocumentPeersState,
         peer_event_sender: &mut UnboundedSender<PeerEvent>,
     ) {
         debug!("Processing channel id={}", channel.id(),);
         self.channel_senders.push(channel_sender);
-        let peer_state = PeerState::new(
-            is_doc,
-            doc_discovery_key,
-            write_public_key,
-            peer_public_keys,
-        );
+        let peer_state = PeerState::new(is_doc, doc_discovery_key, peers_state);
         let hypercore = self.hypercore.clone();
         let mut peer_event_sender_for_task = peer_event_sender.clone();
         let task_span = if is_doc {

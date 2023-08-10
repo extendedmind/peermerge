@@ -4,16 +4,16 @@ use crate::DocumentId;
 #[derive(Copy, Clone, Debug, PartialEq)]
 #[repr(u8)]
 pub enum FeedType {
-    Hypercore = 1,
-    P2Panda = 2,
+    Hypercore = 0,
+    P2Panda = 1,
 }
 
 impl TryFrom<u8> for FeedType {
     type Error = ();
     fn try_from(input: u8) -> Result<Self, <Self as TryFrom<u8>>::Error> {
         match input {
-            1u8 => Ok(Self::Hypercore),
-            22u8 => Ok(Self::P2Panda),
+            0u8 => Ok(Self::Hypercore),
+            1u8 => Ok(Self::P2Panda),
             _ => Err(()),
         }
     }
@@ -23,8 +23,9 @@ impl TryFrom<u8> for FeedType {
 pub struct DocUrlInfo {
     pub version: u8,
     pub feed_type: FeedType,
-    pub parent: bool,
-    pub root_public_key: [u8; 32],
+    pub child: bool,
+    pub doc_public_key: [u8; 32],
+    pub doc_discovery_key: [u8; 32],
     pub document_id: DocumentId,
     pub proxy_only: bool,
     pub encrypted: Option<bool>,
@@ -33,17 +34,19 @@ pub struct DocUrlInfo {
 impl DocUrlInfo {
     pub(crate) fn new(
         version: u8,
-        parent: bool,
+        child: bool,
         feed_type: FeedType,
-        root_public_key: [u8; 32],
+        doc_public_key: [u8; 32],
+        doc_discovery_key: [u8; 32],
         document_id: DocumentId,
         encrypted: bool,
     ) -> Self {
         Self {
             version,
-            parent,
+            child,
             feed_type,
-            root_public_key,
+            doc_public_key,
+            doc_discovery_key,
             document_id,
             proxy_only: false,
             encrypted: Some(encrypted),
@@ -52,16 +55,18 @@ impl DocUrlInfo {
 
     pub(crate) fn new_proxy_only(
         version: u8,
-        parent: bool,
+        child: bool,
         feed_type: FeedType,
-        root_public_key: [u8; 32],
+        doc_public_key: [u8; 32],
+        doc_discovery_key: [u8; 32],
         document_id: DocumentId,
     ) -> Self {
         Self {
             version,
             feed_type,
-            parent,
-            root_public_key,
+            child,
+            doc_public_key,
+            doc_discovery_key,
             document_id,
             proxy_only: true,
             encrypted: None,
@@ -72,6 +77,10 @@ impl DocUrlInfo {
 #[derive(Debug, Clone)]
 pub struct DocumentInfo {
     pub doc_url_info: DocUrlInfo,
+    /// Document type. Missing for proxy documents, but can be
+    /// missing for attached writeable documents too before
+    /// initial sync is ready.
+    pub document_type: Option<String>,
     pub document_header: Option<NameDescription>,
     pub parent_document_id: Option<DocumentId>,
 }

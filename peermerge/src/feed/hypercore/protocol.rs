@@ -9,10 +9,10 @@ use std::io::ErrorKind;
 use std::sync::Arc;
 use tracing::{debug, instrument};
 
-use super::{messaging::NEW_PEERS_CREATED_LOCAL_SIGNAL_NAME, HypercoreWrapper};
+use super::{messaging::PEERS_CHANGED_LOCAL_SIGNAL_NAME, HypercoreWrapper};
 use crate::common::keys::discovery_key_from_public_key;
 use crate::common::utils::Mutex;
-use crate::common::{message::NewPeersCreatedMessage, PeerEvent};
+use crate::common::{message::PeersChangedMessage, PeerEvent};
 use crate::document::{get_document, get_document_ids, Document};
 use crate::{DocumentId, FeedPersistence, PeermergeError, IO};
 
@@ -54,10 +54,10 @@ where
                             for document_id in get_document_ids(&documents).await {
                                 let document =
                                     get_document(&documents, &document_id).await.unwrap();
-                                let root_hypercore = document.root_feed().await;
-                                let root_hypercore = root_hypercore.lock().await;
-                                debug!("Event:Handshake: opening root channel");
-                                protocol.open(*root_hypercore.public_key()).await?;
+                                let doc_hypercore = document.doc_feed().await;
+                                let doc_hypercore = doc_hypercore.lock().await;
+                                debug!("Event:Handshake: opening doc channel");
+                                protocol.open(*doc_hypercore.public_key()).await?;
                             }
                         }
                     }
@@ -79,7 +79,7 @@ where
                     Event::Channel(mut channel) => {
                         debug!("Event:Channel: id={}", channel.id());
                         let discovery_key = channel.discovery_key();
-                        if let Some((document, hypercore, is_root)) =
+                        if let Some((document, hypercore, is_doc)) =
                             get_document_and_openeable_hypercore_for_discovery_key(
                                 discovery_key,
                                 &documents,
@@ -87,32 +87,31 @@ where
                             )
                             .await
                         {
-                            if is_root {
+                            if is_doc {
                                 opened_documents.push(*discovery_key);
                                 let document =
                                     get_document(&documents, discovery_key).await.unwrap();
                                 if is_initiator {
-                                    // Now that the root channel is open, we can open channels for the leaf feeds
-                                    let leaf_feeds = document.leaf_feeds().await;
-                                    for leaf_feed in leaf_feeds {
-                                        let leaf_feed = leaf_feed.lock().await;
-                                        debug!("Event:Handshake: opening leaf channel");
-                                        protocol.open(*leaf_feed.public_key()).await?;
+                                    // Now that the doc channel is open, we can open channels for the peer feeds
+                                    let peer_feeds = document.peer_feeds().await;
+                                    for peer_feed in peer_feeds {
+                                        let peer_feed = peer_feed.lock().await;
+                                        debug!("Event:Handshake: opening peer channel");
+                                        protocol.open(*peer_feed.public_key()).await?;
                                     }
                                 }
                             }
                             let mut hypercore = hypercore.lock().await;
-                            let (write_public_key, peer_public_keys) = document.public_keys().await;
+                            let peer_state = document.peers_state().await;
                             let channel_receiver = channel.take_receiver().unwrap();
                             let channel_sender = channel.local_sender();
                             hypercore.on_channel(
-                                is_root,
+                                is_doc,
                                 document.id(),
                                 channel,
                                 channel_receiver,
                                 channel_sender,
-                                write_public_key,
-                                peer_public_keys,
+                                peer_state,
                                 peer_event_sender,
                             );
                         } else {
@@ -135,13 +134,13 @@ where
                         }
                     }
                     Event::LocalSignal((name, data)) => match name.as_str() {
-                        NEW_PEERS_CREATED_LOCAL_SIGNAL_NAME => {
+                        PEERS_CHANGED_LOCAL_SIGNAL_NAME => {
                             let mut dec_state = State::from_buffer(&data);
-                            let message: NewPeersCreatedMessage = dec_state.decode(&data)?;
+                            let message: PeersChangedMessage = dec_state.decode(&data)?;
                             let discovery_keys_to_open: Vec<[u8; 32]> = message
-                                .public_keys
+                                .peers_to_create
                                 .iter()
-                                .map(discovery_key_from_public_key)
+                                .map(|peer| discovery_key_from_public_key(&peer.public_key))
                                 .filter(|discovery_key| {
                                     if is_initiator {
                                         true
@@ -162,7 +161,7 @@ where
                                 .await
                                 .unwrap();
                             for discovery_key in discovery_keys_to_open {
-                                if let Some(hypercore) = document.leaf_feed(&discovery_key).await {
+                                if let Some(hypercore) = document.peer_feed(&discovery_key).await {
                                     let hypercore = hypercore.lock().await;
                                     protocol.open(*hypercore.public_key()).await?;
                                 } else {
@@ -193,11 +192,11 @@ where
     U: FeedPersistence,
 {
     if let Some(document) = get_document(documents, discovery_key).await {
-        Some(document.root_feed().await)
+        Some(document.doc_feed().await)
     } else {
         for opened_document_id in opened_documents {
             let document = get_document(documents, opened_document_id).await.unwrap();
-            let leaf_feed = document.leaf_feed(discovery_key).await;
+            let leaf_feed = document.peer_feed(discovery_key).await;
             if leaf_feed.is_some() {
                 return leaf_feed;
             }
@@ -216,12 +215,12 @@ where
     U: FeedPersistence,
 {
     if let Some(document) = get_document(documents, discovery_key).await {
-        let root_feed = document.root_feed().await;
+        let root_feed = document.doc_feed().await;
         Some((document, root_feed, true))
     } else {
         for opened_document_id in opened_documents {
             let document = get_document(documents, opened_document_id).await.unwrap();
-            let leaf_feed = document.leaf_feed(discovery_key).await;
+            let leaf_feed = document.peer_feed(discovery_key).await;
             if leaf_feed.is_some() {
                 return leaf_feed.map(|feed| (document.clone(), feed, false));
             }

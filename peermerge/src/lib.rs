@@ -6,6 +6,7 @@ mod feed;
 
 // Custom types and traits
 pub type DocumentId = [u8; 32];
+pub type PeerId = [u8; 16];
 use futures::{AsyncRead, AsyncWrite};
 pub trait IO: AsyncWrite + AsyncRead + Send + Unpin + 'static {}
 impl<T> IO for T where T: AsyncWrite + AsyncRead + Send + Unpin + 'static {}
@@ -13,8 +14,9 @@ impl<T> IO for T where T: AsyncWrite + AsyncRead + Send + Unpin + 'static {}
 // Crate exports
 pub use crate::automerge::AutomergeDoc;
 pub use crate::common::{
-    get_doc_url_info, DocUrlInfo, DocumentInfo, DocumentSharingInfo, FeedType, NameDescription,
-    PeermergeError, StateEvent, StateEventContent,
+    decode_base64_nopad, encode_base64_nopad, get_doc_url_info, new_uuid_v4, DocUrlInfo,
+    DocumentInfo, DocumentSharingInfo, FeedType, NameDescription, PeermergeError, StateEvent,
+    StateEventContent,
 };
 pub use crate::core::Peermerge;
 #[cfg(not(target_arch = "wasm32"))]
@@ -28,3 +30,4 @@ pub use ::automerge::*; // TODO: Enumerate what's actually needed
 pub use random_access_disk::RandomAccessDisk;
 pub use random_access_memory::RandomAccessMemory;
 pub use random_access_storage::RandomAccess;
+pub use uuid;

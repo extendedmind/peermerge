@@ -12,11 +12,13 @@ use tracing::{debug, instrument};
 use super::PeerState;
 use crate::{
     common::{
-        message::{BroadcastMessage, NewPeersCreatedMessage, PeerSyncedMessage},
+        message::{BroadcastMessage, PeerSyncedMessage, PeersChangedMessage},
+        state::DocumentPeer,
         utils::Mutex,
         PeerEvent,
         PeerEventContent::*,
     },
+    feed::FeedDiscoveryKey,
     PeermergeError,
 };
 
@@ -26,13 +28,13 @@ const PEERMERGE_BROADCAST_MSG: &str = "peermerge/v1/broadcast";
 // Local signals
 const APPEND_LOCAL_SIGNAL_NAME: &str = "append";
 const PEER_SYNCED_LOCAL_SIGNAL_NAME: &str = "peer_synced";
-pub(super) const NEW_PEERS_CREATED_LOCAL_SIGNAL_NAME: &str = "new_peers_created";
+pub(super) const PEERS_CHANGED_LOCAL_SIGNAL_NAME: &str = "peers_changed";
 const CLOSED_LOCAL_SIGNAL_NAME: &str = "closed";
 
 pub(super) fn create_broadcast_message(peer_state: &PeerState) -> Message {
     let broadcast_message: BroadcastMessage = BroadcastMessage {
-        write_public_key: peer_state.write_public_key,
-        peer_public_keys: peer_state.peer_public_keys.clone(),
+        write_peer: peer_state.peers_state.write_peer.clone(),
+        peers: peer_state.peers_state.peers.clone(),
     };
     let mut enc_state = State::new();
     enc_state
@@ -73,13 +75,17 @@ pub(super) fn create_peer_synced_local_signal(contiguous_length: u64) -> Message
     Message::LocalSignal((PEER_SYNCED_LOCAL_SIGNAL_NAME.to_string(), buffer.to_vec()))
 }
 
-pub(super) fn create_new_peers_created_local_signal(
-    doc_discovery_key: [u8; 32],
-    public_keys: Vec<[u8; 32]>,
+pub(super) fn create_peers_changed_local_signal(
+    doc_discovery_key: FeedDiscoveryKey,
+    incoming_peers: Vec<DocumentPeer>,
+    replaced_peers: Vec<DocumentPeer>,
+    peers_to_create: Vec<DocumentPeer>,
 ) -> Message {
-    let message = NewPeersCreatedMessage {
+    let message = PeersChangedMessage {
         doc_discovery_key,
-        public_keys,
+        incoming_peers,
+        replaced_peers,
+        peers_to_create,
     };
     let mut enc_state = State::new();
     enc_state
@@ -89,10 +95,7 @@ pub(super) fn create_new_peers_created_local_signal(
     enc_state
         .encode(&message, &mut buffer)
         .expect("Encoding new peers created local signal should not fail");
-    Message::LocalSignal((
-        NEW_PEERS_CREATED_LOCAL_SIGNAL_NAME.to_string(),
-        buffer.to_vec(),
-    ))
+    Message::LocalSignal((PEERS_CHANGED_LOCAL_SIGNAL_NAME.to_string(), buffer.to_vec()))
 }
 
 pub(super) fn create_closed_local_signal() -> Message {
@@ -353,16 +356,14 @@ where
                 );
                 let mut dec_state = State::from_buffer(&message.message);
                 let broadcast_message: BroadcastMessage = dec_state.decode(&message.message)?;
-                let new_remote_public_keys = peer_state.filter_new_peer_public_keys(
-                    &broadcast_message.write_public_key,
-                    &broadcast_message.peer_public_keys,
-                );
+                let new_remote_peers = peer_state
+                    .peers_state
+                    .filter_new_peers(&broadcast_message.write_peer, &broadcast_message.peers);
 
-                if new_remote_public_keys.is_empty()
-                    && peer_state.peer_public_keys_match(
-                        &broadcast_message.write_public_key,
-                        &broadcast_message.peer_public_keys,
-                    )
+                if new_remote_peers.is_empty()
+                    && peer_state
+                        .peers_state
+                        .peers_match(&broadcast_message.write_peer, &broadcast_message.peers)
                 {
                     // Don't re-initialize if this has already been synced, meaning this is a
                     // broadcast that notifies a new third party peer after the initial handshake.
@@ -370,11 +371,11 @@ where
                         let messages = create_initial_synchronize(hypercore, peer_state).await;
                         channel.send_batch(&messages).await?;
                     }
-                } else if !new_remote_public_keys.is_empty() {
+                } else if !new_remote_peers.is_empty() {
                     // New peers found, return a peer event
                     return Ok(Some(PeerEvent::new(
                         peer_state.doc_discovery_key,
-                        NewPeersBroadcasted(new_remote_public_keys),
+                        NewPeersBroadcasted(new_remote_peers),
                     )));
                 }
             }
@@ -425,20 +426,22 @@ where
                     channel.send(Message::Range(range_msg)).await?;
                 }
             }
-            NEW_PEERS_CREATED_LOCAL_SIGNAL_NAME => {
+            PEERS_CHANGED_LOCAL_SIGNAL_NAME => {
                 assert!(
                     peer_state.is_doc,
-                    "Only doc peer should ever get new peers created messages"
+                    "Only doc feed should ever get new peers created messages"
                 );
                 let mut dec_state = State::from_buffer(&data);
-                let new_peers: NewPeersCreatedMessage = dec_state.decode(&data)?;
+                let new_peers_message: PeersChangedMessage = dec_state.decode(&data)?;
 
-                // Save new peers to the peer state
-                peer_state.peer_public_keys.extend(new_peers.public_keys);
+                // Merge new peers to the peer state
+                peer_state
+                    .peers_state
+                    .merge_incoming_peers(&new_peers_message.incoming_peers);
 
                 // Transmit this event forward to the protocol
                 channel
-                    .signal_local_protocol(NEW_PEERS_CREATED_LOCAL_SIGNAL_NAME, data)
+                    .signal_local_protocol(PEERS_CHANGED_LOCAL_SIGNAL_NAME, data)
                     .await?;
 
                 // Create new broadcast message
@@ -454,7 +457,7 @@ where
             CLOSED_LOCAL_SIGNAL_NAME => {
                 assert!(
                     peer_state.is_doc,
-                    "Only doc peer should ever get closed message"
+                    "Only doc feed should ever get closed message"
                 );
                 channel.close().await?;
             }

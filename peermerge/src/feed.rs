@@ -4,6 +4,12 @@ use std::fmt::Debug;
 mod common;
 mod hypercore;
 
+/// Public key of the feed.
+pub(crate) type FeedPublicKey = [u8; 32];
+/// Discovery key of the feed. Derived by hashing from FeedPublicKey.
+/// Hashing this key of the doc feed again produces the DocumentId.
+pub(crate) type FeedDiscoveryKey = [u8; 32];
+
 pub(crate) use common::{get_feed, get_feed_discovery_keys};
 
 pub use ::hypercore_protocol::{Protocol, ProtocolBuilder};
