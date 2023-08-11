@@ -33,8 +33,8 @@ const CLOSED_LOCAL_SIGNAL_NAME: &str = "closed";
 
 pub(super) fn create_broadcast_message(feeds_state: &DocumentFeedsState) -> Message {
     let broadcast_message: BroadcastMessage = BroadcastMessage {
-        write_peer: feeds_state.write_feed.clone(),
-        peers: feeds_state.feeds.clone(),
+        write_feed: feeds_state.write_feed.clone(),
+        feeds: feeds_state.feeds.clone(),
     };
     let mut enc_state = State::new();
     enc_state
@@ -85,7 +85,7 @@ pub(super) fn create_feeds_changed_local_signal(
         doc_discovery_key,
         incoming_feeds,
         replaced_feeds,
-        peers_to_feeds: feeds_to_create,
+        feeds_to_create,
     };
     let mut enc_state = State::new();
     enc_state
@@ -109,7 +109,7 @@ pub(super) async fn create_initial_synchronize<T>(
 where
     T: RandomAccess + Debug + Send,
 {
-    // There are no new peers, start sync
+    // There are no new feeds, start sync
     let info = {
         let hypercore = hypercore.lock().await;
         hypercore.info()
@@ -357,29 +357,29 @@ where
             PEERMERGE_BROADCAST_MSG => {
                 assert!(
                     peer_state.is_doc,
-                    "Only doc peer should ever get broadcast messages"
+                    "Only doc feed should ever get broadcast messages"
                 );
                 let feeds_state = peer_state.feeds_state.as_mut().unwrap();
                 let mut dec_state = State::from_buffer(&message.message);
                 let broadcast_message: BroadcastMessage = dec_state.decode(&message.message)?;
-                let new_remote_peers = feeds_state
-                    .filter_new_feeds(&broadcast_message.write_peer, &broadcast_message.peers);
+                let new_remote_feeds = feeds_state
+                    .filter_new_feeds(&broadcast_message.write_feed, &broadcast_message.feeds);
 
-                if new_remote_peers.is_empty()
+                if new_remote_feeds.is_empty()
                     && feeds_state
-                        .feeds_match(&broadcast_message.write_peer, &broadcast_message.peers)
+                        .feeds_match(&broadcast_message.write_feed, &broadcast_message.feeds)
                 {
                     // Don't re-initialize if this has already been synced, meaning this is a
-                    // broadcast that notifies a new third party peer after the initial handshake.
+                    // broadcast that notifies a new third party feed after the initial handshake.
                     if !peer_state.sync_sent {
                         let messages = create_initial_synchronize(hypercore, peer_state).await;
                         channel.send_batch(&messages).await?;
                     }
-                } else if !new_remote_peers.is_empty() {
-                    // New peers found, return a peer event
+                } else if !new_remote_feeds.is_empty() {
+                    // New feeds found, return a feed event
                     return Ok(Some(FeedEvent::new(
                         peer_state.doc_discovery_key,
-                        NewFeedsBroadcasted(new_remote_peers),
+                        NewFeedsBroadcasted(new_remote_feeds),
                     )));
                 }
             }
@@ -433,14 +433,14 @@ where
             FEEDS_CHANGED_LOCAL_SIGNAL_NAME => {
                 assert!(
                     peer_state.is_doc,
-                    "Only doc feed should ever get new peers created messages"
+                    "Only doc feed should ever get feeds changed messages"
                 );
                 let feeds_state = peer_state.feeds_state.as_mut().unwrap();
                 let mut dec_state = State::from_buffer(&data);
-                let new_peers_message: FeedsChangedMessage = dec_state.decode(&data)?;
+                let feeds_changed_message: FeedsChangedMessage = dec_state.decode(&data)?;
 
-                // Merge new peers to the peer state
-                feeds_state.merge_incoming_feeds(&new_peers_message.incoming_feeds);
+                // Merge new feeds to the feeds state
+                feeds_state.merge_incoming_feeds(&feeds_changed_message.incoming_feeds);
 
                 // Transmit this event forward to the protocol
                 channel

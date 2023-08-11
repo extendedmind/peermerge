@@ -489,7 +489,7 @@ where
         replaced_feeds: Vec<DocumentFeedInfo>,
         feeds_to_create: Vec<DocumentFeedInfo>,
     ) {
-        // Send message to doc feed that new peers have been created to get all open protocols to
+        // Send message to doc feed that new feeds have been created to get all open protocols to
         // open channels to it.
         let doc_feed = get_feed(&self.feeds, &self.doc_discovery_key)
             .await
@@ -937,9 +937,9 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
         }
     }
 
-    async fn create_and_insert_read_memory_feeds(&mut self, peers: Vec<DocumentFeedInfo>) {
-        for peer in peers {
-            let discovery_key = discovery_key_from_public_key(&peer.public_key);
+    async fn create_and_insert_read_memory_feeds(&mut self, feed_infos: Vec<DocumentFeedInfo>) {
+        for feed_info in feed_infos {
+            let discovery_key = discovery_key_from_public_key(&feed_info.public_key);
             // Make sure to insert only once even if two protocols notice the same new
             // feed at the same time using the entry API.
 
@@ -953,7 +953,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
                         }
                         dashmap::mapref::entry::Entry::Vacant(vacant) => {
                             let (_, feed) = create_new_read_memory_feed(
-                                &peer.public_key,
+                                &feed_info.public_key,
                                 self.proxy,
                                 self.encryption_key.is_some(),
                                 &self.encryption_key,
@@ -1386,9 +1386,9 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    async fn create_and_insert_read_disk_feeds(&mut self, peers: Vec<DocumentFeedInfo>) {
-        for peer in peers {
-            let discovery_key = discovery_key_from_public_key(&peer.public_key);
+    async fn create_and_insert_read_disk_feeds(&mut self, feed_infos: Vec<DocumentFeedInfo>) {
+        for feed_info in feed_infos {
+            let discovery_key = discovery_key_from_public_key(&feed_info.public_key);
             // Make sure to insert only once even if two protocols notice the same new
             // feed at the same time using the entry API.
 
@@ -1403,7 +1403,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
                         dashmap::mapref::entry::Entry::Vacant(vacant) => {
                             let (_, feed) = create_new_read_disk_feed(
                                 &self.prefix,
-                                &peer.public_key,
+                                &feed_info.public_key,
                                 &discovery_key,
                                 self.proxy,
                                 self.encryption_key.is_some(),

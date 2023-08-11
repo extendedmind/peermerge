@@ -107,14 +107,14 @@ impl CompactEncoding<DocumentState> for State {
         let flags: u8 = self.decode(buffer)?;
         let proxy = flags & 1 != 0;
         let encrypted: Option<bool> = if !proxy { Some(flags & 2 != 0) } else { None };
-        let peers: Vec<DocumentFeedInfo> = if flags & 4 != 0 {
+        let feeds: Vec<DocumentFeedInfo> = if flags & 4 != 0 {
             let len: usize = self.decode(buffer)?;
-            let mut peers: Vec<DocumentFeedInfo> = Vec::with_capacity(len);
+            let mut feeds: Vec<DocumentFeedInfo> = Vec::with_capacity(len);
             for _ in 0..len {
-                let peer: DocumentFeedInfo = self.decode(buffer)?;
-                peers.push(peer);
+                let feed: DocumentFeedInfo = self.decode(buffer)?;
+                feeds.push(feed);
             }
-            peers
+            feeds
         } else {
             vec![]
         };
@@ -135,7 +135,7 @@ impl CompactEncoding<DocumentState> for State {
             proxy,
             doc_public_key,
             encrypted,
-            DocumentFeedsState::new_from_data(write_peer, peers),
+            DocumentFeedsState::new_from_data(write_peer, feeds),
             content,
         ))
     }
@@ -294,14 +294,14 @@ impl CompactEncoding<DocumentCursor> for State {
 impl CompactEncoding<BroadcastMessage> for State {
     fn preencode(&mut self, value: &BroadcastMessage) -> Result<usize, EncodingError> {
         self.add_end(1)?; // flags
-        if let Some(write_peer) = &value.write_peer {
-            self.preencode(write_peer)?;
+        if let Some(write_feed) = &value.write_feed {
+            self.preencode(write_feed)?;
         }
-        let len = value.peers.len();
+        let len = value.feeds.len();
         if len > 0 {
             self.preencode(&len)?;
-            for peer in &value.peers {
-                self.preencode(peer)?;
+            for feed in &value.feeds {
+                self.preencode(feed)?;
             }
         }
         Ok(self.end())
@@ -315,15 +315,15 @@ impl CompactEncoding<BroadcastMessage> for State {
         let flags_index = self.start();
         let mut flags: u8 = 0;
         self.add_start(1)?;
-        if let Some(write_peer) = &value.write_peer {
+        if let Some(write_peer) = &value.write_feed {
             flags |= 1;
             self.encode(write_peer, buffer)?;
         }
-        let len = value.peers.len();
+        let len = value.feeds.len();
         if len > 0 {
             flags |= 2;
             self.encode(&len, buffer)?;
-            for peer in &value.peers {
+            for peer in &value.feeds {
                 self.encode(peer, buffer)?;
             }
         }
@@ -338,18 +338,18 @@ impl CompactEncoding<BroadcastMessage> for State {
         } else {
             None
         };
-        let peers: Vec<DocumentFeedInfo> = if flags & 2 != 0 {
+        let feeds: Vec<DocumentFeedInfo> = if flags & 2 != 0 {
             let len: usize = self.decode(buffer)?;
-            let mut peers: Vec<DocumentFeedInfo> = Vec::with_capacity(len);
+            let mut feeds: Vec<DocumentFeedInfo> = Vec::with_capacity(len);
             for _ in 0..len {
-                let peer: DocumentFeedInfo = self.decode(buffer)?;
-                peers.push(peer);
+                let feed: DocumentFeedInfo = self.decode(buffer)?;
+                feeds.push(feed);
             }
-            peers
+            feeds
         } else {
             vec![]
         };
-        Ok(BroadcastMessage::new(write_peer, peers))
+        Ok(BroadcastMessage::new(write_peer, feeds))
     }
 }
 
@@ -371,10 +371,10 @@ impl CompactEncoding<FeedsChangedMessage> for State {
                 self.preencode(peer)?;
             }
         }
-        let len = value.peers_to_feeds.len();
+        let len = value.feeds_to_create.len();
         if len > 0 {
             self.preencode(&len)?;
-            for peer in &value.peers_to_feeds {
+            for peer in &value.feeds_to_create {
                 self.preencode(peer)?;
             }
         }
@@ -394,24 +394,24 @@ impl CompactEncoding<FeedsChangedMessage> for State {
         if len > 0 {
             flags |= 1;
             self.encode(&len, buffer)?;
-            for peer in &value.incoming_feeds {
-                self.encode(peer, buffer)?;
+            for feed in &value.incoming_feeds {
+                self.encode(feed, buffer)?;
             }
         }
         let len = value.replaced_feeds.len();
         if len > 0 {
             flags |= 2;
             self.encode(&len, buffer)?;
-            for peer in &value.replaced_feeds {
-                self.encode(peer, buffer)?;
+            for feed in &value.replaced_feeds {
+                self.encode(feed, buffer)?;
             }
         }
-        let len = value.peers_to_feeds.len();
+        let len = value.feeds_to_create.len();
         if len > 0 {
             flags |= 4;
             self.encode(&len, buffer)?;
-            for peer in &value.peers_to_feeds {
-                self.encode(peer, buffer)?;
+            for feed in &value.feeds_to_create {
+                self.encode(feed, buffer)?;
             }
         }
         buffer[flags_index] = flags;
@@ -422,45 +422,45 @@ impl CompactEncoding<FeedsChangedMessage> for State {
         let doc_discovery_key: [u8; 32] =
             self.decode_fixed_32(buffer)?.to_vec().try_into().unwrap();
         let flags: u8 = self.decode(buffer)?;
-        let incoming_peers: Vec<DocumentFeedInfo> = if flags & 1 != 0 {
+        let incoming_feeds: Vec<DocumentFeedInfo> = if flags & 1 != 0 {
             let len: usize = self.decode(buffer)?;
-            let mut peers: Vec<DocumentFeedInfo> = Vec::with_capacity(len);
+            let mut feeds: Vec<DocumentFeedInfo> = Vec::with_capacity(len);
             for _ in 0..len {
-                let peer: DocumentFeedInfo = self.decode(buffer)?;
-                peers.push(peer);
+                let feed: DocumentFeedInfo = self.decode(buffer)?;
+                feeds.push(feed);
             }
-            peers
+            feeds
         } else {
             vec![]
         };
-        let replaced_peers: Vec<DocumentFeedInfo> = if flags & 2 != 0 {
+        let replaced_feeds: Vec<DocumentFeedInfo> = if flags & 2 != 0 {
             let len: usize = self.decode(buffer)?;
-            let mut peers: Vec<DocumentFeedInfo> = Vec::with_capacity(len);
+            let mut feeds: Vec<DocumentFeedInfo> = Vec::with_capacity(len);
             for _ in 0..len {
-                let peer: DocumentFeedInfo = self.decode(buffer)?;
-                peers.push(peer);
+                let feed: DocumentFeedInfo = self.decode(buffer)?;
+                feeds.push(feed);
             }
-            peers
+            feeds
         } else {
             vec![]
         };
-        let peers_to_create: Vec<DocumentFeedInfo> = if flags & 4 != 0 {
+        let feeds_to_create: Vec<DocumentFeedInfo> = if flags & 4 != 0 {
             let len: usize = self.decode(buffer)?;
-            let mut peers: Vec<DocumentFeedInfo> = Vec::with_capacity(len);
+            let mut feeds: Vec<DocumentFeedInfo> = Vec::with_capacity(len);
             for _ in 0..len {
-                let peer: DocumentFeedInfo = self.decode(buffer)?;
-                peers.push(peer);
+                let feed: DocumentFeedInfo = self.decode(buffer)?;
+                feeds.push(feed);
             }
-            peers
+            feeds
         } else {
             vec![]
         };
 
         Ok(FeedsChangedMessage::new(
             doc_discovery_key,
-            incoming_peers,
-            replaced_peers,
-            peers_to_create,
+            incoming_feeds,
+            replaced_feeds,
+            feeds_to_create,
         ))
     }
 }

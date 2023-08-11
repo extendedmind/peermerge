@@ -5,12 +5,12 @@ use super::state::DocumentFeedInfo;
 /// An BroadcastMessage transmits all of the active public keys the peer knows to the other peer
 #[derive(Debug)]
 pub(crate) struct BroadcastMessage {
-    pub(crate) write_peer: Option<DocumentFeedInfo>,
-    pub(crate) peers: Vec<DocumentFeedInfo>,
+    pub(crate) write_feed: Option<DocumentFeedInfo>,
+    pub(crate) feeds: Vec<DocumentFeedInfo>,
 }
 impl BroadcastMessage {
-    pub(crate) fn new(write_peer: Option<DocumentFeedInfo>, peers: Vec<DocumentFeedInfo>) -> Self {
-        Self { write_peer, peers }
+    pub(crate) fn new(write_feed: Option<DocumentFeedInfo>, feeds: Vec<DocumentFeedInfo>) -> Self {
+        Self { write_feed, feeds }
     }
 }
 
@@ -21,20 +21,20 @@ pub(crate) struct FeedsChangedMessage {
     pub(crate) doc_discovery_key: FeedDiscoveryKey,
     pub(crate) incoming_feeds: Vec<DocumentFeedInfo>,
     pub(crate) replaced_feeds: Vec<DocumentFeedInfo>,
-    pub(crate) peers_to_feeds: Vec<DocumentFeedInfo>,
+    pub(crate) feeds_to_create: Vec<DocumentFeedInfo>,
 }
 impl FeedsChangedMessage {
     pub(crate) fn new(
         doc_discovery_key: FeedDiscoveryKey,
         incoming_feeds: Vec<DocumentFeedInfo>,
         replaced_feeds: Vec<DocumentFeedInfo>,
-        peers_to_feeds: Vec<DocumentFeedInfo>,
+        feeds_to_create: Vec<DocumentFeedInfo>,
     ) -> Self {
         Self {
             doc_discovery_key,
             incoming_feeds,
             replaced_feeds,
-            peers_to_feeds,
+            feeds_to_create,
         }
     }
 }

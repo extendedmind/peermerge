@@ -150,7 +150,7 @@ where
                             let mut dec_state = State::from_buffer(&data);
                             let message: FeedsChangedMessage = dec_state.decode(&data)?;
                             let discovery_keys_to_open: Vec<[u8; 32]> = message
-                                .peers_to_feeds
+                                .feeds_to_create
                                 .iter()
                                 .map(|peer| discovery_key_from_public_key(&peer.public_key))
                                 .filter(|discovery_key| {
