@@ -1,15 +1,15 @@
 //! Hypercore-specific types and helpers
 
 mod common;
+mod feed;
 mod messaging;
-mod peer;
 mod persistence;
 mod protocol;
 mod wrapper;
 
 use common::PeerState;
+use feed::{on_doc_feed, on_feed};
 use messaging::on_message;
-use peer::{on_doc_peer, on_peer};
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use persistence::{

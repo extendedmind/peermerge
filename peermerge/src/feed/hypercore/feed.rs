@@ -16,7 +16,7 @@ use crate::{
 };
 
 #[instrument(level = "debug", skip_all)]
-pub(super) async fn on_peer<T>(
+pub(super) async fn on_feed<T>(
     mut hypercore: Arc<Mutex<Hypercore<T>>>,
     mut peer_state: PeerState,
     mut channel: Channel,
@@ -50,7 +50,7 @@ where
 }
 
 #[instrument(level = "debug", skip_all)]
-pub(super) async fn on_doc_peer<T>(
+pub(super) async fn on_doc_feed<T>(
     mut hypercore: Arc<Mutex<Hypercore<T>>>,
     mut peer_state: PeerState,
     mut channel: Channel,

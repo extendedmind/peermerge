@@ -24,7 +24,7 @@ use super::{
         create_append_local_signal, create_closed_local_signal, create_feed_synced_local_signal,
         create_feeds_changed_local_signal,
     },
-    on_doc_peer, on_peer, PeerState,
+    on_doc_feed, on_feed, PeerState,
 };
 use crate::{
     common::{
@@ -236,7 +236,7 @@ where
         task::spawn(async move {
             let _entered = task_span.enter();
             if is_doc {
-                on_doc_peer(
+                on_doc_feed(
                     hypercore,
                     peer_state,
                     channel,
@@ -246,7 +246,7 @@ where
                 .await
                 .expect("doc peer connect failed");
             } else {
-                on_peer(
+                on_feed(
                     hypercore,
                     peer_state,
                     channel,
@@ -261,7 +261,7 @@ where
         spawn_local(async move {
             let _entered = task_span.enter();
             if is_doc {
-                on_doc_peer(
+                on_doc_feed(
                     hypercore,
                     peer_state,
                     channel,
@@ -271,7 +271,7 @@ where
                 .await
                 .expect("doc peer connect failed");
             } else {
-                on_peer(
+                on_feed(
                     hypercore,
                     peer_state,
                     channel,
