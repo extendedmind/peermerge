@@ -1427,6 +1427,17 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
 //
 // Utilities
 
+pub(crate) async fn get_document_by_discovery_key<T, U>(
+    documents: &Arc<DashMap<DocumentId, Document<T, U>>>,
+    discovery_key: &FeedDiscoveryKey,
+) -> Option<Document<T, U>>
+where
+    T: RandomAccess + Debug + Send + 'static,
+    U: FeedPersistence,
+{
+    get_document(documents, &document_id_from_discovery_key(discovery_key)).await
+}
+
 pub(crate) async fn get_document<T, U>(
     documents: &Arc<DashMap<DocumentId, Document<T, U>>>,
     document_id: &DocumentId,

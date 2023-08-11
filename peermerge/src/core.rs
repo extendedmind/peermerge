@@ -34,6 +34,7 @@ use crate::{
         utils::Mutex,
         FeedEventContent,
     },
+    document::get_document_by_discovery_key,
     feed::{FeedMemoryPersistence, FeedPersistence, Protocol},
     DocumentSharingInfo, PeerId, PeermergeError, StateEventContent,
 };
@@ -390,9 +391,10 @@ async fn on_feed_event_memory(
         debug!("Received event {:?}", event);
         match event.content {
             FeedEventContent::NewFeedsBroadcasted(public_keys) => {
-                let mut document = get_document(&documents, &event.doc_discovery_key)
-                    .await
-                    .unwrap();
+                let mut document =
+                    get_document_by_discovery_key(&documents, &event.doc_discovery_key)
+                        .await
+                        .unwrap();
                 document
                     .process_new_feeds_broadcasted_memory(public_keys)
                     .await;
@@ -573,9 +575,10 @@ async fn on_feed_event_disk(
         debug!("Received event {:?}", event);
         match event.content {
             FeedEventContent::NewFeedsBroadcasted(public_keys) => {
-                let mut document = get_document(&documents, &event.doc_discovery_key)
-                    .await
-                    .unwrap();
+                let mut document =
+                    get_document_by_discovery_key(&documents, &event.doc_discovery_key)
+                        .await
+                        .unwrap();
                 document
                     .process_new_feeds_broadcasted_disk(public_keys)
                     .await;
@@ -620,7 +623,7 @@ async fn process_feed_event<T, U>(
             // This is an FYI message, just continue for now
         }
         FeedEventContent::RemoteFeedSynced((peer_id, discovery_key, synced_contiguous_length)) => {
-            let document = get_document(documents, &event.doc_discovery_key)
+            let document = get_document_by_discovery_key(documents, &event.doc_discovery_key)
                 .await
                 .unwrap();
             let state_events = document
@@ -631,7 +634,7 @@ async fn process_feed_event<T, U>(
             }
         }
         FeedEventContent::FeedSynced((peer_id, discovery_key, synced_contiguous_length)) => {
-            let mut document = get_document(documents, &event.doc_discovery_key)
+            let mut document = get_document_by_discovery_key(documents, &event.doc_discovery_key)
                 .await
                 .unwrap();
             let state_events = document

@@ -14,7 +14,7 @@ use crate::common::keys::discovery_key_from_public_key;
 use crate::common::state::DocumentFeedsState;
 use crate::common::utils::Mutex;
 use crate::common::{message::FeedsChangedMessage, FeedEvent};
-use crate::document::{get_document, get_document_ids, Document};
+use crate::document::{get_document, get_document_by_discovery_key, get_document_ids, Document};
 use crate::{DocumentId, FeedPersistence, PeerId, PeermergeError, IO};
 
 #[instrument(level = "debug", skip_all, fields(is_initiator = protocol.is_initiator()))]
@@ -91,7 +91,9 @@ where
                             if is_doc {
                                 opened_documents.push(*discovery_key);
                                 let document =
-                                    get_document(&documents, discovery_key).await.unwrap();
+                                    get_document_by_discovery_key(&documents, discovery_key)
+                                        .await
+                                        .unwrap();
                                 if is_initiator {
                                     // Now that the doc channel is open, we can open channels for the peer feeds
                                     let peer_feeds = document.peer_feeds().await;
@@ -169,9 +171,12 @@ where
                                     }
                                 })
                                 .collect();
-                            let document = get_document(&documents, &message.doc_discovery_key)
-                                .await
-                                .unwrap();
+                            let document = get_document_by_discovery_key(
+                                &documents,
+                                &message.doc_discovery_key,
+                            )
+                            .await
+                            .unwrap();
                             for discovery_key in discovery_keys_to_open {
                                 if let Some(hypercore) = document.peer_feed(&discovery_key).await {
                                     let hypercore = hypercore.lock().await;
@@ -203,11 +208,13 @@ where
     T: RandomAccess + Debug + Send + 'static,
     U: FeedPersistence,
 {
-    if let Some(document) = get_document(documents, discovery_key).await {
+    if let Some(document) = get_document_by_discovery_key(documents, discovery_key).await {
         Some(document.doc_feed().await)
     } else {
         for opened_document_id in opened_documents {
-            let document = get_document(documents, opened_document_id).await.unwrap();
+            let document = get_document_by_discovery_key(documents, opened_document_id)
+                .await
+                .unwrap();
             let leaf_feed = document.peer_feed(discovery_key).await;
             if leaf_feed.is_some() {
                 return leaf_feed;
@@ -226,12 +233,14 @@ where
     T: RandomAccess + Debug + Send + 'static,
     U: FeedPersistence,
 {
-    if let Some(document) = get_document(documents, discovery_key).await {
+    if let Some(document) = get_document_by_discovery_key(documents, discovery_key).await {
         let root_feed = document.doc_feed().await;
         Some((document, root_feed, true))
     } else {
         for opened_document_id in opened_documents {
-            let document = get_document(documents, opened_document_id).await.unwrap();
+            let document = get_document_by_discovery_key(documents, opened_document_id)
+                .await
+                .unwrap();
             let leaf_feed = document.peer_feed(discovery_key).await;
             if leaf_feed.is_some() {
                 return leaf_feed.map(|feed| (document.clone(), feed, false));
