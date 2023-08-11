@@ -21,8 +21,8 @@ use wasm_bindgen_futures::spawn_local;
 
 use super::{
     messaging::{
-        create_append_local_signal, create_closed_local_signal, create_peer_synced_local_signal,
-        create_peers_changed_local_signal,
+        create_append_local_signal, create_closed_local_signal, create_feed_synced_local_signal,
+        create_feeds_changed_local_signal,
     },
     on_doc_peer, on_peer, PeerState,
 };
@@ -30,7 +30,7 @@ use crate::{
     common::{
         cipher::EntryCipher,
         entry::{shrink_entries, Entry},
-        state::{DocumentPeer, DocumentPeersState},
+        state::{DocumentFeedInfo, DocumentFeedsState},
         utils::Mutex,
         FeedEvent,
     },
@@ -134,30 +134,30 @@ where
         hypercore.info().contiguous_length
     }
 
-    pub(crate) async fn notify_peer_synced(
+    pub(crate) async fn notify_feed_synced(
         &mut self,
         contiguous_length: u64,
     ) -> Result<(), PeermergeError> {
         if !self.channel_senders.is_empty() {
-            let message = create_peer_synced_local_signal(contiguous_length);
+            let message = create_feed_synced_local_signal(contiguous_length);
             self.notify_listeners(&message).await?;
         }
         Ok(())
     }
 
-    pub(crate) async fn notify_peers_changed(
+    pub(crate) async fn notify_feeds_changed(
         &mut self,
         doc_discovery_key: FeedDiscoveryKey,
-        incoming_peers: Vec<DocumentPeer>,
-        replaced_peers: Vec<DocumentPeer>,
-        new_peers: Vec<DocumentPeer>,
+        incoming_feeds: Vec<DocumentFeedInfo>,
+        replaced_feeds: Vec<DocumentFeedInfo>,
+        feeds_to_create: Vec<DocumentFeedInfo>,
     ) -> Result<(), PeermergeError> {
         if !self.channel_senders.is_empty() {
-            let message = create_peers_changed_local_signal(
+            let message = create_feeds_changed_local_signal(
                 doc_discovery_key,
-                incoming_peers,
-                replaced_peers,
-                new_peers,
+                incoming_feeds,
+                replaced_feeds,
+                feeds_to_create,
             );
             self.notify_listeners(&message).await?;
         }
@@ -214,7 +214,7 @@ where
     pub(super) fn on_channel(
         &mut self,
         is_doc: bool,
-        peers_state: Option<DocumentPeersState>,
+        peers_state: Option<DocumentFeedsState>,
         peer_id: Option<PeerId>,
         doc_discovery_key: FeedDiscoveryKey,
         channel: Channel,

@@ -15,7 +15,7 @@ use crate::{
 
 use super::{
     keys::discovery_key_from_public_key,
-    state::{DocumentContent, DocumentPeer, DocumentPeersState},
+    state::{DocumentContent, DocumentFeedInfo, DocumentFeedsState},
 };
 #[derive(Debug)]
 pub(crate) struct PeermergeStateWrapper<T>
@@ -96,29 +96,29 @@ impl<T> DocStateWrapper<T>
 where
     T: RandomAccess + Debug + Send,
 {
-    pub(crate) async fn process_incoming_peers(
+    pub(crate) async fn process_incoming_feeds(
         &mut self,
-        incoming_peers: &[DocumentPeer],
-    ) -> (bool, Vec<DocumentPeer>, Vec<DocumentPeer>) {
-        let (changed, replaced_peers, peers_to_create) =
-            self.state.peers_state.merge_incoming_peers(incoming_peers);
+        incoming_feeds: &[DocumentFeedInfo],
+    ) -> (bool, Vec<DocumentFeedInfo>, Vec<DocumentFeedInfo>) {
+        let (changed, replaced_feeds, feeds_to_create) =
+            self.state.feeds_state.merge_incoming_feeds(incoming_feeds);
         if changed {
             write_document_state(&self.state, &mut self.storage).await;
         }
-        (changed, replaced_peers, peers_to_create)
+        (changed, replaced_feeds, feeds_to_create)
     }
 
-    pub(crate) fn content_peers_state_and_unapplied_entries_mut(
+    pub(crate) fn content_feeds_state_and_unapplied_entries_mut(
         &mut self,
     ) -> Option<(
         &mut DocumentContent,
-        &mut DocumentPeersState,
+        &mut DocumentFeedsState,
         &mut UnappliedEntries,
     )> {
         if let Some(content) = self.state.content.as_mut() {
             Some((
                 content,
-                &mut self.state.peers_state,
+                &mut self.state.feeds_state,
                 &mut self.unapplied_entries,
             ))
         } else {
@@ -126,10 +126,10 @@ where
         }
     }
 
-    pub(crate) fn peers_state_and_unappliend_entries_mut(
+    pub(crate) fn feeds_state_and_unappliend_entries_mut(
         &mut self,
-    ) -> (&mut DocumentPeersState, &mut UnappliedEntries) {
-        (&mut self.state.peers_state, &mut self.unapplied_entries)
+    ) -> (&mut DocumentFeedsState, &mut UnappliedEntries) {
+        (&mut self.state.feeds_state, &mut self.unapplied_entries)
     }
 
     pub(crate) fn filter_watched_patches(&self, patches: &mut Vec<Patch>) {
@@ -165,8 +165,8 @@ where
         discovery_key_from_public_key(
             &self
                 .state
-                .peers_state
-                .write_peer
+                .feeds_state
+                .write_feed
                 .clone()
                 .expect("TODO: read-only hypercore")
                 .public_key,

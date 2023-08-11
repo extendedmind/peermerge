@@ -9,11 +9,11 @@ use std::io::ErrorKind;
 use std::sync::Arc;
 use tracing::{debug, instrument};
 
-use super::{messaging::PEERS_CHANGED_LOCAL_SIGNAL_NAME, HypercoreWrapper};
+use super::{messaging::FEEDS_CHANGED_LOCAL_SIGNAL_NAME, HypercoreWrapper};
 use crate::common::keys::discovery_key_from_public_key;
-use crate::common::state::DocumentPeersState;
+use crate::common::state::DocumentFeedsState;
 use crate::common::utils::Mutex;
-use crate::common::{message::PeersChangedMessage, FeedEvent};
+use crate::common::{message::FeedsChangedMessage, FeedEvent};
 use crate::document::{get_document, get_document_ids, Document};
 use crate::{DocumentId, FeedPersistence, PeerId, PeermergeError, IO};
 
@@ -102,11 +102,11 @@ where
                                     }
                                 }
                             }
-                            let (peers_state, peer_id): (
-                                Option<DocumentPeersState>,
+                            let (feeds_state, peer_id): (
+                                Option<DocumentFeedsState>,
                                 Option<PeerId>,
                             ) = if is_doc {
-                                (Some(document.peers_state().await), None)
+                                (Some(document.feeds_state().await), None)
                             } else {
                                 (
                                     None,
@@ -118,7 +118,7 @@ where
                             let channel_sender = channel.local_sender();
                             hypercore.on_channel(
                                 is_doc,
-                                peers_state,
+                                feeds_state,
                                 peer_id,
                                 document.id(),
                                 channel,
@@ -146,11 +146,11 @@ where
                         }
                     }
                     Event::LocalSignal((name, data)) => match name.as_str() {
-                        PEERS_CHANGED_LOCAL_SIGNAL_NAME => {
+                        FEEDS_CHANGED_LOCAL_SIGNAL_NAME => {
                             let mut dec_state = State::from_buffer(&data);
-                            let message: PeersChangedMessage = dec_state.decode(&data)?;
+                            let message: FeedsChangedMessage = dec_state.decode(&data)?;
                             let discovery_keys_to_open: Vec<[u8; 32]> = message
-                                .peers_to_create
+                                .peers_to_feeds
                                 .iter()
                                 .map(|peer| discovery_key_from_public_key(&peer.public_key))
                                 .filter(|discovery_key| {

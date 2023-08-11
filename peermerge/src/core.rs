@@ -394,7 +394,7 @@ async fn on_feed_event_memory(
                     .await
                     .unwrap();
                 document
-                    .process_new_peers_broadcasted_memory(public_keys)
+                    .process_new_feeds_broadcasted_memory(public_keys)
                     .await;
             }
             _ => process_feed_event(event, &mut state_event_sender, &mut documents).await,
@@ -577,7 +577,7 @@ async fn on_feed_event_disk(
                     .await
                     .unwrap();
                 document
-                    .process_new_peers_broadcasted_disk(public_keys)
+                    .process_new_feeds_broadcasted_disk(public_keys)
                     .await;
             }
             _ => process_feed_event(event, &mut state_event_sender, &mut documents).await,

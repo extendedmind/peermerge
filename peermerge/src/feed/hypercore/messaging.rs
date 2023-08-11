@@ -12,8 +12,8 @@ use tracing::{debug, instrument};
 use super::PeerState;
 use crate::{
     common::{
-        message::{BroadcastMessage, PeerSyncedMessage, PeersChangedMessage},
-        state::{DocumentPeer, DocumentPeersState},
+        message::{BroadcastMessage, FeedSyncedMessage, FeedsChangedMessage},
+        state::{DocumentFeedInfo, DocumentFeedsState},
         utils::Mutex,
         FeedEvent,
         FeedEventContent::*,
@@ -27,14 +27,14 @@ const PEERMERGE_BROADCAST_MSG: &str = "peermerge/v1/broadcast";
 
 // Local signals
 const APPEND_LOCAL_SIGNAL_NAME: &str = "append";
-const PEER_SYNCED_LOCAL_SIGNAL_NAME: &str = "peer_synced";
-pub(super) const PEERS_CHANGED_LOCAL_SIGNAL_NAME: &str = "peers_changed";
+const FEED_SYNCED_LOCAL_SIGNAL_NAME: &str = "feed_synced";
+pub(super) const FEEDS_CHANGED_LOCAL_SIGNAL_NAME: &str = "feeds_changed";
 const CLOSED_LOCAL_SIGNAL_NAME: &str = "closed";
 
-pub(super) fn create_broadcast_message(peers_state: &DocumentPeersState) -> Message {
+pub(super) fn create_broadcast_message(feeds_state: &DocumentFeedsState) -> Message {
     let broadcast_message: BroadcastMessage = BroadcastMessage {
-        write_peer: peers_state.write_peer.clone(),
-        peers: peers_state.peers.clone(),
+        write_peer: feeds_state.write_feed.clone(),
+        peers: feeds_state.feeds.clone(),
     };
     let mut enc_state = State::new();
     enc_state
@@ -62,8 +62,8 @@ pub(super) fn create_append_local_signal(length: u64) -> Message {
     Message::LocalSignal((APPEND_LOCAL_SIGNAL_NAME.to_string(), buffer.to_vec()))
 }
 
-pub(super) fn create_peer_synced_local_signal(contiguous_length: u64) -> Message {
-    let message = PeerSyncedMessage::new(contiguous_length);
+pub(super) fn create_feed_synced_local_signal(contiguous_length: u64) -> Message {
+    let message = FeedSyncedMessage::new(contiguous_length);
     let mut enc_state = State::new();
     enc_state
         .preencode(&message)
@@ -72,30 +72,30 @@ pub(super) fn create_peer_synced_local_signal(contiguous_length: u64) -> Message
     enc_state
         .encode(&message, &mut buffer)
         .expect("Encoding peer synced local signal should not fail");
-    Message::LocalSignal((PEER_SYNCED_LOCAL_SIGNAL_NAME.to_string(), buffer.to_vec()))
+    Message::LocalSignal((FEED_SYNCED_LOCAL_SIGNAL_NAME.to_string(), buffer.to_vec()))
 }
 
-pub(super) fn create_peers_changed_local_signal(
+pub(super) fn create_feeds_changed_local_signal(
     doc_discovery_key: FeedDiscoveryKey,
-    incoming_peers: Vec<DocumentPeer>,
-    replaced_peers: Vec<DocumentPeer>,
-    peers_to_create: Vec<DocumentPeer>,
+    incoming_feeds: Vec<DocumentFeedInfo>,
+    replaced_feeds: Vec<DocumentFeedInfo>,
+    feeds_to_create: Vec<DocumentFeedInfo>,
 ) -> Message {
-    let message = PeersChangedMessage {
+    let message = FeedsChangedMessage {
         doc_discovery_key,
-        incoming_peers,
-        replaced_peers,
-        peers_to_create,
+        incoming_feeds,
+        replaced_feeds,
+        peers_to_feeds: feeds_to_create,
     };
     let mut enc_state = State::new();
     enc_state
         .preencode(&message)
-        .expect("Pre-encoding new peers created local signal should not fail");
+        .expect("Pre-encoding feeds changed local signal should not fail");
     let mut buffer = enc_state.create_buffer();
     enc_state
         .encode(&message, &mut buffer)
-        .expect("Encoding new peers created local signal should not fail");
-    Message::LocalSignal((PEERS_CHANGED_LOCAL_SIGNAL_NAME.to_string(), buffer.to_vec()))
+        .expect("Encoding feeds changed local signal should not fail");
+    Message::LocalSignal((FEEDS_CHANGED_LOCAL_SIGNAL_NAME.to_string(), buffer.to_vec()))
 }
 
 pub(super) fn create_closed_local_signal() -> Message {
@@ -359,15 +359,15 @@ where
                     peer_state.is_doc,
                     "Only doc peer should ever get broadcast messages"
                 );
-                let peers_state = peer_state.peers_state.as_mut().unwrap();
+                let feeds_state = peer_state.feeds_state.as_mut().unwrap();
                 let mut dec_state = State::from_buffer(&message.message);
                 let broadcast_message: BroadcastMessage = dec_state.decode(&message.message)?;
-                let new_remote_peers = peers_state
-                    .filter_new_peers(&broadcast_message.write_peer, &broadcast_message.peers);
+                let new_remote_peers = feeds_state
+                    .filter_new_feeds(&broadcast_message.write_peer, &broadcast_message.peers);
 
                 if new_remote_peers.is_empty()
-                    && peers_state
-                        .peers_match(&broadcast_message.write_peer, &broadcast_message.peers)
+                    && feeds_state
+                        .feeds_match(&broadcast_message.write_peer, &broadcast_message.peers)
                 {
                     // Don't re-initialize if this has already been synced, meaning this is a
                     // broadcast that notifies a new third party peer after the initial handshake.
@@ -408,9 +408,9 @@ where
                     channel.send(Message::Range(range_msg)).await?;
                 }
             }
-            PEER_SYNCED_LOCAL_SIGNAL_NAME => {
+            FEED_SYNCED_LOCAL_SIGNAL_NAME => {
                 let mut dec_state = State::from_buffer(&data);
-                let message: PeerSyncedMessage = dec_state.decode(&data)?;
+                let message: FeedSyncedMessage = dec_state.decode(&data)?;
                 if message.contiguous_length > peer_state.synced_contiguous_length
                     && peer_state.contiguous_range_sent < message.contiguous_length
                 {
@@ -430,25 +430,25 @@ where
                     channel.send(Message::Range(range_msg)).await?;
                 }
             }
-            PEERS_CHANGED_LOCAL_SIGNAL_NAME => {
+            FEEDS_CHANGED_LOCAL_SIGNAL_NAME => {
                 assert!(
                     peer_state.is_doc,
                     "Only doc feed should ever get new peers created messages"
                 );
-                let peers_state = peer_state.peers_state.as_mut().unwrap();
+                let feeds_state = peer_state.feeds_state.as_mut().unwrap();
                 let mut dec_state = State::from_buffer(&data);
-                let new_peers_message: PeersChangedMessage = dec_state.decode(&data)?;
+                let new_peers_message: FeedsChangedMessage = dec_state.decode(&data)?;
 
                 // Merge new peers to the peer state
-                peers_state.merge_incoming_peers(&new_peers_message.incoming_peers);
+                feeds_state.merge_incoming_feeds(&new_peers_message.incoming_feeds);
 
                 // Transmit this event forward to the protocol
                 channel
-                    .signal_local_protocol(PEERS_CHANGED_LOCAL_SIGNAL_NAME, data)
+                    .signal_local_protocol(FEEDS_CHANGED_LOCAL_SIGNAL_NAME, data)
                     .await?;
 
                 // Create new broadcast message
-                let mut messages = vec![create_broadcast_message(peers_state)];
+                let mut messages = vec![create_broadcast_message(feeds_state)];
 
                 // If sync has not been started, start it now
                 if !peer_state.sync_sent {

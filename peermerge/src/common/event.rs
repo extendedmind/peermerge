@@ -2,7 +2,7 @@ use automerge::Patch;
 
 use crate::{feed::FeedDiscoveryKey, DocumentId, NameDescription, PeerId};
 
-use super::state::DocumentPeer;
+use super::state::DocumentFeedInfo;
 
 #[derive(Clone, Debug)]
 pub struct StateEvent {
@@ -45,7 +45,7 @@ impl FeedEvent {
 
 #[derive(Clone, Debug)]
 pub(crate) enum FeedEventContent {
-    NewFeedsBroadcasted(Vec<DocumentPeer>),
+    NewFeedsBroadcasted(Vec<DocumentFeedInfo>),
     FeedSynced((Option<PeerId>, FeedDiscoveryKey, u64)),
     FeedDisconnected(u64),
     RemoteFeedSynced((Option<PeerId>, FeedDiscoveryKey, u64)),

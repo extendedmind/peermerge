@@ -1,15 +1,15 @@
 use crate::feed::FeedDiscoveryKey;
 
-use super::state::DocumentPeer;
+use super::state::DocumentFeedInfo;
 
 /// An BroadcastMessage transmits all of the active public keys the peer knows to the other peer
 #[derive(Debug)]
 pub(crate) struct BroadcastMessage {
-    pub(crate) write_peer: Option<DocumentPeer>,
-    pub(crate) peers: Vec<DocumentPeer>,
+    pub(crate) write_peer: Option<DocumentFeedInfo>,
+    pub(crate) peers: Vec<DocumentFeedInfo>,
 }
 impl BroadcastMessage {
-    pub(crate) fn new(write_peer: Option<DocumentPeer>, peers: Vec<DocumentPeer>) -> Self {
+    pub(crate) fn new(write_peer: Option<DocumentFeedInfo>, peers: Vec<DocumentFeedInfo>) -> Self {
         Self { write_peer, peers }
     }
 }
@@ -17,35 +17,35 @@ impl BroadcastMessage {
 /// An NewPeersCreatedMessage is an internal message that contains all of the
 /// ids and public keys of created and changed peer hypercores.
 #[derive(Debug)]
-pub(crate) struct PeersChangedMessage {
+pub(crate) struct FeedsChangedMessage {
     pub(crate) doc_discovery_key: FeedDiscoveryKey,
-    pub(crate) incoming_peers: Vec<DocumentPeer>,
-    pub(crate) replaced_peers: Vec<DocumentPeer>,
-    pub(crate) peers_to_create: Vec<DocumentPeer>,
+    pub(crate) incoming_feeds: Vec<DocumentFeedInfo>,
+    pub(crate) replaced_feeds: Vec<DocumentFeedInfo>,
+    pub(crate) peers_to_feeds: Vec<DocumentFeedInfo>,
 }
-impl PeersChangedMessage {
+impl FeedsChangedMessage {
     pub(crate) fn new(
         doc_discovery_key: FeedDiscoveryKey,
-        incoming_peers: Vec<DocumentPeer>,
-        replaced_peers: Vec<DocumentPeer>,
-        peers_to_create: Vec<DocumentPeer>,
+        incoming_feeds: Vec<DocumentFeedInfo>,
+        replaced_feeds: Vec<DocumentFeedInfo>,
+        peers_to_feeds: Vec<DocumentFeedInfo>,
     ) -> Self {
         Self {
             doc_discovery_key,
-            incoming_peers,
-            replaced_peers,
-            peers_to_create,
+            incoming_feeds,
+            replaced_feeds,
+            peers_to_feeds,
         }
     }
 }
 
-/// An PeerSyncedMessage is an internal message that contains new length
+/// An FeedSyncedMessage is an internal message that contains new length
 /// of a hypercore for inter-protocol signaling.
 #[derive(Debug)]
-pub(crate) struct PeerSyncedMessage {
+pub(crate) struct FeedSyncedMessage {
     pub(crate) contiguous_length: u64,
 }
-impl PeerSyncedMessage {
+impl FeedSyncedMessage {
     pub(crate) fn new(contiguous_length: u64) -> Self {
         Self { contiguous_length }
     }
