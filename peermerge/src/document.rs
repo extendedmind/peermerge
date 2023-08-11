@@ -1196,7 +1196,14 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
     }
 
     pub(crate) async fn info_disk(data_root_dir: &PathBuf) -> Result<DocumentInfo, PeermergeError> {
-        let document_state_wrapper = DocStateWrapper::open_disk(data_root_dir).await?;
+        let mut document_state_wrapper = DocStateWrapper::open_disk(data_root_dir).await?;
+        if let Some((content, _, _)) =
+            document_state_wrapper.content_feeds_state_and_unapplied_entries_mut()
+        {
+            let meta_automerge_doc =
+                init_automerge_doc_from_data(&content.peer_id, &content.meta_doc_data);
+            content.meta_automerge_doc = Some(meta_automerge_doc);
+        }
         Ok(document_state_wrapper.state().info())
     }
 
@@ -1221,7 +1228,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
             false
         };
         let doc_discovery_key = state.doc_discovery_key;
-        let log_context = log_context(&state);
+        let log_context = log_context(state);
 
         // Open root feed
         let feeds: DashMap<[u8; 32], Arc<Mutex<Feed<FeedDiskPersistence>>>> = DashMap::new();
