@@ -35,9 +35,12 @@ pub async fn setup_peermerge_mesh_memory(
         )
         .await;
     let (doc_info, _) = peermerge_creator
-        .create_new_document_memory(NameDescription::new("bench"), encrypted, |tx| {
-            tx.put(ROOT, "version", 1)
-        })
+        .create_new_document_memory(
+            "bench",
+            Some(NameDescription::new(&format!("{peers}"))),
+            encrypted,
+            |tx| tx.put(ROOT, "version", 1),
+        )
         .await
         .unwrap();
     let encryption_key = peermerge_creator.encryption_key(&doc_info.id()).await;
@@ -46,7 +49,12 @@ pub async fn setup_peermerge_mesh_memory(
         .await;
 
     let mut senders = Vec::with_capacity(peers);
-    let doc_url = peermerge_creator.doc_url(&doc_info.id()).await;
+    let doc_url = peermerge_creator
+        .sharing_info(&doc_info.id())
+        .await
+        .unwrap()
+        .doc_url
+        .unwrap();
 
     for i in 1..peers {
         let (proto_responder, proto_initiator) = create_pair_memory().await;
@@ -118,9 +126,12 @@ pub async fn setup_peermerge_mesh_disk(
         )
         .await;
     let (doc_info, _) = peermerge_creator
-        .create_new_document_disk(NameDescription::new("bench"), encrypted, |tx| {
-            tx.put(ROOT, "version", 1)
-        })
+        .create_new_document_disk(
+            "bench",
+            Some(NameDescription::new(&format!("{peers}"))),
+            encrypted,
+            |tx| tx.put(ROOT, "version", 1),
+        )
         .await
         .unwrap();
     let encryption_key = peermerge_creator.encryption_key(&doc_info.id()).await;
@@ -129,7 +140,12 @@ pub async fn setup_peermerge_mesh_disk(
         .await;
 
     let mut senders = Vec::with_capacity(peers);
-    let doc_url = peermerge_creator.doc_url(&doc_info.id()).await;
+    let doc_url = peermerge_creator
+        .sharing_info(&doc_info.id())
+        .await
+        .unwrap()
+        .doc_url
+        .unwrap();
 
     for i in 1..peers {
         let (proto_responder, proto_initiator) = create_pair_memory().await;
@@ -232,22 +248,34 @@ where
 
     // TODO: Check what these should be for peers > 3
     let mut sync_remaining = i * 2;
-    let mut remote_sync_remaining = if i == 1 { 3 } else { 5 };
+    let mut remote_sync_remaining = if i == 1 { 2 } else { 4 };
     let mut document_initialized_remaining = if i == 1 { 2 } else { 1 };
 
     while let Some(event) = state_event_receiver.next().await {
         match event.content {
             RemotePeerSynced(..) => {
                 remote_sync_remaining -= 1;
+                // println!(
+                //     "RPS i={} sr={}, rsr={}, pr={}",
+                //     i, sync_remaining, remote_sync_remaining, document_initialized_remaining
+                // );
             }
             PeerSynced(..) => {
                 sync_remaining -= 1;
+                // println!(
+                //     "PS i={} sr={}, rsr={}, pr={}",
+                //     i, sync_remaining, remote_sync_remaining, document_initialized_remaining
+                // );
             }
             DocumentChanged(..) => {
                 // Ignore
             }
             DocumentInitialized(..) => {
                 document_initialized_remaining -= 1;
+                // println!(
+                //     "DI i={} sr={}, rsr={}, pr={}",
+                //     i, sync_remaining, remote_sync_remaining, document_initialized_remaining
+                // );
             }
             Reattached(_) => {
                 panic!("Should not get reattached");
