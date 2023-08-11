@@ -1,7 +1,6 @@
 use std::fmt::Debug;
 
 use automerge::{ReadDoc, ROOT};
-use tracing::debug;
 use uuid::Uuid;
 
 use crate::{
@@ -488,7 +487,7 @@ impl DocumentFeedsState {
     }
 }
 
-#[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord)]
+#[derive(Clone, Debug, PartialOrd, Eq, Ord)]
 pub(crate) struct DocumentFeedInfo {
     /// Id of the peer.
     pub(crate) peer_id: PeerId,
@@ -503,6 +502,16 @@ pub(crate) struct DocumentFeedInfo {
     /// to speed up searching based on it.
     pub(crate) discovery_key: Option<FeedDiscoveryKey>,
 }
+
+impl PartialEq for DocumentFeedInfo {
+    #[inline]
+    fn eq(&self, other: &DocumentFeedInfo) -> bool {
+        self.peer_id == other.peer_id
+            && self.public_key == other.public_key
+            && self.replaced_by_public_key == other.replaced_by_public_key
+    }
+}
+
 impl DocumentFeedInfo {
     pub(crate) fn new(
         id: PeerId,
