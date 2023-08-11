@@ -250,7 +250,7 @@ impl DocumentState {
                     .unwrap();
                 let peer_key = encode_base64_nopad(peer_id);
                 let mut peers_id_keys = meta_automerge_doc.keys(&peers_id);
-                if !peers_id_keys.any(|key| key == peer_key) {
+                if peers_id_keys.any(|key| key == peer_key) {
                     let peer_id = meta_automerge_doc
                         .get(&peers_id, peer_key)
                         .unwrap()
