@@ -15,7 +15,7 @@ use crate::{
 
 use super::{
     keys::discovery_key_from_public_key,
-    state::{DocumentContent, DocumentPeer},
+    state::{DocumentContent, DocumentPeer, DocumentPeersState},
 };
 #[derive(Debug)]
 pub(crate) struct PeermergeStateWrapper<T>
@@ -98,7 +98,7 @@ where
 {
     pub(crate) async fn process_incoming_peers(
         &mut self,
-        incoming_peers: &Vec<DocumentPeer>,
+        incoming_peers: &[DocumentPeer],
     ) -> (bool, Vec<DocumentPeer>, Vec<DocumentPeer>) {
         let (changed, replaced_peers, peers_to_create) =
             self.state.peers_state.merge_incoming_peers(incoming_peers);
@@ -108,19 +108,28 @@ where
         (changed, replaced_peers, peers_to_create)
     }
 
-    pub(crate) fn content_and_unapplied_entries_mut(
+    pub(crate) fn content_peers_state_and_unapplied_entries_mut(
         &mut self,
-    ) -> Option<(&mut DocumentContent, &mut UnappliedEntries)> {
+    ) -> Option<(
+        &mut DocumentContent,
+        &mut DocumentPeersState,
+        &mut UnappliedEntries,
+    )> {
         if let Some(content) = self.state.content.as_mut() {
-            let unapplied_entries = &mut self.unapplied_entries;
-            Some((content, unapplied_entries))
+            Some((
+                content,
+                &mut self.state.peers_state,
+                &mut self.unapplied_entries,
+            ))
         } else {
             None
         }
     }
 
-    pub(crate) fn unappliend_entries_mut(&mut self) -> &mut UnappliedEntries {
-        &mut self.unapplied_entries
+    pub(crate) fn peers_state_and_unappliend_entries_mut(
+        &mut self,
+    ) -> (&mut DocumentPeersState, &mut UnappliedEntries) {
+        (&mut self.state.peers_state, &mut self.unapplied_entries)
     }
 
     pub(crate) fn filter_watched_patches(&self, patches: &mut Vec<Patch>) {
@@ -152,7 +161,7 @@ where
         }
     }
 
-    pub(crate) fn write_discovery_key(&self) -> [u8; 32] {
+    pub(crate) fn write_discovery_key(&self) -> FeedDiscoveryKey {
         discovery_key_from_public_key(
             &self
                 .state

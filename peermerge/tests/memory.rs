@@ -3,7 +3,7 @@ use automerge::{ObjId, ROOT};
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use futures::stream::StreamExt;
 use peermerge::{
-    DocumentId, FeedMemoryPersistence, NameDescription, Patch, Peermerge, StateEvent,
+    DocumentId, FeedMemoryPersistence, NameDescription, Patch, PeerId, Peermerge, StateEvent,
     StateEventContent::*,
 };
 use random_access_memory::RandomAccessMemory;
@@ -167,7 +167,7 @@ async fn process_joiner_state_event(
     let mut text_id: Option<ObjId> = None;
     let mut document_changes: Vec<Vec<Patch>> = vec![];
     let mut peer_synced: HashMap<String, u64> = HashMap::new();
-    let mut remote_peer_synced: HashMap<[u8; 32], u64> = HashMap::new();
+    let mut remote_peer_synced: HashMap<PeerId, u64> = HashMap::new();
     while let Some(event) = joiner_state_event_receiver.next().await {
         info!(
             "Received event {:?}, document_changes={}",
@@ -176,7 +176,12 @@ async fn process_joiner_state_event(
         );
 
         match event.content {
-            PeerSynced((Some(name), _, len)) => {
+            PeerSynced((peer_id, _, len)) => {
+                let name = peermerge
+                    .peer_header(&event.document_id, &peer_id)
+                    .await
+                    .unwrap()
+                    .name;
                 if !peer_synced.contains_key("creator") {
                     assert_eq!(name, "creator");
                     let local_texts_id = peermerge
@@ -215,8 +220,8 @@ async fn process_joiner_state_event(
                 }
                 peer_synced.insert(name.clone(), len);
             }
-            RemotePeerSynced((discovery_key, len)) => {
-                remote_peer_synced.insert(discovery_key, len);
+            RemotePeerSynced((peer_id, _, len)) => {
+                remote_peer_synced.insert(peer_id, len);
             }
             DocumentInitialized(..) => {
                 // Skip
@@ -324,7 +329,7 @@ async fn process_creator_state_events(
     let mut document_changes: Vec<Vec<Patch>> = vec![];
     let mut latecomer_attached = false;
     let mut peer_synced: HashMap<String, u64> = HashMap::new();
-    let mut remote_peer_synced: HashMap<[u8; 32], u64> = HashMap::new();
+    let mut remote_peer_synced: HashMap<PeerId, u64> = HashMap::new();
 
     while let Some(event) = creator_state_event_receiver.next().await {
         info!(
@@ -335,7 +340,12 @@ async fn process_creator_state_events(
 
         let text_id = text_id.clone();
         match event.content {
-            PeerSynced((Some(name), _, len)) => {
+            PeerSynced((peer_id, _, len)) => {
+                let name = peermerge
+                    .peer_header(&event.document_id, &peer_id)
+                    .await
+                    .unwrap()
+                    .name;
                 peer_synced.insert(name.clone(), len);
                 if latecomer_attached {
                     assert!(name == "joiner" || name == "latecomer");
@@ -343,7 +353,7 @@ async fn process_creator_state_events(
                     assert_eq!(name, "joiner");
                 }
             }
-            RemotePeerSynced((discovery_key, len)) => {
+            RemotePeerSynced((peer_id, _, len)) => {
                 if remote_peer_synced.is_empty() {
                     peermerge
                         .transact_mut(
@@ -355,7 +365,7 @@ async fn process_creator_state_events(
                         .unwrap();
                     assert_text_equals(&peermerge, &doc_id, &text_id, "Hello").await;
                 }
-                remote_peer_synced.insert(discovery_key, len);
+                remote_peer_synced.insert(peer_id, len);
             }
             DocumentChanged((_, patches)) => {
                 let document_changes_len = document_changes.len();
@@ -515,7 +525,7 @@ async fn process_latecomer_state_event(
     let mut text_id: Option<ObjId> = None;
     let mut document_changes: Vec<Vec<Patch>> = vec![];
     let mut peer_synced: HashMap<String, u64> = HashMap::new();
-    let mut remote_peer_synced: HashMap<[u8; 32], u64> = HashMap::new();
+    let mut remote_peer_synced: HashMap<PeerId, u64> = HashMap::new();
     while let Some(event) = latecomer_state_event_receiver.next().await {
         info!(
             "Received event {:?}, document_changes={}",
@@ -523,7 +533,12 @@ async fn process_latecomer_state_event(
             document_changes.len()
         );
         match event.content {
-            PeerSynced((Some(name), _, len)) => {
+            PeerSynced((peer_id, _, len)) => {
+                let name = peermerge
+                    .peer_header(&event.document_id, &peer_id)
+                    .await
+                    .unwrap()
+                    .name;
                 assert!(name == "creator" || name == "joiner");
                 peer_synced.insert(name.clone(), len);
                 if peer_synced.contains_key("creator")
@@ -563,8 +578,8 @@ async fn process_latecomer_state_event(
                         .await?;
                 }
             }
-            RemotePeerSynced((discovery_key, len)) => {
-                remote_peer_synced.insert(discovery_key, len);
+            RemotePeerSynced((peer_id, _, len)) => {
+                remote_peer_synced.insert(peer_id, len);
             }
             DocumentInitialized(..) => {
                 // Ignore, this happens with the root hypercore

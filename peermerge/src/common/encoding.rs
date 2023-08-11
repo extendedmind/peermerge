@@ -135,7 +135,7 @@ impl CompactEncoding<DocumentState> for State {
             proxy,
             doc_public_key,
             encrypted,
-            DocumentPeersState { peers, write_peer },
+            DocumentPeersState::new_from_data(write_peer, peers),
             content,
         ))
     }

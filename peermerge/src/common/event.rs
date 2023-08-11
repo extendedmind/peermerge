@@ -1,6 +1,6 @@
 use automerge::Patch;
 
-use crate::{DocumentId, NameDescription};
+use crate::{feed::FeedDiscoveryKey, DocumentId, NameDescription, PeerId};
 
 use super::state::DocumentPeer;
 
@@ -21,22 +21,21 @@ impl StateEvent {
 
 #[derive(Clone, Debug)]
 pub enum StateEventContent {
-    PeerSynced((Option<String>, [u8; 32], u64)),
-    RemotePeerSynced(([u8; 32], u64)),
+    PeerSynced((PeerId, FeedDiscoveryKey, u64)),
+    RemotePeerSynced((PeerId, FeedDiscoveryKey, u64)),
     Reattached(NameDescription),
     DocumentInitialized(bool, Option<DocumentId>),
     DocumentChanged((Option<Vec<u8>>, Vec<Patch>)),
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct PeerEvent {
-    // FIXME: Rename to document_id: DocumentId
+pub(crate) struct FeedEvent {
     pub doc_discovery_key: [u8; 32],
-    pub content: PeerEventContent,
+    pub content: FeedEventContent,
 }
 
-impl PeerEvent {
-    pub fn new(doc_discovery_key: [u8; 32], content: PeerEventContent) -> Self {
+impl FeedEvent {
+    pub fn new(doc_discovery_key: [u8; 32], content: FeedEventContent) -> Self {
         Self {
             doc_discovery_key,
             content,
@@ -45,9 +44,9 @@ impl PeerEvent {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) enum PeerEventContent {
-    NewPeersBroadcasted(Vec<DocumentPeer>),
-    PeerSynced(([u8; 32], u64)),
-    PeerDisconnected(u64),
-    RemotePeerSynced(([u8; 32], u64)),
+pub(crate) enum FeedEventContent {
+    NewFeedsBroadcasted(Vec<DocumentPeer>),
+    FeedSynced((Option<PeerId>, FeedDiscoveryKey, u64)),
+    FeedDisconnected(u64),
+    RemoteFeedSynced((Option<PeerId>, FeedDiscoveryKey, u64)),
 }

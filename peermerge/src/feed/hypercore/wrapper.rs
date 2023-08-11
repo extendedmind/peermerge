@@ -32,10 +32,10 @@ use crate::{
         entry::{shrink_entries, Entry},
         state::{DocumentPeer, DocumentPeersState},
         utils::Mutex,
-        PeerEvent,
+        FeedEvent,
     },
     feed::FeedDiscoveryKey,
-    PeermergeError,
+    PeerId, PeermergeError,
 };
 
 #[derive(Debug)]
@@ -214,18 +214,19 @@ where
     pub(super) fn on_channel(
         &mut self,
         is_doc: bool,
+        peers_state: Option<DocumentPeersState>,
+        peer_id: Option<PeerId>,
         doc_discovery_key: FeedDiscoveryKey,
         channel: Channel,
         channel_receiver: ChannelReceiver<Message>,
         channel_sender: ChannelSender<Message>,
-        peers_state: DocumentPeersState,
-        peer_event_sender: &mut UnboundedSender<PeerEvent>,
+        feed_event_sender: &mut UnboundedSender<FeedEvent>,
     ) {
         debug!("Processing channel id={}", channel.id(),);
         self.channel_senders.push(channel_sender);
-        let peer_state = PeerState::new(is_doc, doc_discovery_key, peers_state);
+        let peer_state = PeerState::new(is_doc, doc_discovery_key, peers_state, peer_id);
         let hypercore = self.hypercore.clone();
-        let mut peer_event_sender_for_task = peer_event_sender.clone();
+        let mut feed_event_sender_for_task = feed_event_sender.clone();
         let task_span = if is_doc {
             tracing::debug_span!("call_on_doc_peer").or_current()
         } else {
@@ -240,7 +241,7 @@ where
                     peer_state,
                     channel,
                     channel_receiver,
-                    &mut peer_event_sender_for_task,
+                    &mut feed_event_sender_for_task,
                 )
                 .await
                 .expect("doc peer connect failed");
@@ -250,7 +251,7 @@ where
                     peer_state,
                     channel,
                     channel_receiver,
-                    &mut peer_event_sender_for_task,
+                    &mut feed_event_sender_for_task,
                 )
                 .await
                 .expect("peer connect failed");
@@ -265,7 +266,7 @@ where
                     peer_state,
                     channel,
                     channel_receiver,
-                    &mut peer_event_sender_for_task,
+                    &mut feed_event_sender_for_task,
                 )
                 .await
                 .expect("doc peer connect failed");
@@ -275,7 +276,7 @@ where
                     peer_state,
                     channel,
                     channel_receiver,
-                    &mut peer_event_sender_for_task,
+                    &mut feed_event_sender_for_task,
                 )
                 .await
                 .expect("peer connect failed");

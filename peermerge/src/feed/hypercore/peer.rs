@@ -11,7 +11,7 @@ use super::{
     on_message, PeerState,
 };
 use crate::{
-    common::{utils::Mutex, PeerEvent, PeerEventContent},
+    common::{utils::Mutex, FeedEvent, FeedEventContent},
     PeermergeError,
 };
 
@@ -21,7 +21,7 @@ pub(super) async fn on_peer<T>(
     mut peer_state: PeerState,
     mut channel: Channel,
     mut channel_receiver: ChannelReceiver<Message>,
-    peer_event_sender: &mut UnboundedSender<PeerEvent>,
+    feed_event_sender: &mut UnboundedSender<FeedEvent>,
 ) -> Result<(), PeermergeError>
 where
     T: RandomAccess + Debug + Send + 'static,
@@ -38,7 +38,7 @@ where
             &mut hypercore,
             &mut peer_state,
             &mut channel,
-            peer_event_sender,
+            feed_event_sender,
         )
         .await?;
         if exit {
@@ -55,13 +55,13 @@ pub(super) async fn on_doc_peer<T>(
     mut peer_state: PeerState,
     mut channel: Channel,
     mut channel_receiver: ChannelReceiver<Message>,
-    peer_event_sender: &mut UnboundedSender<PeerEvent>,
+    feed_event_sender: &mut UnboundedSender<FeedEvent>,
 ) -> Result<(), PeermergeError>
 where
     T: RandomAccess + Debug + Send + 'static,
 {
     // Immediately broadcast hypercores to the other end on the doc peer
-    let message = create_broadcast_message(&peer_state);
+    let message = create_broadcast_message(peer_state.peers_state.as_ref().unwrap());
     channel.send(message).await?;
 
     // Start listening on incoming messages or internal messages
@@ -72,7 +72,7 @@ where
             &mut hypercore,
             &mut peer_state,
             &mut channel,
-            peer_event_sender,
+            feed_event_sender,
         )
         .await?;
         if exit {
@@ -89,15 +89,15 @@ async fn process_message<T>(
     hypercore: &mut Arc<Mutex<Hypercore<T>>>,
     peer_state: &mut PeerState,
     channel: &mut Channel,
-    peer_event_sender: &mut UnboundedSender<PeerEvent>,
+    feed_event_sender: &mut UnboundedSender<FeedEvent>,
 ) -> Result<bool, PeermergeError>
 where
     T: RandomAccess + Debug + Send + 'static,
 {
     let event = on_message(hypercore, peer_state, channel, message).await?;
     if let Some(event) = event {
-        peer_event_sender.unbounded_send(event.clone())?;
-        if let PeerEventContent::PeerDisconnected(_) = event.content {
+        feed_event_sender.unbounded_send(event.clone())?;
+        if let FeedEventContent::FeedDisconnected(_) = event.content {
             return Ok(true);
         }
     }

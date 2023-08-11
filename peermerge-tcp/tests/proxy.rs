@@ -128,7 +128,7 @@ async fn process_proxy_state_event(
     while let Some(event) = proxy_state_event_receiver.next().await {
         info!("Received event {:?}", event);
         match event.content {
-            PeerSynced((None, _, len)) => {
+            PeerSynced((_, _, len)) => {
                 peer_syncs += 1;
                 if peer_syncs == 1 {
                     assert_eq!(len, 1);
@@ -172,19 +172,17 @@ async fn process_creator_state_events(
             DocumentInitialized(..) => {
                 // Skip
             }
-            RemotePeerSynced((discovery_key, len)) => {
-                if discovery_key != doc_id {
-                    remote_peer_syncs += 1;
-                    if remote_peer_syncs == 1 {
-                        assert_eq!(len, 1);
-                        peermerge
-                            .transact_mut(&doc_id, |doc| doc.put(ROOT, "test", "value"), None)
-                            .await?;
-                    } else if remote_peer_syncs == 2 {
-                        assert_eq!(len, 2);
-                        assert_eq!(document_changes.len(), 1);
-                        break;
-                    }
+            RemotePeerSynced((_, _, len)) => {
+                remote_peer_syncs += 1;
+                if remote_peer_syncs == 1 {
+                    assert_eq!(len, 1);
+                    peermerge
+                        .transact_mut(&doc_id, |doc| doc.put(ROOT, "test", "value"), None)
+                        .await?;
+                } else if remote_peer_syncs == 2 {
+                    assert_eq!(len, 2);
+                    assert_eq!(document_changes.len(), 1);
+                    break;
                 }
             }
             DocumentChanged((_, patches)) => {

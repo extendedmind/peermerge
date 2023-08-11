@@ -11,7 +11,7 @@ use random_access_storage::RandomAccess;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::{collections::HashMap, fmt::Debug};
-use tracing::{debug, instrument, warn};
+use tracing::{debug, instrument};
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "async-std"))]
 use async_std::task;
@@ -32,13 +32,13 @@ use crate::{
         keys::{key_pair_from_bytes, partial_key_pair_to_bytes},
         storage::PeermergeStateWrapper,
         utils::Mutex,
-        PeerEventContent,
+        FeedEventContent,
     },
     feed::{FeedMemoryPersistence, FeedPersistence, Protocol},
     DocumentSharingInfo, PeerId, PeermergeError, StateEventContent,
 };
 use crate::{
-    common::{DocumentInfo, PeerEvent},
+    common::{DocumentInfo, FeedEvent},
     document::{get_document, get_document_ids},
     feed::on_protocol,
     DocumentId, NameDescription, IO,
@@ -75,8 +75,17 @@ where
     T: RandomAccess + Debug + Send + 'static,
     U: FeedPersistence,
 {
-    pub fn peer_name(&self) -> String {
+    pub fn default_peer_name(&self) -> String {
         self.default_peer_header.name.clone()
+    }
+
+    pub async fn peer_header(
+        &self,
+        document_id: &DocumentId,
+        peer_id: &PeerId,
+    ) -> Option<NameDescription> {
+        let document = get_document(&self.documents, document_id).await.unwrap();
+        document.peer_header(peer_id).await
     }
 
     pub async fn set_state_event_sender(
@@ -330,9 +339,9 @@ impl Peermerge<RandomAccessMemory, FeedMemoryPersistence> {
     where
         T: IO,
     {
-        let (mut peer_event_sender, peer_event_receiver): (
-            UnboundedSender<PeerEvent>,
-            UnboundedReceiver<PeerEvent>,
+        let (mut feed_event_sender, feed_event_receiver): (
+            UnboundedSender<FeedEvent>,
+            UnboundedReceiver<FeedEvent>,
         ) = unbounded();
         let state_event_sender_for_task =
             self.state_event_sender
@@ -343,52 +352,44 @@ impl Peermerge<RandomAccessMemory, FeedMemoryPersistence> {
                     context: "State event sender must be set before connecting protocol"
                         .to_string(),
                 })?;
-        let peermerge_state = self.peermerge_state.clone();
         let documents_for_task = self.documents.clone();
-        let peer_name_for_task = self.default_peer_header.name.clone();
-        let task_span = tracing::debug_span!("call_on_peer_event_memory").or_current();
+        let task_span = tracing::debug_span!("call_on_feed_event_memory").or_current();
         #[cfg(not(target_arch = "wasm32"))]
         task::spawn(async move {
             let _entered = task_span.enter();
-            on_peer_event_memory(
-                peer_event_receiver,
+            on_feed_event_memory(
+                feed_event_receiver,
                 state_event_sender_for_task,
-                peermerge_state,
                 documents_for_task,
-                &peer_name_for_task,
             )
             .await;
         });
         #[cfg(target_arch = "wasm32")]
         spawn_local(async move {
             let _entered = task_span.enter();
-            on_peer_event_memory(
-                peer_event_receiver,
+            on_feed_event_memory(
+                feed_event_receiver,
                 state_event_sender_for_task,
-                peermerge_state,
                 documents_for_task,
-                &peer_name_for_task,
             )
             .await;
         });
 
-        on_protocol(protocol, self.documents.clone(), &mut peer_event_sender).await?;
+        on_protocol(protocol, self.documents.clone(), &mut feed_event_sender).await?;
         Ok(())
     }
 }
 
 #[instrument(level = "debug", skip_all)]
-async fn on_peer_event_memory(
-    mut peer_event_receiver: UnboundedReceiver<PeerEvent>,
+async fn on_feed_event_memory(
+    mut feed_event_receiver: UnboundedReceiver<FeedEvent>,
     mut state_event_sender: UnboundedSender<StateEvent>,
-    mut peermerge_state: Arc<Mutex<PeermergeStateWrapper<RandomAccessMemory>>>,
     mut documents: Arc<DashMap<DocumentId, Document<RandomAccessMemory, FeedMemoryPersistence>>>,
-    peer_name: &str,
 ) {
-    while let Some(event) = peer_event_receiver.next().await {
+    while let Some(event) = feed_event_receiver.next().await {
         debug!("Received event {:?}", event);
         match event.content {
-            PeerEventContent::NewPeersBroadcasted(public_keys) => {
+            FeedEventContent::NewFeedsBroadcasted(public_keys) => {
                 let mut document = get_document(&documents, &event.doc_discovery_key)
                     .await
                     .unwrap();
@@ -396,16 +397,7 @@ async fn on_peer_event_memory(
                     .process_new_peers_broadcasted_memory(public_keys)
                     .await;
             }
-            _ => {
-                process_peer_event(
-                    event,
-                    &mut state_event_sender,
-                    &mut peermerge_state,
-                    &mut documents,
-                    peer_name,
-                )
-                .await
-            }
+            _ => process_feed_event(event, &mut state_event_sender, &mut documents).await,
         }
     }
     debug!("Exiting");
@@ -540,9 +532,9 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
     where
         T: IO,
     {
-        let (mut peer_event_sender, peer_event_receiver): (
-            UnboundedSender<PeerEvent>,
-            UnboundedReceiver<PeerEvent>,
+        let (mut feed_event_sender, feed_event_receiver): (
+            UnboundedSender<FeedEvent>,
+            UnboundedReceiver<FeedEvent>,
         ) = unbounded();
         let state_event_sender_for_task =
             self.state_event_sender
@@ -553,40 +545,34 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
                     context: "State event sender must be set before connecting protocol"
                         .to_string(),
                 })?;
-        let peermerge_state = self.peermerge_state.clone();
         let documents_for_task = self.documents.clone();
-        let peer_name_for_task = self.default_peer_header.name.clone();
-        let task_span = tracing::debug_span!("call_on_peer_event_disk").or_current();
+        let task_span = tracing::debug_span!("call_on_feed_event_disk").or_current();
         task::spawn(async move {
             let _entered = task_span.enter();
-            on_peer_event_disk(
-                peer_event_receiver,
+            on_feed_event_disk(
+                feed_event_receiver,
                 state_event_sender_for_task,
-                peermerge_state,
                 documents_for_task,
-                &peer_name_for_task,
             )
             .await;
         });
 
-        on_protocol(protocol, self.documents.clone(), &mut peer_event_sender).await?;
+        on_protocol(protocol, self.documents.clone(), &mut feed_event_sender).await?;
         Ok(())
     }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 #[instrument(level = "debug", skip_all)]
-async fn on_peer_event_disk(
-    mut peer_event_receiver: UnboundedReceiver<PeerEvent>,
+async fn on_feed_event_disk(
+    mut feed_event_receiver: UnboundedReceiver<FeedEvent>,
     mut state_event_sender: UnboundedSender<StateEvent>,
-    mut peermerge_state: Arc<Mutex<PeermergeStateWrapper<RandomAccessDisk>>>,
     mut documents: Arc<DashMap<DocumentId, Document<RandomAccessDisk, FeedDiskPersistence>>>,
-    peer_name: &str,
 ) {
-    while let Some(event) = peer_event_receiver.next().await {
+    while let Some(event) = feed_event_receiver.next().await {
         debug!("Received event {:?}", event);
         match event.content {
-            PeerEventContent::NewPeersBroadcasted(public_keys) => {
+            FeedEventContent::NewFeedsBroadcasted(public_keys) => {
                 let mut document = get_document(&documents, &event.doc_discovery_key)
                     .await
                     .unwrap();
@@ -594,16 +580,7 @@ async fn on_peer_event_disk(
                     .process_new_peers_broadcasted_disk(public_keys)
                     .await;
             }
-            _ => {
-                process_peer_event(
-                    event,
-                    &mut state_event_sender,
-                    &mut peermerge_state,
-                    &mut documents,
-                    peer_name,
-                )
-                .await
-            }
+            _ => process_feed_event(event, &mut state_event_sender, &mut documents).await,
         }
     }
     debug!("Exiting");
@@ -629,41 +606,36 @@ async fn notify_document_initialized(
 }
 
 #[instrument(level = "debug", skip_all)]
-async fn process_peer_event<T, U>(
-    event: PeerEvent,
+async fn process_feed_event<T, U>(
+    event: FeedEvent,
     state_event_sender: &mut UnboundedSender<StateEvent>,
-    _peermerge_state: &mut Arc<Mutex<PeermergeStateWrapper<T>>>,
     documents: &mut Arc<DashMap<DocumentId, Document<T, U>>>,
-    peer_name: &str,
 ) where
     T: RandomAccess + Debug + Send + 'static,
     U: FeedPersistence,
 {
     match event.content {
-        PeerEventContent::NewPeersBroadcasted(_) => unreachable!("Implemented by concrete type"),
-        PeerEventContent::PeerDisconnected(_) => {
+        FeedEventContent::NewFeedsBroadcasted(_) => unreachable!("Implemented by concrete type"),
+        FeedEventContent::FeedDisconnected(_) => {
             // This is an FYI message, just continue for now
         }
-        PeerEventContent::RemotePeerSynced((discovery_key, synced_contiguous_length)) => {
-            match state_event_sender.unbounded_send(StateEvent::new(
-                event.doc_discovery_key,
-                StateEventContent::RemotePeerSynced((discovery_key, synced_contiguous_length)),
-            )) {
-                Ok(()) => {}
-                Err(err) => warn!(
-                    "{}: could not notify remote peer synced to len {}, err {}",
-                    peer_name.to_string(),
-                    synced_contiguous_length,
-                    err
-                ),
+        FeedEventContent::RemoteFeedSynced((peer_id, discovery_key, synced_contiguous_length)) => {
+            let document = get_document(documents, &event.doc_discovery_key)
+                .await
+                .unwrap();
+            let state_events = document
+                .process_remote_feed_synced(peer_id, discovery_key, synced_contiguous_length)
+                .await;
+            for state_event in state_events {
+                state_event_sender.unbounded_send(state_event).unwrap();
             }
         }
-        PeerEventContent::PeerSynced((discovery_key, synced_contiguous_length)) => {
+        FeedEventContent::FeedSynced((peer_id, discovery_key, synced_contiguous_length)) => {
             let mut document = get_document(documents, &event.doc_discovery_key)
                 .await
                 .unwrap();
             let state_events = document
-                .process_peer_synced(discovery_key, synced_contiguous_length)
+                .process_feed_synced(peer_id, discovery_key, synced_contiguous_length)
                 .await;
             for state_event in state_events {
                 state_event_sender.unbounded_send(state_event).unwrap();

@@ -5,14 +5,17 @@ use hypercore_protocol::{
     schema::Request,
 };
 
-use crate::{common::state::DocumentPeersState, feed::FeedDiscoveryKey};
+use crate::{common::state::DocumentPeersState, feed::FeedDiscoveryKey, PeerId};
 
 /// A PeerState stores information about a connected peer.
 #[derive(Debug)]
 pub(super) struct PeerState {
     pub(super) is_doc: bool,
+    /// Set only when is_doc is true
+    pub(super) peers_state: Option<DocumentPeersState>,
+    /// Set only when is_doc is false
+    pub(super) peer_id: Option<PeerId>,
     pub(super) doc_discovery_key: FeedDiscoveryKey,
-    pub(super) peers_state: DocumentPeersState,
     pub(super) can_upgrade: bool,
     pub(super) remote_fork: u64,
     pub(super) remote_length: u64,
@@ -43,13 +46,15 @@ pub(super) struct PeerState {
 impl PeerState {
     pub(crate) fn new(
         is_doc: bool,
-        doc_discovery_key: [u8; 32],
-        peers_state: DocumentPeersState,
+        doc_discovery_key: FeedDiscoveryKey,
+        peers_state: Option<DocumentPeersState>,
+        peer_id: Option<PeerId>,
     ) -> Self {
         PeerState {
             is_doc,
             doc_discovery_key,
             peers_state,
+            peer_id,
             can_upgrade: true,
             remote_fork: 0,
             remote_length: 0,

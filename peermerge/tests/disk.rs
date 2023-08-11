@@ -258,7 +258,12 @@ async fn process_joiner_state_event(
             event, document_changes
         );
         match event.content {
-            PeerSynced((Some(name), _, len)) => {
+            PeerSynced((peer_id, _, len)) => {
+                let name = peermerge
+                    .peer_header(&event.document_id, &peer_id)
+                    .await
+                    .unwrap()
+                    .name;
                 assert_eq!(name, "creator");
                 let expected_len = if expected_scalars.len() > 1 { 2 } else { 1 };
                 assert_eq!(len, expected_len);
@@ -301,7 +306,13 @@ async fn process_creator_state_events(
     while let Some(event) = creator_state_event_receiver.next().await {
         info!("Received event {:?}", event);
         match event.content {
-            PeerSynced((Some(name), _, len)) => {
+            PeerSynced((peer_id, _, len)) => {
+                let name = peermerge
+                    .peer_header(&event.document_id, &peer_id)
+                    .await
+                    .unwrap()
+                    .name;
+
                 if expected_scalars.len() == 2 {
                     panic!("Invalid creator peer sync {name:?}");
                 }
@@ -317,8 +328,8 @@ async fn process_creator_state_events(
                 wait_for_condvar(assert_sync).await;
                 break;
             }
-            RemotePeerSynced((discovery_key, len)) => {
-                if expected_scalars.len() > 1 && discovery_key != doc_id {
+            RemotePeerSynced((_, _, len)) => {
+                if expected_scalars.len() > 1 {
                     assert_eq!(len, 2);
                     for (field, expected) in &expected_scalars {
                         let value = peermerge

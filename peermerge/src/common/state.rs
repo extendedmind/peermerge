@@ -5,6 +5,7 @@ use uuid::Uuid;
 
 use crate::{
     automerge::{save_automerge_doc, AutomergeDoc, DocsChangeResult},
+    encode_base64_nopad,
     feed::{FeedDiscoveryKey, FeedPublicKey},
     DocUrlInfo, DocumentId, DocumentInfo, NameDescription, PeerId,
 };
@@ -238,6 +239,60 @@ impl DocumentState {
             None
         }
     }
+
+    pub(crate) fn peer_header(&self, peer_id: &PeerId) -> Option<NameDescription> {
+        if let Some(content) = &self.content {
+            if let Some(meta_automerge_doc) = &content.meta_automerge_doc {
+                let peers_id = meta_automerge_doc
+                    .get(ROOT, "p")
+                    .unwrap()
+                    .map(|result| result.1)
+                    .unwrap();
+                let peer_key = encode_base64_nopad(peer_id);
+                let mut peers_id_keys = meta_automerge_doc.keys(&peers_id);
+                if !peers_id_keys.any(|key| key == peer_key) {
+                    let peer_id = meta_automerge_doc
+                        .get(&peers_id, peer_key)
+                        .unwrap()
+                        .map(|result| result.1)
+                        .unwrap();
+                    let peer_keys: Vec<_> = meta_automerge_doc.keys(&peer_id).collect();
+
+                    if peer_keys.iter().any(|key| key == "n") {
+                        let name: String = meta_automerge_doc
+                            .get(&peer_id, "n")
+                            .unwrap()
+                            .and_then(|result| result.0.to_scalar().cloned())
+                            .unwrap()
+                            .into_string()
+                            .unwrap();
+                        let description: Option<String> = if peer_keys.iter().any(|key| key == "d")
+                        {
+                            let description: String = meta_automerge_doc
+                                .get(&peer_id, "d")
+                                .unwrap()
+                                .and_then(|result| result.0.to_scalar().cloned())
+                                .unwrap()
+                                .into_string()
+                                .unwrap();
+                            Some(description)
+                        } else {
+                            None
+                        };
+                        Some(NameDescription { name, description })
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -250,17 +305,28 @@ pub(crate) struct DocumentPeersState {
 
 impl DocumentPeersState {
     pub(crate) fn new() -> Self {
-        Self {
-            write_peer: None,
-            peers: vec![],
-        }
+        Self::new_from_data(None, vec![])
     }
 
     pub(crate) fn new_writer(peer_id: &PeerId, write_public_key: &FeedPublicKey) -> Self {
-        Self {
-            write_peer: Some(DocumentPeer::new(*peer_id, *write_public_key, None)),
-            peers: vec![],
+        Self::new_from_data(
+            Some(DocumentPeer::new(*peer_id, *write_public_key, None)),
+            vec![],
+        )
+    }
+
+    pub(crate) fn new_from_data(
+        mut write_peer: Option<DocumentPeer>,
+        mut peers: Vec<DocumentPeer>,
+    ) -> Self {
+        // For state, populate the peers with discovery keys
+        if let Some(write_peer) = write_peer.as_mut() {
+            write_peer.populate_discovery_key();
         }
+        for peer in peers.iter_mut() {
+            peer.populate_discovery_key();
+        }
+        Self { write_peer, peers }
     }
 
     pub(crate) fn filter_new_peers(
@@ -318,7 +384,7 @@ impl DocumentPeersState {
         &mut self,
         incoming_peers: &[DocumentPeer],
     ) -> (bool, Vec<DocumentPeer>, Vec<DocumentPeer>) {
-        let new_peers: Vec<DocumentPeer> = incoming_peers
+        let changed_peers: Vec<DocumentPeer> = incoming_peers
             .iter()
             .filter(|incoming_peer| {
                 self.peers
@@ -327,65 +393,94 @@ impl DocumentPeersState {
             })
             .cloned()
             .collect();
+        let peers_to_create: Vec<DocumentPeer> = changed_peers
+            .iter()
+            .filter(|changed_peer| changed_peer.replaced_by_public_key.is_none())
+            .cloned()
+            .collect();
 
-        let (changed, replaced_peers, peers_to_create): (
-            bool,
-            Vec<DocumentPeer>,
-            Vec<DocumentPeer>,
-        ) = {
-            if new_peers.is_empty() {
-                (false, vec![], vec![])
+        let (changed, replaced_peers): (bool, Vec<DocumentPeer>) = {
+            if changed_peers.is_empty() {
+                (false, vec![])
             } else {
                 // Find out if there are values currently which
                 // differ only in that replaced_by_public_key has
                 // been set.
-                let to_be_changed_peers: Vec<DocumentPeer> = self
+                let to_be_mutated_peers: Vec<&mut DocumentPeer> = self
                     .peers
-                    .iter()
+                    .iter_mut()
                     .filter(|peer| {
-                        new_peers.iter().any(|new_peer| {
-                            new_peer.id == peer.id
-                                && new_peer.public_key == peer.public_key
-                                && peer.replaced_by_public_key != new_peer.replaced_by_public_key
+                        changed_peers.iter().any(|changed_peer| {
+                            changed_peer.id == peer.id
+                                && changed_peer.public_key == peer.public_key
+                                && peer.replaced_by_public_key
+                                    != changed_peer.replaced_by_public_key
+                                && changed_peer.replaced_by_public_key.is_some()
                         })
                     })
-                    .cloned()
                     .collect();
-                if to_be_changed_peers.is_empty() {
-                    // Just append the new peers to the end
-                    self.peers.extend(new_peers.clone());
-                    (true, vec![], new_peers)
+                if to_be_mutated_peers.is_empty() {
+                    // Just append the new peers to the end, they are all new
+                    let to_add_peers: Vec<DocumentPeer> = changed_peers
+                        .iter()
+                        .map(|peer| {
+                            let mut add_peer = peer.clone();
+                            add_peer.populate_discovery_key();
+                            add_peer
+                        })
+                        .collect();
+                    self.peers.extend(to_add_peers);
+                    (true, vec![])
                 } else {
                     // Get the peers that were replaced
-                    let replaced_peers = to_be_changed_peers
-                        .iter()
-                        .map(|to_be_changed_peer| {
-                            new_peers
+                    let replaced_peers: Vec<DocumentPeer> = to_be_mutated_peers
+                        .into_iter()
+                        .map(|to_be_mutated_peer| {
+                            let replacement = changed_peers
                                 .iter()
                                 .find(|new_peer| {
-                                    new_peer.id == to_be_changed_peer.id
-                                        && new_peer.public_key == to_be_changed_peer.public_key
+                                    new_peer.id == to_be_mutated_peer.id
+                                        && new_peer.public_key == to_be_mutated_peer.public_key
                                 })
                                 .unwrap()
-                                .clone()
+                                .clone();
+                            to_be_mutated_peer.replaced_by_public_key =
+                                replacement.replaced_by_public_key;
+                            replacement
                         })
                         .collect();
-                    let peers_to_create = new_peers
+                    // The rest can just be pushed in
+                    let to_add_peers: Vec<DocumentPeer> = changed_peers
                         .iter()
-                        .filter(|new_peer| {
-                            to_be_changed_peers.iter().any(|to_be_changed_peer| {
-                                new_peer.id == to_be_changed_peer.id
-                                    && new_peer.public_key == to_be_changed_peer.public_key
-                            })
+                        .filter(|changed_peer| !replaced_peers.contains(changed_peer))
+                        .map(|peer| {
+                            let mut add_peer = peer.clone();
+                            add_peer.populate_discovery_key();
+                            add_peer
                         })
-                        .cloned()
                         .collect();
+                    self.peers.extend(to_add_peers);
 
-                    (true, replaced_peers, peers_to_create)
+                    (true, replaced_peers)
                 }
             }
         };
         (changed, replaced_peers, peers_to_create)
+    }
+
+    pub(crate) fn peer_id(&self, discovery_key: &FeedDiscoveryKey) -> PeerId {
+        let peer = self
+            .peers
+            .iter()
+            .find(|peer| &peer.discovery_key.unwrap() == discovery_key);
+        if let Some(peer) = peer {
+            return peer.id;
+        } else if let Some(write_peer) = &self.write_peer {
+            if &write_peer.discovery_key.unwrap() == discovery_key {
+                return write_peer.id;
+            }
+        }
+        panic!("We should always have a peer id for every discovery key")
     }
 }
 
@@ -400,6 +495,9 @@ pub(crate) struct DocumentPeer {
     /// but needs to be stored/sent to make sure stale peers will
     /// always find the latest feed.
     pub(crate) replaced_by_public_key: Option<FeedPublicKey>,
+    /// Transient discovery key of the peer's write feed, can be saved
+    /// to speed up searching based on it.
+    pub(crate) discovery_key: Option<FeedDiscoveryKey>,
 }
 impl DocumentPeer {
     pub(crate) fn new(
@@ -411,6 +509,13 @@ impl DocumentPeer {
             id,
             public_key,
             replaced_by_public_key,
+            discovery_key: None,
+        }
+    }
+
+    pub(crate) fn populate_discovery_key(&mut self) {
+        if self.discovery_key.is_none() {
+            self.discovery_key = Some(discovery_key_from_public_key(&self.public_key));
         }
     }
 }

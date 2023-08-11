@@ -150,14 +150,10 @@ async fn proxy_disk_encrypted() -> anyhow::Result<()> {
             .unwrap();
     });
 
-    let joiner_doc_id_for_task = joiner_doc_info.id();
     let proxy_process = task::spawn(async move {
-        process_proxy_state_event_with_joiner_initial(
-            joiner_doc_id_for_task,
-            proxy_state_event_receiver,
-        )
-        .await
-        .unwrap();
+        process_proxy_state_event_with_joiner_initial(proxy_state_event_receiver)
+            .await
+            .unwrap();
     });
 
     let peermerge_joiner_for_task = peermerge_joiner.clone();
@@ -209,14 +205,10 @@ async fn proxy_disk_encrypted() -> anyhow::Result<()> {
             .unwrap();
     });
 
-    let joiner_doc_id_for_task = joiner_doc_info.id();
     let proxy_process = task::spawn(async move {
-        process_proxy_state_event_with_joiner_reopen(
-            joiner_doc_id_for_task,
-            proxy_state_event_receiver,
-        )
-        .await
-        .unwrap();
+        process_proxy_state_event_with_joiner_reopen(proxy_state_event_receiver)
+            .await
+            .unwrap();
     });
 
     let peermerge_joiner_for_task = peermerge_joiner.clone();
@@ -242,7 +234,7 @@ async fn process_proxy_state_event_with_creator(
     while let Some(event) = proxy_state_event_receiver.next().await {
         info!("Received event {:?}", event);
         match event.content {
-            PeerSynced((None, _, len)) => {
+            PeerSynced((_, _, len)) => {
                 peer_syncs += 1;
                 if peer_syncs == 1 {
                     assert_eq!(len, 1);
@@ -278,19 +270,17 @@ async fn process_creator_state_events(
             PeerSynced(_) => {
                 panic!("Creator should not get peer synced events {event:?}");
             }
-            RemotePeerSynced((discovery_key, len)) => {
-                if discovery_key != doc_id {
-                    remote_peer_syncs += 1;
-                    if remote_peer_syncs == 1 {
-                        assert_eq!(len, 1);
-                        peermerge
-                            .transact_mut(&doc_id, |doc| doc.put(ROOT, "creator", "testing"), None)
-                            .await?;
-                    } else if remote_peer_syncs == 2 {
-                        assert_eq!(len, 2);
-                        assert_eq!(document_changes.len(), 1);
-                        break;
-                    }
+            RemotePeerSynced((_, _, len)) => {
+                remote_peer_syncs += 1;
+                if remote_peer_syncs == 1 {
+                    assert_eq!(len, 1);
+                    peermerge
+                        .transact_mut(&doc_id, |doc| doc.put(ROOT, "creator", "testing"), None)
+                        .await?;
+                } else if remote_peer_syncs == 2 {
+                    assert_eq!(len, 2);
+                    assert_eq!(document_changes.len(), 1);
+                    break;
                 }
             }
             DocumentChanged((_, patches)) => {
@@ -309,7 +299,6 @@ async fn process_creator_state_events(
 
 #[instrument(skip_all)]
 async fn process_proxy_state_event_with_joiner_initial(
-    doc_id: DocumentId,
     mut proxy_state_event_receiver: UnboundedReceiver<StateEvent>,
 ) -> anyhow::Result<()> {
     let mut peer_syncs = 0;
@@ -317,7 +306,7 @@ async fn process_proxy_state_event_with_joiner_initial(
     while let Some(event) = proxy_state_event_receiver.next().await {
         info!("Received event {:?}", event);
         match event.content {
-            PeerSynced((None, _, len)) => {
+            PeerSynced((_, _, len)) => {
                 peer_syncs += 1;
                 if peer_syncs == 1 {
                     // The first one that will come is joiners own write feed with init
@@ -330,14 +319,12 @@ async fn process_proxy_state_event_with_joiner_initial(
                     panic!("Too many peer syncs");
                 }
             }
-            RemotePeerSynced((discovery_key, len)) => {
-                if discovery_key != doc_id {
-                    remote_peer_syncs += 1;
-                    if remote_peer_syncs == 1 {
-                        assert_eq!(len, 2);
-                    } else {
-                        panic!("Too many remote peer syncs");
-                    }
+            RemotePeerSynced((_, _, len)) => {
+                remote_peer_syncs += 1;
+                if remote_peer_syncs == 1 {
+                    assert_eq!(len, 2);
+                } else {
+                    panic!("Too many remote peer syncs");
                 }
             }
             _ => {
@@ -364,31 +351,28 @@ async fn process_joiner_state_events_initial(
             event, document_changes
         );
         match event.content {
-            PeerSynced((name, discovery_key, len)) => {
-                if discovery_key != doc_id {
-                    peer_syncs += 1;
-                    // The first one is the creators write feed
-                    assert_eq!(name, Some("creator".to_string()));
-                    if peer_syncs == 1 {
-                        assert_eq!(len, 2);
-                        creator_synced = true;
-                        if document_initialized {
-                            peermerge
-                                .transact_mut(
-                                    &doc_id,
-                                    |doc| doc.put(ROOT, "joiner", "testing"),
-                                    None,
-                                )
-                                .await?;
-                        }
-                    } else {
-                        panic!("Too many peer syncs");
+            PeerSynced((peer_id, _, len)) => {
+                let name = peermerge
+                    .peer_header(&event.document_id, &peer_id)
+                    .await
+                    .unwrap()
+                    .name;
+                peer_syncs += 1;
+                // The first one is the creators write feed
+                assert_eq!(name, "creator");
+                if peer_syncs == 1 {
+                    assert_eq!(len, 2);
+                    creator_synced = true;
+                    if document_initialized {
+                        peermerge
+                            .transact_mut(&doc_id, |doc| doc.put(ROOT, "joiner", "testing"), None)
+                            .await?;
                     }
                 } else {
-                    assert_eq!(len, 1);
+                    panic!("Too many peer syncs");
                 }
             }
-            RemotePeerSynced((_discovery_key, len)) => {
+            RemotePeerSynced((_, _, len)) => {
                 // Only remote peer it can sync is its own writer
                 if len == 2 {
                     break;
@@ -415,7 +399,6 @@ async fn process_joiner_state_events_initial(
 
 #[instrument(skip_all)]
 async fn process_proxy_state_event_with_joiner_reopen(
-    doc_id: DocumentId,
     mut proxy_state_event_receiver: UnboundedReceiver<StateEvent>,
 ) -> anyhow::Result<()> {
     let mut peer_syncs = 0;
@@ -423,7 +406,7 @@ async fn process_proxy_state_event_with_joiner_reopen(
     while let Some(event) = proxy_state_event_receiver.next().await {
         info!("Received event {:?}", event);
         match event.content {
-            PeerSynced((None, _, len)) => {
+            PeerSynced((_, _, len)) => {
                 peer_syncs += 1;
                 if peer_syncs == 1 {
                     // The first one that will come is joiners own write feed with init, original
@@ -434,16 +417,14 @@ async fn process_proxy_state_event_with_joiner_reopen(
                     panic!("Too many peer syncs");
                 }
             }
-            RemotePeerSynced((discovery_key, len)) => {
-                if discovery_key != doc_id {
-                    remote_peer_syncs += 1;
-                    if remote_peer_syncs == 1 {
-                        assert_eq!(len, 2);
-                    } else if remote_peer_syncs == 2 {
-                        assert_eq!(len, 2);
-                    } else {
-                        panic!("Too many remote peer syncs");
-                    }
+            RemotePeerSynced((_, _, len)) => {
+                remote_peer_syncs += 1;
+                if remote_peer_syncs == 1 {
+                    assert_eq!(len, 2);
+                } else if remote_peer_syncs == 2 {
+                    assert_eq!(len, 2);
+                } else {
+                    panic!("Too many remote peer syncs");
                 }
             }
             _ => {
@@ -470,36 +451,32 @@ async fn process_joiner_state_events_reopen(
             event, document_changes
         );
         match event.content {
-            PeerSynced((_, discovery_key, len)) => {
-                if discovery_key != doc_id {
-                    // There are two, creator and joiner itself, both have init and one change
-                    if len == 2 {
-                        full_peer_syncs += 1;
+            PeerSynced((_, _, len)) => {
+                // There are two, creator and joiner itself, both have init and one change
+                if len == 2 {
+                    full_peer_syncs += 1;
+                }
+                if full_peer_syncs == 2 {
+                    creator_and_joiner_synced = true;
+                    if document_initialized {
+                        let value = peermerge
+                            .transact(&doc_id, |doc| get_scalar(doc, ROOT, "creator"))
+                            .await?
+                            .unwrap();
+                        assert_eq!(value.to_str().unwrap(), "testing");
+                        let value = peermerge
+                            .transact(&doc_id, |doc| get_scalar(doc, ROOT, "joiner"))
+                            .await?
+                            .unwrap();
+                        assert_eq!(value.to_str().unwrap(), "testing");
+                        peermerge
+                            .transact_mut(
+                                &doc_id,
+                                |doc| doc.put(ROOT, "joiner_reopen", "testing"),
+                                None,
+                            )
+                            .await?;
                     }
-                    if full_peer_syncs == 2 {
-                        creator_and_joiner_synced = true;
-                        if document_initialized {
-                            let value = peermerge
-                                .transact(&doc_id, |doc| get_scalar(doc, ROOT, "creator"))
-                                .await?
-                                .unwrap();
-                            assert_eq!(value.to_str().unwrap(), "testing");
-                            let value = peermerge
-                                .transact(&doc_id, |doc| get_scalar(doc, ROOT, "joiner"))
-                                .await?
-                                .unwrap();
-                            assert_eq!(value.to_str().unwrap(), "testing");
-                            peermerge
-                                .transact_mut(
-                                    &doc_id,
-                                    |doc| doc.put(ROOT, "joiner_reopen", "testing"),
-                                    None,
-                                )
-                                .await?;
-                        }
-                    }
-                } else {
-                    assert_eq!(len, 1);
                 }
             }
             DocumentChanged((_, patches)) => {
@@ -530,7 +507,7 @@ async fn process_joiner_state_events_reopen(
             Reattached(peer_header) => {
                 assert_eq!(peer_header, NameDescription::new("joiner"))
             }
-            RemotePeerSynced((_, len)) => {
+            RemotePeerSynced((_, _, len)) => {
                 assert_eq!(len, 3);
                 break;
             }

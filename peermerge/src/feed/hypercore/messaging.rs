@@ -13,10 +13,10 @@ use super::PeerState;
 use crate::{
     common::{
         message::{BroadcastMessage, PeerSyncedMessage, PeersChangedMessage},
-        state::DocumentPeer,
+        state::{DocumentPeer, DocumentPeersState},
         utils::Mutex,
-        PeerEvent,
-        PeerEventContent::*,
+        FeedEvent,
+        FeedEventContent::*,
     },
     feed::FeedDiscoveryKey,
     PeermergeError,
@@ -31,10 +31,10 @@ const PEER_SYNCED_LOCAL_SIGNAL_NAME: &str = "peer_synced";
 pub(super) const PEERS_CHANGED_LOCAL_SIGNAL_NAME: &str = "peers_changed";
 const CLOSED_LOCAL_SIGNAL_NAME: &str = "closed";
 
-pub(super) fn create_broadcast_message(peer_state: &PeerState) -> Message {
+pub(super) fn create_broadcast_message(peers_state: &DocumentPeersState) -> Message {
     let broadcast_message: BroadcastMessage = BroadcastMessage {
-        write_peer: peer_state.peers_state.write_peer.clone(),
-        peers: peer_state.peers_state.peers.clone(),
+        write_peer: peers_state.write_peer.clone(),
+        peers: peers_state.peers.clone(),
     };
     let mut enc_state = State::new();
     enc_state
@@ -153,7 +153,7 @@ pub(super) async fn on_message<T>(
     peer_state: &mut PeerState,
     channel: &mut Channel,
     message: Message,
-) -> Result<Option<PeerEvent>, PeermergeError>
+) -> Result<Option<FeedEvent>, PeermergeError>
 where
     T: RandomAccess + Debug + Send,
 {
@@ -247,12 +247,16 @@ where
                 let new_info = hypercore.info();
                 peer_state.inflight.remove(message.request);
                 let request = next_request(&mut hypercore, peer_state).await?;
-                let peer_synced: Option<PeerEvent> =
+                let peer_synced: Option<FeedEvent> =
                     if new_info.contiguous_length == new_info.length {
                         peer_state.synced_contiguous_length = new_info.contiguous_length;
-                        Some(PeerEvent::new(
+                        Some(FeedEvent::new(
                             peer_state.doc_discovery_key,
-                            PeerSynced((*channel.discovery_key(), new_info.contiguous_length)),
+                            FeedSynced((
+                                peer_state.peer_id,
+                                *channel.discovery_key(),
+                                new_info.contiguous_length,
+                            )),
                         ))
                     } else {
                         None
@@ -304,7 +308,7 @@ where
             let event = {
                 let mut hypercore = hypercore.lock().await;
                 let info = hypercore.info();
-                let event: Option<PeerEvent> = if message.start == 0 {
+                let event: Option<FeedEvent> = if message.start == 0 {
                     peer_state.remote_contiguous_length = message.length;
                     if message.length > peer_state.remote_length {
                         peer_state.remote_length = message.length;
@@ -314,9 +318,10 @@ where
                             < peer_state.remote_contiguous_length
                         {
                             // The peer has advertised that they now have what we have
-                            let event = Some(PeerEvent::new(
+                            let event = Some(FeedEvent::new(
                                 peer_state.doc_discovery_key,
-                                RemotePeerSynced((
+                                RemoteFeedSynced((
+                                    peer_state.peer_id,
                                     *channel.discovery_key(),
                                     peer_state.remote_contiguous_length,
                                 )),
@@ -354,15 +359,14 @@ where
                     peer_state.is_doc,
                     "Only doc peer should ever get broadcast messages"
                 );
+                let peers_state = peer_state.peers_state.as_mut().unwrap();
                 let mut dec_state = State::from_buffer(&message.message);
                 let broadcast_message: BroadcastMessage = dec_state.decode(&message.message)?;
-                let new_remote_peers = peer_state
-                    .peers_state
+                let new_remote_peers = peers_state
                     .filter_new_peers(&broadcast_message.write_peer, &broadcast_message.peers);
 
                 if new_remote_peers.is_empty()
-                    && peer_state
-                        .peers_state
+                    && peers_state
                         .peers_match(&broadcast_message.write_peer, &broadcast_message.peers)
                 {
                     // Don't re-initialize if this has already been synced, meaning this is a
@@ -373,9 +377,9 @@ where
                     }
                 } else if !new_remote_peers.is_empty() {
                     // New peers found, return a peer event
-                    return Ok(Some(PeerEvent::new(
+                    return Ok(Some(FeedEvent::new(
                         peer_state.doc_discovery_key,
-                        NewPeersBroadcasted(new_remote_peers),
+                        NewFeedsBroadcasted(new_remote_peers),
                     )));
                 }
             }
@@ -431,13 +435,12 @@ where
                     peer_state.is_doc,
                     "Only doc feed should ever get new peers created messages"
                 );
+                let peers_state = peer_state.peers_state.as_mut().unwrap();
                 let mut dec_state = State::from_buffer(&data);
                 let new_peers_message: PeersChangedMessage = dec_state.decode(&data)?;
 
                 // Merge new peers to the peer state
-                peer_state
-                    .peers_state
-                    .merge_incoming_peers(&new_peers_message.incoming_peers);
+                peers_state.merge_incoming_peers(&new_peers_message.incoming_peers);
 
                 // Transmit this event forward to the protocol
                 channel
@@ -445,7 +448,7 @@ where
                     .await?;
 
                 // Create new broadcast message
-                let mut messages = vec![create_broadcast_message(peer_state)];
+                let mut messages = vec![create_broadcast_message(peers_state)];
 
                 // If sync has not been started, start it now
                 if !peer_state.sync_sent {
@@ -466,9 +469,9 @@ where
             }
         },
         Message::Close(message) => {
-            return Ok(Some(PeerEvent::new(
+            return Ok(Some(FeedEvent::new(
                 peer_state.doc_discovery_key,
-                PeerDisconnected(message.channel),
+                FeedDisconnected(message.channel),
             )));
         }
         _ => {

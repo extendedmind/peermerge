@@ -11,16 +11,17 @@ use tracing::{debug, instrument};
 
 use super::{messaging::PEERS_CHANGED_LOCAL_SIGNAL_NAME, HypercoreWrapper};
 use crate::common::keys::discovery_key_from_public_key;
+use crate::common::state::DocumentPeersState;
 use crate::common::utils::Mutex;
-use crate::common::{message::PeersChangedMessage, PeerEvent};
+use crate::common::{message::PeersChangedMessage, FeedEvent};
 use crate::document::{get_document, get_document_ids, Document};
-use crate::{DocumentId, FeedPersistence, PeermergeError, IO};
+use crate::{DocumentId, FeedPersistence, PeerId, PeermergeError, IO};
 
 #[instrument(level = "debug", skip_all, fields(is_initiator = protocol.is_initiator()))]
 pub(crate) async fn on_protocol<T, U, V>(
     protocol: &mut Protocol<V>,
     documents: Arc<DashMap<DocumentId, Document<T, U>>>,
-    peer_event_sender: &mut UnboundedSender<PeerEvent>,
+    feed_event_sender: &mut UnboundedSender<FeedEvent>,
 ) -> Result<(), PeermergeError>
 where
     T: RandomAccess + Debug + Send + 'static,
@@ -101,18 +102,29 @@ where
                                     }
                                 }
                             }
+                            let (peers_state, peer_id): (
+                                Option<DocumentPeersState>,
+                                Option<PeerId>,
+                            ) = if is_doc {
+                                (Some(document.peers_state().await), None)
+                            } else {
+                                (
+                                    None,
+                                    Some(document.peer_id_from_discovery_key(&discovery_key).await),
+                                )
+                            };
                             let mut hypercore = hypercore.lock().await;
-                            let peer_state = document.peers_state().await;
                             let channel_receiver = channel.take_receiver().unwrap();
                             let channel_sender = channel.local_sender();
                             hypercore.on_channel(
                                 is_doc,
+                                peers_state,
+                                peer_id,
                                 document.id(),
                                 channel,
                                 channel_receiver,
                                 channel_sender,
-                                peer_state,
-                                peer_event_sender,
+                                feed_event_sender,
                             );
                         } else {
                             panic!(

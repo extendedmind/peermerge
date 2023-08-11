@@ -94,6 +94,11 @@ where
         document_state_wrapper.state().info()
     }
 
+    pub(crate) async fn peer_header(&self, peer_id: &PeerId) -> Option<NameDescription> {
+        let document_state_wrapper = self.document_state.lock().await;
+        document_state_wrapper.state().peer_header(peer_id)
+    }
+
     pub(crate) async fn doc_feed(&self) -> Arc<Mutex<Feed<U>>> {
         get_feed(&self.feeds, &self.doc_discovery_key)
             .await
@@ -128,6 +133,15 @@ where
         let state = self.document_state.lock().await;
         let state = state.state();
         state.peers_state.clone()
+    }
+
+    pub(crate) async fn peer_id_from_discovery_key(
+        &self,
+        discovery_key: &FeedDiscoveryKey,
+    ) -> PeerId {
+        let state = self.document_state.lock().await;
+        let state = state.state();
+        state.peers_state.peer_id(discovery_key)
     }
 
     #[instrument(skip_all, fields(ctx = self.log_context))]
@@ -249,8 +263,8 @@ where
         document_state.unreserve_object(obj);
 
         // Now we need to re-consolidate
-        if let Some((content, unapplied_entries)) =
-            document_state.content_and_unapplied_entries_mut()
+        if let Some((content, peers_state, unapplied_entries)) =
+            document_state.content_peers_state_and_unapplied_entries_mut()
         {
             if let Some(meta_automerge_doc) = content.meta_automerge_doc.as_mut() {
                 if let Some(user_automerge_doc) = content.user_automerge_doc.as_mut() {
@@ -259,9 +273,13 @@ where
                         user_automerge_doc,
                         unapplied_entries,
                     )?;
-                    let (patches, peer_syncs) =
-                        update_content_from_edit_result(result, &self.doc_discovery_key, content)
-                            .await?;
+                    let (patches, peer_syncs) = update_content_from_edit_result(
+                        result,
+                        &self.doc_discovery_key,
+                        content,
+                        peers_state,
+                    )
+                    .await?;
                     document_state.persist_content().await;
                     let state_events = self.state_events_from_update_content_result(
                         &document_state,
@@ -352,9 +370,29 @@ where
     }
 
     #[instrument(level = "debug", skip_all, fields(ctx = self.log_context))]
-    pub(crate) async fn process_peer_synced(
+    pub(crate) async fn process_remote_feed_synced(
+        &self,
+        peer_id: Option<PeerId>,
+        discovery_key: FeedDiscoveryKey,
+        synced_contiguous_length: u64,
+    ) -> Vec<StateEvent> {
+        if let Some(peer_id) = peer_id {
+            vec![StateEvent::new(
+                self.id(),
+                RemotePeerSynced((peer_id, discovery_key, synced_contiguous_length)),
+            )]
+        } else {
+            // Peer id is not available for the doc feed only, don't send that
+            // forward
+            vec![]
+        }
+    }
+
+    #[instrument(level = "debug", skip_all, fields(ctx = self.log_context))]
+    pub(crate) async fn process_feed_synced(
         &mut self,
-        discovery_key: [u8; 32],
+        peer_id: Option<PeerId>,
+        discovery_key: FeedDiscoveryKey,
         synced_contiguous_length: u64,
     ) -> Vec<StateEvent> {
         debug!(
@@ -362,13 +400,15 @@ where
             discovery_key == self.doc_discovery_key
         );
         if self.proxy {
-            if discovery_key != self.doc_discovery_key {
+            if let Some(peer_id) = peer_id {
                 // Just notify a peer sync forward
                 return vec![StateEvent::new(
                     self.id(),
-                    PeerSynced((None, discovery_key, synced_contiguous_length)),
+                    PeerSynced((peer_id, discovery_key, synced_contiguous_length)),
                 )];
             } else {
+                // Peer id is not available for the doc feed only, don't send that
+                // forward
                 return vec![];
             }
         }
@@ -376,8 +416,8 @@ where
             // Sync doc state exclusively...
             let mut document_state = self.document_state.lock().await;
             let (document_initialized, patches, peer_syncs) =
-                if let Some((content, unapplied_entries)) =
-                    document_state.content_and_unapplied_entries_mut()
+                if let Some((content, peers_state, unapplied_entries)) =
+                    document_state.content_peers_state_and_unapplied_entries_mut()
                 {
                     debug!("Document has content, updating it");
                     let (patches, peer_syncs) = self
@@ -385,6 +425,7 @@ where
                             &discovery_key,
                             synced_contiguous_length,
                             content,
+                            peers_state,
                             unapplied_entries,
                         )
                         .await
@@ -393,12 +434,14 @@ where
                     (None, patches, peer_syncs)
                 } else {
                     let write_discovery_key = document_state.write_discovery_key();
-                    let unapplied_entries = document_state.unappliend_entries_mut();
+                    let (peers_state, unapplied_entries) =
+                        document_state.peers_state_and_unappliend_entries_mut();
                     if let Some((content, peer_syncs)) = self
                         .create_content(
                             &discovery_key,
                             synced_contiguous_length,
                             &write_discovery_key,
+                            peers_state,
                             unapplied_entries,
                         )
                         .await
@@ -468,8 +511,10 @@ where
         synced_discovery_key: &[u8; 32],
         synced_contiguous_length: u64,
         write_discovery_key: &[u8; 32],
+        peers_state: &mut DocumentPeersState,
         unapplied_entries: &mut UnappliedEntries,
-    ) -> Result<Option<(DocumentContent, Vec<([u8; 32], u64)>)>, PeermergeError> {
+    ) -> Result<Option<(DocumentContent, Vec<(PeerId, FeedDiscoveryKey, u64)>)>, PeermergeError>
+    {
         // The document starts from the doc feed, so get that first
         if synced_discovery_key == &self.doc_discovery_key {
             let (init_entries, init_entries_original_offset) = {
@@ -501,11 +546,14 @@ where
             init_docs_result.user_automerge_doc.update_diff_cursor();
             init_docs_result.meta_automerge_doc.update_diff_cursor();
 
-            let peer_syncs: Vec<([u8; 32], u64)> = feed_change_result
+            let peer_syncs: Vec<(PeerId, FeedDiscoveryKey, u64)> = feed_change_result
                 .iter()
                 // The root feed is not a peer.
                 .filter(|(discovery_key, _)| *discovery_key != &self.doc_discovery_key)
-                .map(|(discovery_key, feed_change)| (*discovery_key, feed_change.length))
+                .map(|(discovery_key, feed_change)| {
+                    let peer_id = peers_state.peer_id(discovery_key);
+                    (peer_id, *discovery_key, feed_change.length)
+                })
                 .collect();
             Ok(Some((
                 DocumentContent::new(
@@ -539,8 +587,9 @@ where
         synced_discovery_key: &[u8; 32],
         synced_contiguous_length: u64,
         content: &mut DocumentContent,
+        peers_state: &mut DocumentPeersState,
         unapplied_entries: &mut UnappliedEntries,
-    ) -> Result<(Vec<Patch>, Vec<([u8; 32], u64)>), PeermergeError> {
+    ) -> Result<(Vec<Patch>, Vec<(PeerId, FeedDiscoveryKey, u64)>), PeermergeError> {
         let (_, entries) = get_new_entries(
             synced_discovery_key,
             Some(synced_contiguous_length),
@@ -555,6 +604,7 @@ where
             synced_contiguous_length,
             &self.doc_discovery_key,
             content,
+            peers_state,
             unapplied_entries,
         )
         .await
@@ -565,7 +615,7 @@ where
         document_state: &DocStateWrapper<T>,
         document_initialized: Option<StateEventContent>,
         mut patches: Vec<Patch>,
-        peer_syncs: Vec<([u8; 32], u64)>,
+        peer_syncs: Vec<(PeerId, FeedDiscoveryKey, u64)>,
     ) -> Vec<StateEvent> {
         // Filter out unwatched patches
         document_state.filter_watched_patches(&mut patches);
@@ -573,11 +623,7 @@ where
         let mut state_events: Vec<StateEvent> = vec![];
         let peer_synced_state_events: Vec<StateEvent> = peer_syncs
             .iter()
-            .map(|sync| {
-                // FIXME: PeerSynced should have PeerId
-                let name = None;
-                StateEvent::new(self.id(), PeerSynced((name, sync.0, sync.1)))
-            })
+            .map(|sync| StateEvent::new(self.id(), PeerSynced((sync.0, sync.1, sync.2))))
             .collect();
         state_events.extend(peer_synced_state_events);
         if let Some(event) = document_initialized {
@@ -1220,8 +1266,8 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
 
                 // Initialize doc, fill unapplied changes and possibly save state if it had been left
                 // unsaved
-                if let Some((content, unapplied_entries)) =
-                    document_state_wrapper.content_and_unapplied_entries_mut()
+                if let Some((content, peers_state, unapplied_entries)) =
+                    document_state_wrapper.content_peers_state_and_unapplied_entries_mut()
                 {
                     if let Some(meta_doc_data) = &content.meta_doc_data {
                         let meta_automerge_doc = init_automerge_doc_from_data(
@@ -1240,10 +1286,15 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
                         content.user_automerge_doc = Some(user_automerge_doc);
                     }
 
-                    let changed =
-                        update_content(content, &doc_discovery_key, &feeds, unapplied_entries)
-                            .await
-                            .unwrap();
+                    let changed = update_content(
+                        content,
+                        peers_state,
+                        &doc_discovery_key,
+                        &feeds,
+                        unapplied_entries,
+                    )
+                    .await
+                    .unwrap();
                     debug!("open_disk: initialized document from data, changed={changed}");
                     if changed {
                         document_state_wrapper.persist_content().await;
@@ -1502,6 +1553,7 @@ where
 
 async fn update_content<T>(
     content: &mut DocumentContent,
+    peers_state: &mut DocumentPeersState,
     doc_discovery_key: &[u8; 32],
     feeds: &Arc<DashMap<[u8; 32], Arc<Mutex<Feed<T>>>>>,
     unapplied_entries: &mut UnappliedEntries,
@@ -1520,6 +1572,7 @@ where
             contiguous_length,
             doc_discovery_key,
             content,
+            peers_state,
             unapplied_entries,
         )
         .await?;
@@ -1559,8 +1612,9 @@ async fn update_content_with_entries(
     synced_contiguous_length: u64,
     doc_discovery_key: &[u8; 32],
     content: &mut DocumentContent,
+    peers_state: &mut DocumentPeersState,
     unapplied_entries: &mut UnappliedEntries,
-) -> Result<(Vec<Patch>, Vec<([u8; 32], u64)>), PeermergeError> {
+) -> Result<(Vec<Patch>, Vec<(PeerId, FeedDiscoveryKey, u64)>), PeermergeError> {
     let meta_automerge_doc = content.meta_automerge_doc.as_mut().unwrap();
     let user_automerge_doc = content.user_automerge_doc.as_mut().unwrap();
     let result = apply_entries_autocommit(
@@ -1571,14 +1625,15 @@ async fn update_content_with_entries(
         entries,
         unapplied_entries,
     )?;
-    update_content_from_edit_result(result, doc_discovery_key, content).await
+    update_content_from_edit_result(result, doc_discovery_key, content, peers_state).await
 }
 
 async fn update_content_from_edit_result(
     result: HashMap<[u8; 32], ApplyEntriesFeedChange>,
     doc_discovery_key: &[u8; 32],
     content: &mut DocumentContent,
-) -> Result<(Vec<Patch>, Vec<([u8; 32], u64)>), PeermergeError> {
+    peers_state: &mut DocumentPeersState,
+) -> Result<(Vec<Patch>, Vec<(PeerId, FeedDiscoveryKey, u64)>), PeermergeError> {
     let (user_patches, cursor_changes, peer_syncs, change_result) = {
         let meta_automerge_doc = content.meta_automerge_doc.as_mut().unwrap();
         let user_automerge_doc = content.user_automerge_doc.as_mut().unwrap();
@@ -1586,10 +1641,13 @@ async fn update_content_from_edit_result(
             .iter()
             .map(|(discovery_key, feed_change)| (*discovery_key, feed_change.length))
             .collect();
-        let peer_syncs: Vec<([u8; 32], u64)> = result
+        let peer_syncs: Vec<(PeerId, FeedDiscoveryKey, u64)> = result
             .iter()
             .filter(|(discovery_key, _)| *discovery_key != doc_discovery_key)
-            .map(|(discovery_key, feed_change)| (*discovery_key, feed_change.length))
+            .map(|(discovery_key, feed_change)| {
+                let peer_id = peers_state.peer_id(discovery_key);
+                (peer_id, *discovery_key, feed_change.length)
+            })
             .collect();
 
         let (user_patches, change_result) = if !peer_syncs.is_empty() {

@@ -12,7 +12,7 @@ pub(crate) mod state;
 pub(crate) mod storage;
 mod types;
 pub(crate) mod utils;
-pub(crate) use event::{PeerEvent, PeerEventContent};
+pub(crate) use event::{FeedEvent, FeedEventContent};
 
 pub use cipher::{decode_base64_nopad, encode_base64_nopad, get_doc_url_info, new_uuid_v4};
 pub use error::PeermergeError;
