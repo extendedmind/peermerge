@@ -112,7 +112,7 @@ where
                             } else {
                                 (
                                     None,
-                                    Some(document.peer_id_from_discovery_key(&discovery_key).await),
+                                    Some(document.peer_id_from_discovery_key(discovery_key).await),
                                 )
                             };
                             let mut hypercore = hypercore.lock().await;
@@ -122,7 +122,7 @@ where
                                 is_doc,
                                 feeds_state,
                                 peer_id,
-                                document.id(),
+                                document.doc_discovery_key(),
                                 channel,
                                 channel_receiver,
                                 channel_sender,

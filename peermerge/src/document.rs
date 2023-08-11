@@ -69,6 +69,8 @@ where
     proxy: bool,
     /// The doc discovery key
     doc_discovery_key: FeedDiscoveryKey,
+    /// The document id, derived from doc_discovery_key.
+    id: DocumentId,
     /// The write discovery key, if any
     write_discovery_key: Option<FeedDiscoveryKey>,
     /// Whether or not this document is encrypted.
@@ -86,6 +88,10 @@ where
     U: FeedPersistence,
 {
     pub(crate) fn id(&self) -> DocumentId {
+        self.id
+    }
+
+    pub(crate) fn doc_discovery_key(&self) -> FeedDiscoveryKey {
         self.doc_discovery_key
     }
 
@@ -727,7 +733,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
 
         // Process keys from doc URL
         let decoded_doc_url = decode_doc_url(&doc_url, &None);
-        let document_id = decoded_doc_url.doc_url_info.document_id;
+        let doc_discovery_key = decoded_doc_url.doc_url_info.doc_discovery_key;
 
         // Create the doc feed
         let (_, doc_feed) = create_new_read_memory_feed(
@@ -751,7 +757,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
 
         Self::new_memory(
             peer_id,
-            (document_id, doc_feed),
+            (doc_discovery_key, doc_feed),
             None,
             state,
             encrypted,
@@ -794,7 +800,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
 
         // Process keys from doc URL
         let decoded_doc_url = decode_doc_url(doc_url, encryption_key);
-        let document_id = decoded_doc_url.doc_url_info.document_id;
+        let doc_discovery_key = decoded_doc_url.doc_url_info.doc_discovery_key;
         let encrypted = if let Some(encrypted) = decoded_doc_url.doc_url_info.encrypted {
             if encrypted && encryption_key.is_none() {
                 panic!("Can not attach a peer to an encrypted document without an encryption key");
@@ -893,7 +899,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
 
         Ok(Self::new_memory(
             peer_id,
-            (document_id, root_feed),
+            (doc_discovery_key, root_feed),
             Some((write_discovery_key, write_feed)),
             state,
             encrypted,
@@ -910,6 +916,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
         encrypted: bool,
         encryption_key: Option<Vec<u8>>,
     ) -> Self {
+        let id = state.document_id;
         let feeds: DashMap<[u8; 32], Arc<Mutex<Feed<FeedMemoryPersistence>>>> = DashMap::new();
         let (doc_discovery_key, doc_feed) = doc_feed;
         feeds.insert(doc_discovery_key, Arc::new(Mutex::new(doc_feed)));
@@ -930,6 +937,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
             prefix: PathBuf::new(),
             proxy,
             doc_discovery_key,
+            id,
             write_discovery_key,
             encrypted,
             encryption_key,
@@ -1050,7 +1058,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
 
         // Process keys from doc URL
         let decoded_doc_url = decode_doc_url(doc_url, encryption_key);
-        let document_id = decoded_doc_url.doc_url_info.document_id;
+        let doc_discovery_key = decoded_doc_url.doc_url_info.doc_discovery_key;
         let encrypted = if let Some(encrypted) = decoded_doc_url.doc_url_info.encrypted {
             if encrypted && encryption_key.is_none() {
                 panic!("Can not attach a peer to an encrypted document without an encryption key");
@@ -1065,7 +1073,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
             .meta_doc_data;
 
         // Create the root feed
-        let postfix = encode_document_id(&document_id);
+        let postfix = encode_document_id(&decoded_doc_url.doc_url_info.document_id);
         let data_root_dir = data_root_dir.join(postfix);
         let (_, root_feed) = create_new_read_disk_feed(
             &data_root_dir,
@@ -1128,7 +1136,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
 
         Ok(Self::new_disk(
             peer_id,
-            (document_id, root_feed),
+            (doc_discovery_key, root_feed),
             Some((write_discovery_key, write_feed)),
             state,
             encrypted,
@@ -1150,6 +1158,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
         // Process keys from doc URL
         let decoded_doc_url = decode_doc_url(&doc_url, &None);
         let document_id = decoded_doc_url.doc_url_info.document_id;
+        let doc_discovery_key = decoded_doc_url.doc_url_info.doc_discovery_key;
 
         // Create the doc feed
         let postfix = encode_document_id(&document_id);
@@ -1177,7 +1186,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
 
         Self::new_disk(
             peer_id,
-            (document_id, doc_feed),
+            (doc_discovery_key, doc_feed),
             None,
             state,
             encrypted,
@@ -1199,6 +1208,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
     ) -> Result<Self, PeermergeError> {
         let mut document_state_wrapper = DocStateWrapper::open_disk(data_root_dir).await?;
         let state = document_state_wrapper.state();
+        let id = state.document_id;
         let proxy = state.proxy;
         let encrypted = if let Some(encrypted) = state.encrypted {
             if encrypted && encryption_key.is_none() {
@@ -1318,6 +1328,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
             peer_id,
             prefix: data_root_dir.clone(),
             doc_discovery_key,
+            id,
             write_discovery_key,
             proxy,
             encrypted,
@@ -1358,6 +1369,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
         encryption_key: Option<Vec<u8>>,
         data_root_dir: &PathBuf,
     ) -> Self {
+        let id = state.document_id;
         let feeds: DashMap<[u8; 32], Arc<Mutex<Feed<FeedDiskPersistence>>>> = DashMap::new();
         let (doc_discovery_key, doc_feed) = root_feed;
         feeds.insert(doc_discovery_key, Arc::new(Mutex::new(doc_feed)));
@@ -1378,6 +1390,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
             prefix: data_root_dir.clone(),
             proxy,
             doc_discovery_key,
+            id,
             write_discovery_key,
             encrypted,
             encryption_key,
