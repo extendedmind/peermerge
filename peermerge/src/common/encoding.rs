@@ -765,8 +765,8 @@ impl CompactEncoding<DocUrlAppendix> for State {
 
     fn decode(&mut self, buffer: &[u8]) -> Result<DocUrlAppendix, EncodingError> {
         let flags: u8 = self.decode(buffer)?;
-        let document_type: String = self.decode(buffer)?;
         let meta_doc_data: Vec<u8> = self.decode(buffer)?;
+        let document_type: String = self.decode(buffer)?;
         let document_header: Option<NameDescription> = if flags & 1 != 0 {
             let name: String = self.decode(buffer)?;
             if flags & 2 != 0 {
