@@ -51,15 +51,15 @@ impl CompactEncoding<DocumentState> for State {
         self.preencode(&value.version)?;
         self.preencode_fixed_32()?; // doc_public_key
         self.add_end(1)?; // flags
-        let len = value.feeds_state.feeds.len();
+        let len = value.feeds_state.peer_feeds.len();
         if len > 0 {
             self.preencode(&len)?;
-            for peer in &value.feeds_state.feeds {
+            for peer in &value.feeds_state.peer_feeds {
                 self.preencode(peer)?;
             }
         }
-        if let Some(write_peer) = &value.feeds_state.write_feed {
-            self.preencode(write_peer)?;
+        if let Some(write_feed) = &value.feeds_state.write_feed {
+            self.preencode(write_feed)?;
         }
         if let Some(content) = &value.content {
             self.preencode(content)?;
@@ -79,17 +79,17 @@ impl CompactEncoding<DocumentState> for State {
         if value.encrypted.unwrap_or(false) {
             flags |= 2;
         }
-        let len = value.feeds_state.feeds.len();
+        let len = value.feeds_state.peer_feeds.len();
         if len > 0 {
             flags |= 4;
             self.encode(&len, buffer)?;
-            for peer in &value.feeds_state.feeds {
+            for peer in &value.feeds_state.peer_feeds {
                 self.encode(peer, buffer)?;
             }
         }
-        if let Some(write_peer) = &value.feeds_state.write_feed {
+        if let Some(write_feed) = &value.feeds_state.write_feed {
             flags |= 8;
-            self.encode(write_peer, buffer)?;
+            self.encode(write_feed, buffer)?;
         }
         if let Some(content) = &value.content {
             flags |= 16;
@@ -107,7 +107,7 @@ impl CompactEncoding<DocumentState> for State {
         let flags: u8 = self.decode(buffer)?;
         let proxy = flags & 1 != 0;
         let encrypted: Option<bool> = if !proxy { Some(flags & 2 != 0) } else { None };
-        let feeds: Vec<DocumentFeedInfo> = if flags & 4 != 0 {
+        let peer_feeds: Vec<DocumentFeedInfo> = if flags & 4 != 0 {
             let len: usize = self.decode(buffer)?;
             let mut feeds: Vec<DocumentFeedInfo> = Vec::with_capacity(len);
             for _ in 0..len {
@@ -119,7 +119,7 @@ impl CompactEncoding<DocumentState> for State {
             vec![]
         };
 
-        let write_peer: Option<DocumentFeedInfo> = if flags & 8 != 0 {
+        let write_feed: Option<DocumentFeedInfo> = if flags & 8 != 0 {
             Some(self.decode(buffer)?)
         } else {
             None
@@ -135,7 +135,7 @@ impl CompactEncoding<DocumentState> for State {
             proxy,
             doc_public_key,
             encrypted,
-            DocumentFeedsState::new_from_data(write_peer, feeds),
+            DocumentFeedsState::new_from_data(write_feed, peer_feeds),
             content,
         ))
     }
@@ -297,10 +297,10 @@ impl CompactEncoding<BroadcastMessage> for State {
         if let Some(write_feed) = &value.write_feed {
             self.preencode(write_feed)?;
         }
-        let len = value.feeds.len();
+        let len = value.peer_feeds.len();
         if len > 0 {
             self.preencode(&len)?;
-            for feed in &value.feeds {
+            for feed in &value.peer_feeds {
                 self.preencode(feed)?;
             }
         }
@@ -319,11 +319,11 @@ impl CompactEncoding<BroadcastMessage> for State {
             flags |= 1;
             self.encode(write_peer, buffer)?;
         }
-        let len = value.feeds.len();
+        let len = value.peer_feeds.len();
         if len > 0 {
             flags |= 2;
             self.encode(&len, buffer)?;
-            for peer in &value.feeds {
+            for peer in &value.peer_feeds {
                 self.encode(peer, buffer)?;
             }
         }

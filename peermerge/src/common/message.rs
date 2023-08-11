@@ -6,11 +6,17 @@ use super::state::DocumentFeedInfo;
 #[derive(Debug)]
 pub(crate) struct BroadcastMessage {
     pub(crate) write_feed: Option<DocumentFeedInfo>,
-    pub(crate) feeds: Vec<DocumentFeedInfo>,
+    pub(crate) peer_feeds: Vec<DocumentFeedInfo>,
 }
 impl BroadcastMessage {
-    pub(crate) fn new(write_feed: Option<DocumentFeedInfo>, feeds: Vec<DocumentFeedInfo>) -> Self {
-        Self { write_feed, feeds }
+    pub(crate) fn new(
+        write_feed: Option<DocumentFeedInfo>,
+        peer_feeds: Vec<DocumentFeedInfo>,
+    ) -> Self {
+        Self {
+            write_feed,
+            peer_feeds,
+        }
     }
 }
 

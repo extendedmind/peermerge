@@ -1,6 +1,7 @@
 use std::fmt::Debug;
 
 use automerge::{ReadDoc, ROOT};
+use tracing::debug;
 use uuid::Uuid;
 
 use crate::{
@@ -67,7 +68,7 @@ pub(crate) struct DocumentState {
     pub(crate) encrypted: Option<bool>,
     /// Is this a proxy document.
     pub(crate) proxy: bool,
-    /// State for all of the feeds.
+    /// State for all of the feeds that are not the doc feed.
     pub(crate) feeds_state: DocumentFeedsState,
     /// Content of the document. None for proxy.
     pub(crate) content: Option<DocumentContent>,
@@ -299,8 +300,8 @@ impl DocumentState {
 pub(crate) struct DocumentFeedsState {
     /// Id and public key of personal writeable feed. None if proxy.
     pub(crate) write_feed: Option<DocumentFeedInfo>,
-    /// Keys of the other feeds.
-    pub(crate) feeds: Vec<DocumentFeedInfo>,
+    /// Id and public key of the other peers' feeds.
+    pub(crate) peer_feeds: Vec<DocumentFeedInfo>,
 }
 
 impl DocumentFeedsState {
@@ -317,38 +318,41 @@ impl DocumentFeedsState {
 
     pub(crate) fn new_from_data(
         mut write_feed: Option<DocumentFeedInfo>,
-        mut feeds: Vec<DocumentFeedInfo>,
+        mut peer_feeds: Vec<DocumentFeedInfo>,
     ) -> Self {
-        // For state, populate the peers with discovery keys
+        // For state, populate the discovery keys
         if let Some(write_feed) = write_feed.as_mut() {
             write_feed.populate_discovery_key();
         }
-        for feed in feeds.iter_mut() {
-            feed.populate_discovery_key();
+        for peer_feed in peer_feeds.iter_mut() {
+            peer_feed.populate_discovery_key();
         }
-        Self { write_feed, feeds }
+        Self {
+            write_feed,
+            peer_feeds,
+        }
     }
 
     pub(crate) fn filter_new_feeds(
         &self,
         remote_write_feed: &Option<DocumentFeedInfo>,
-        remote_feeds: &[DocumentFeedInfo],
+        remote_peer_feeds: &[DocumentFeedInfo],
     ) -> Vec<DocumentFeedInfo> {
-        let mut new_remote_feeds: Vec<DocumentFeedInfo> = remote_feeds
+        let mut new_remote_feeds: Vec<DocumentFeedInfo> = remote_peer_feeds
             .iter()
-            .filter(|remote_feed| {
+            .filter(|remote_peer_feed| {
                 let writable_matches: bool = if let Some(write_feed) = &self.write_feed {
-                    write_feed == *remote_feed
+                    write_feed == *remote_peer_feed
                 } else {
                     false
                 };
-                !writable_matches && !self.feeds.contains(remote_feed)
+                !writable_matches && !self.peer_feeds.contains(remote_peer_feed)
             })
             .cloned()
             .collect();
         if let Some(remote_write_feed) = remote_write_feed {
             if !self
-                .feeds
+                .peer_feeds
                 .iter()
                 .any(|feed| feed.public_key == remote_write_feed.public_key)
             {
@@ -370,7 +374,7 @@ impl DocumentFeedsState {
         }
         remote_feeds.sort();
 
-        let mut feeds: Vec<DocumentFeedInfo> = self.feeds.clone();
+        let mut feeds: Vec<DocumentFeedInfo> = self.peer_feeds.clone();
 
         if let Some(write_feed) = &self.write_feed {
             feeds.push(write_feed.clone());
@@ -387,9 +391,10 @@ impl DocumentFeedsState {
         let changed_feeds: Vec<DocumentFeedInfo> = incoming_feeds
             .iter()
             .filter(|incoming_feed| {
-                self.feeds
+                !self
+                    .peer_feeds
                     .iter()
-                    .any(|stored_feed| stored_feed != *incoming_feed)
+                    .any(|stored_feed| stored_feed == *incoming_feed)
             })
             .cloned()
             .collect();
@@ -398,7 +403,6 @@ impl DocumentFeedsState {
             .filter(|changed_feed| changed_feed.replaced_by_public_key.is_none())
             .cloned()
             .collect();
-
         let (changed, replaced_feeds): (bool, Vec<DocumentFeedInfo>) = {
             if changed_feeds.is_empty() {
                 (false, vec![])
@@ -407,7 +411,7 @@ impl DocumentFeedsState {
                 // differ only in that replaced_by_public_key has
                 // been set.
                 let to_be_mutated_feeds: Vec<&mut DocumentFeedInfo> = self
-                    .feeds
+                    .peer_feeds
                     .iter_mut()
                     .filter(|feed| {
                         changed_feeds.iter().any(|changed_feed| {
@@ -429,7 +433,7 @@ impl DocumentFeedsState {
                             add_feed
                         })
                         .collect();
-                    self.feeds.extend(to_add_feeds);
+                    self.peer_feeds.extend(to_add_feeds);
                     (true, vec![])
                 } else {
                     // Get the feeds that were replaced
@@ -459,7 +463,7 @@ impl DocumentFeedsState {
                             add_feed
                         })
                         .collect();
-                    self.feeds.extend(to_add_feeds);
+                    self.peer_feeds.extend(to_add_feeds);
 
                     (true, replaced_feeds)
                 }
@@ -470,7 +474,7 @@ impl DocumentFeedsState {
 
     pub(crate) fn peer_id(&self, discovery_key: &FeedDiscoveryKey) -> PeerId {
         let peer = self
-            .feeds
+            .peer_feeds
             .iter()
             .find(|peer| &peer.discovery_key.unwrap() == discovery_key);
         if let Some(peer) = peer {

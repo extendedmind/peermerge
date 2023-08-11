@@ -34,7 +34,7 @@ const CLOSED_LOCAL_SIGNAL_NAME: &str = "closed";
 pub(super) fn create_broadcast_message(feeds_state: &DocumentFeedsState) -> Message {
     let broadcast_message: BroadcastMessage = BroadcastMessage {
         write_feed: feeds_state.write_feed.clone(),
-        feeds: feeds_state.feeds.clone(),
+        peer_feeds: feeds_state.peer_feeds.clone(),
     };
     let mut enc_state = State::new();
     enc_state
@@ -363,11 +363,11 @@ where
                 let mut dec_state = State::from_buffer(&message.message);
                 let broadcast_message: BroadcastMessage = dec_state.decode(&message.message)?;
                 let new_remote_feeds = feeds_state
-                    .filter_new_feeds(&broadcast_message.write_feed, &broadcast_message.feeds);
+                    .filter_new_feeds(&broadcast_message.write_feed, &broadcast_message.peer_feeds);
 
                 if new_remote_feeds.is_empty()
                     && feeds_state
-                        .feeds_match(&broadcast_message.write_feed, &broadcast_message.feeds)
+                        .feeds_match(&broadcast_message.write_feed, &broadcast_message.peer_feeds)
                 {
                     // Don't re-initialize if this has already been synced, meaning this is a
                     // broadcast that notifies a new third party feed after the initial handshake.
