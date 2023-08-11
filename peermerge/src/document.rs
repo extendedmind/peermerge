@@ -1630,8 +1630,7 @@ async fn update_content_with_entries(
     feeds_state: &mut DocumentFeedsState,
     unapplied_entries: &mut UnappliedEntries,
 ) -> Result<(Vec<Patch>, Vec<(PeerId, FeedDiscoveryKey, u64)>), PeermergeError> {
-    let meta_automerge_doc = content.meta_automerge_doc.as_mut().unwrap();
-    let user_automerge_doc = content.user_automerge_doc.as_mut().unwrap();
+    let (meta_automerge_doc, user_automerge_doc) = content.docs_mut().unwrap();
     let result = apply_entries_autocommit(
         meta_automerge_doc,
         user_automerge_doc,

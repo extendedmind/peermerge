@@ -623,12 +623,10 @@ impl DocumentContent {
     }
 
     pub(crate) fn docs_mut(&mut self) -> Option<(&mut AutomergeDoc, &mut AutomergeDoc)> {
-        if let Some(user_automerge_doc) = self.user_automerge_doc.as_mut() {
-            if let Some(meta_automerge_doc) = self.meta_automerge_doc.as_mut() {
-                Some((user_automerge_doc, meta_automerge_doc))
-            } else {
-                None
-            }
+        if let Some(meta_automerge_doc) = self.meta_automerge_doc.as_mut() {
+            self.user_automerge_doc
+                .as_mut()
+                .map(|user_automerge_doc| (meta_automerge_doc, user_automerge_doc))
         } else {
             None
         }
