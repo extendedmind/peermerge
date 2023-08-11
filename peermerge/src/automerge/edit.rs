@@ -407,13 +407,9 @@ mod tests {
         let (_, doc_discovery_key) = generate_keys();
         let (_, peer_1_discovery_key) = generate_keys();
         let (_, peer_2_discovery_key) = generate_keys();
-        let (result, _, _) = init_automerge_docs(
-            doc_discovery_key,
-            peer_id,
-            &doc_discovery_key,
-            false,
-            |tx| tx.put(ROOT, "version", 1),
-        )
+        let (result, _, _) = init_automerge_docs(doc_discovery_key, peer_id, false, |tx| {
+            tx.put(ROOT, "version", 1)
+        })
         .unwrap();
 
         let mut meta_doc = result.meta_automerge_doc;
@@ -455,7 +451,7 @@ mod tests {
         assert_int_value(&user_doc, &key_5, int_prop, int_value);
 
         // In chunks
-        user_doc = init_automerge_doc_from_data(peer_id, &doc_discovery_key, &result.user_doc_data);
+        user_doc = init_automerge_doc_from_data(peer_id, &result.user_doc_data);
         apply_entries_autocommit(
             &mut meta_doc,
             &mut user_doc,
@@ -486,7 +482,7 @@ mod tests {
         assert_int_value(&user_doc, &key_5, int_prop, int_value);
 
         // Missing first, should first result in all going to unapplied entries, then consolidate
-        user_doc = init_automerge_doc_from_data(peer_id, &doc_discovery_key, &result.user_doc_data);
+        user_doc = init_automerge_doc_from_data(peer_id, &result.user_doc_data);
         apply_entries_autocommit(
             &mut meta_doc,
             &mut user_doc,
@@ -523,7 +519,7 @@ mod tests {
         assert_int_value(&user_doc, &key_5, int_prop, int_value);
 
         // Mixture of two peers having every other change
-        user_doc = init_automerge_doc_from_data(peer_id, &doc_discovery_key, &result.user_doc_data);
+        user_doc = init_automerge_doc_from_data(peer_id, &result.user_doc_data);
         apply_entries_autocommit(
             &mut meta_doc,
             &mut user_doc,

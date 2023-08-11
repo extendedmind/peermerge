@@ -187,15 +187,14 @@ impl CompactEncoding<DocumentFeedInfo> for State {
 impl CompactEncoding<DocumentContent> for State {
     fn preencode(&mut self, value: &DocumentContent) -> Result<usize, EncodingError> {
         self.add_end(1)?; // flags
+        self.preencode_fixed_16()?; // peer_id
+        self.preencode(&value.meta_doc_data)?;
         let len = value.cursors.len();
         if len > 0 {
             self.preencode(&len)?;
             for cursor in &value.cursors {
                 self.preencode(cursor)?;
             }
-        }
-        if let Some(meta_doc_data) = &value.meta_doc_data {
-            self.preencode(meta_doc_data)?;
         }
         if let Some(user_doc_data) = &value.user_doc_data {
             self.preencode(user_doc_data)?;
@@ -211,6 +210,8 @@ impl CompactEncoding<DocumentContent> for State {
         let flags_index = self.start();
         let mut flags: u8 = 0;
         self.add_start(1)?;
+        self.encode_fixed_16(&value.peer_id, buffer)?;
+        self.encode(&value.meta_doc_data, buffer)?;
         let len = value.cursors.len();
         if len > 0 {
             flags |= 1;
@@ -219,12 +220,8 @@ impl CompactEncoding<DocumentContent> for State {
                 self.encode(cursor, buffer)?;
             }
         }
-        if let Some(meta_doc_data) = &value.meta_doc_data {
-            flags |= 2;
-            self.encode(meta_doc_data, buffer)?;
-        }
         if let Some(user_doc_data) = &value.user_doc_data {
-            flags |= 4;
+            flags |= 2;
             self.encode(user_doc_data, buffer)?;
         }
         buffer[flags_index] = flags;
@@ -233,7 +230,8 @@ impl CompactEncoding<DocumentContent> for State {
 
     fn decode(&mut self, buffer: &[u8]) -> Result<DocumentContent, EncodingError> {
         let flags: u8 = self.decode(buffer)?;
-
+        let peer_id: PeerId = self.decode_fixed_16(buffer)?.to_vec().try_into().unwrap();
+        let meta_doc_data: Vec<u8> = self.decode(buffer)?;
         let cursors: Vec<DocumentCursor> = if flags & 1 != 0 {
             let len: usize = self.decode(buffer)?;
             let mut cursors: Vec<DocumentCursor> = Vec::with_capacity(len);
@@ -245,18 +243,14 @@ impl CompactEncoding<DocumentContent> for State {
         } else {
             vec![]
         };
-        let meta_doc_data: Option<Vec<u8>> = if flags & 2 != 0 {
-            Some(self.decode(buffer)?)
-        } else {
-            None
-        };
-        let user_doc_data: Option<Vec<u8>> = if flags & 4 != 0 {
+        let user_doc_data: Option<Vec<u8>> = if flags & 2 != 0 {
             Some(self.decode(buffer)?)
         } else {
             None
         };
 
         Ok(DocumentContent {
+            peer_id,
             cursors,
             meta_doc_data,
             user_doc_data,

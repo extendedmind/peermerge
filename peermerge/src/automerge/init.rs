@@ -26,14 +26,13 @@ pub(crate) struct InitAutomergeDocsResult {
 pub(crate) fn init_automerge_docs<F, O>(
     document_id: DocumentId,
     write_peer_id: &PeerId,
-    write_discovery_key: &FeedDiscoveryKey,
     child: bool,
     init_cb: F,
 ) -> Result<(InitAutomergeDocsResult, O, Vec<Entry>), PeermergeError>
 where
     F: FnOnce(&mut Transaction) -> Result<O, AutomergeError>,
 {
-    let actor_id = generate_actor_id(write_peer_id, write_discovery_key);
+    let actor_id = generate_actor_id(write_peer_id);
 
     let mut meta_automerge_doc = Automerge::new().with_actor(actor_id.clone());
     meta_automerge_doc
@@ -162,9 +161,15 @@ pub(crate) fn init_peer(
     Ok(entries)
 }
 
-pub(crate) fn init_automerge_docs_from_entries(
+pub(crate) struct BootstrapAutomergeUserDocResult {
+    pub(crate) user_automerge_doc: AutomergeDoc,
+    pub(crate) user_doc_data: Vec<u8>,
+    pub(crate) meta_doc_data: Vec<u8>,
+}
+
+pub(crate) fn bootstrap_automerge_user_doc_from_entries(
+    meta_automerge_doc: &mut AutomergeDoc,
     write_peer_id: &PeerId,
-    write_discovery_key: &FeedDiscoveryKey,
     synced_discovery_key: &FeedDiscoveryKey,
     synced_contiguous_length: u64,
     mut entries: Vec<Entry>,
@@ -172,7 +177,7 @@ pub(crate) fn init_automerge_docs_from_entries(
     unapplied_entries: &mut UnappliedEntries,
 ) -> Result<
     (
-        InitAutomergeDocsResult,
+        BootstrapAutomergeUserDocResult,
         HashMap<[u8; 32], ApplyEntriesFeedChange>,
     ),
     PeermergeError,
@@ -206,13 +211,16 @@ pub(crate) fn init_automerge_docs_from_entries(
         _ => panic!("Invalid init entries"),
     };
     assert_eq!(entries_original_offset, doc_part_count as u64);
-    let actor_id = generate_actor_id(write_peer_id, write_discovery_key);
-    let mut meta_automerge_doc =
-        init_automerge_doc_from_data_with_actor_id(actor_id.clone(), &meta_doc_data);
+    let actor_id = generate_actor_id(write_peer_id);
     let mut user_automerge_doc =
         init_automerge_doc_from_data_with_actor_id(actor_id, &user_doc_data);
+    let mut changed_meta_automerge_doc = AutomergeDoc::load(&meta_doc_data).unwrap();
+    meta_automerge_doc
+        .merge(&mut changed_meta_automerge_doc)
+        .unwrap();
+
     let mut result = apply_entries_autocommit(
-        &mut meta_automerge_doc,
+        meta_automerge_doc,
         &mut user_automerge_doc,
         synced_discovery_key,
         synced_contiguous_length,
@@ -228,11 +236,10 @@ pub(crate) fn init_automerge_docs_from_entries(
             ApplyEntriesFeedChange::new(1 + entries_original_offset),
         );
     }
-    let meta_doc_data = save_automerge_doc(&mut meta_automerge_doc);
+    let meta_doc_data = save_automerge_doc(meta_automerge_doc);
     let user_doc_data = save_automerge_doc(&mut user_automerge_doc);
     Ok((
-        InitAutomergeDocsResult {
-            meta_automerge_doc,
+        BootstrapAutomergeUserDocResult {
             user_automerge_doc,
             meta_doc_data,
             user_doc_data,
@@ -241,12 +248,8 @@ pub(crate) fn init_automerge_docs_from_entries(
     ))
 }
 
-pub(crate) fn init_automerge_doc_from_data(
-    write_peer_id: &PeerId,
-    write_discovery_key: &FeedDiscoveryKey,
-    data: &[u8],
-) -> AutomergeDoc {
-    let actor_id = generate_actor_id(write_peer_id, write_discovery_key);
+pub(crate) fn init_automerge_doc_from_data(write_peer_id: &PeerId, data: &[u8]) -> AutomergeDoc {
+    let actor_id = generate_actor_id(write_peer_id);
     init_automerge_doc_from_data_with_actor_id(actor_id, data)
 }
 
@@ -262,8 +265,6 @@ fn init_automerge_doc_from_data_with_actor_id(actor_id: ActorId, data: &[u8]) ->
     doc
 }
 
-fn generate_actor_id(write_peer_id: &PeerId, write_discovery_key: &FeedDiscoveryKey) -> ActorId {
-    let mut actor_id: Vec<u8> = write_peer_id.to_vec();
-    actor_id.extend_from_slice(write_discovery_key);
-    ActorId::from(actor_id)
+fn generate_actor_id(write_peer_id: &PeerId) -> ActorId {
+    ActorId::from(write_peer_id.to_vec())
 }

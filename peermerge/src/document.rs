@@ -13,10 +13,10 @@ use std::{fmt::Debug, path::PathBuf};
 use tracing::{debug, enabled, instrument, warn, Level};
 
 use crate::automerge::{
-    apply_entries_autocommit, apply_unapplied_entries_autocommit, init_automerge_doc_from_data,
-    init_automerge_docs, init_automerge_docs_from_entries, init_first_peer, init_peer,
-    transact_autocommit, transact_mut_autocommit, ApplyEntriesFeedChange, AutomergeDoc,
-    DocsChangeResult, UnappliedEntries,
+    apply_entries_autocommit, apply_unapplied_entries_autocommit,
+    bootstrap_automerge_user_doc_from_entries, init_automerge_doc_from_data, init_automerge_docs,
+    init_first_peer, init_peer, transact_autocommit, transact_mut_autocommit,
+    ApplyEntriesFeedChange, AutomergeDoc, DocsChangeResult, UnappliedEntries,
 };
 use crate::common::cipher::{decode_doc_url, encode_document_id, encode_proxy_doc_url};
 use crate::common::encoding::serialize_entry;
@@ -33,11 +33,7 @@ use crate::feed::{create_new_read_disk_feed, create_new_write_disk_feed, open_di
 #[cfg(not(target_arch = "wasm32"))]
 use crate::FeedDiskPersistence;
 use crate::{
-    common::{
-        entry::Entry,
-        state::{DocumentContent, DocumentCursor},
-        storage::DocStateWrapper,
-    },
+    common::{entry::Entry, state::DocumentContent, storage::DocStateWrapper},
     feed::{
         create_new_read_memory_feed, create_new_write_memory_feed, get_feed,
         get_feed_discovery_keys, Feed,
@@ -425,46 +421,48 @@ where
                 if let Some((content, feeds_state, unapplied_entries)) =
                     document_state.content_feeds_state_and_unapplied_entries_mut()
                 {
-                    debug!("Document has content, updating it");
-                    let (patches, peer_syncs) = self
-                        .update_synced_content(
-                            &discovery_key,
-                            synced_contiguous_length,
-                            content,
-                            feeds_state,
-                            unapplied_entries,
-                        )
-                        .await
-                        .unwrap();
-                    document_state.persist_content().await;
-                    (None, patches, peer_syncs)
-                } else {
-                    let write_discovery_key = document_state.write_discovery_key();
-                    let (feeds_state, unapplied_entries) =
-                        document_state.feeds_state_and_unappliend_entries_mut();
-                    if let Some((content, peer_syncs)) = self
-                        .create_content(
-                            &discovery_key,
-                            synced_contiguous_length,
-                            &write_discovery_key,
-                            feeds_state,
-                            unapplied_entries,
-                        )
-                        .await
-                        .unwrap()
-                    {
-                        debug!("Document created, saving and returning DocumentInitialized");
-                        document_state.set_content(content).await;
-                        (
-                            Some(DocumentInitialized(true, None)), // TODO: Parent document id
-                            vec![],
-                            peer_syncs,
-                        )
+                    if content.is_bootsrapped() {
+                        debug!("Document has bootstrapped content, updating it");
+                        let (patches, peer_syncs) = self
+                            .update_synced_content(
+                                &discovery_key,
+                                synced_contiguous_length,
+                                content,
+                                feeds_state,
+                                unapplied_entries,
+                            )
+                            .await
+                            .unwrap();
+                        document_state.persist_content().await;
+                        (None, patches, peer_syncs)
                     } else {
-                        debug!("Document could not be created, need more peers");
-                        // Could not create content from this peer's data, needs more peers
-                        (None, vec![], vec![])
+                        debug!("Bootstrapping document content from entries");
+                        if let Some(peer_syncs) = self
+                            .bootstrap_content(
+                                &discovery_key,
+                                synced_contiguous_length,
+                                content,
+                                feeds_state,
+                                unapplied_entries,
+                            )
+                            .await
+                            .unwrap()
+                        {
+                            debug!("Document created, saving and returning DocumentInitialized");
+                            document_state.persist_content().await;
+                            (
+                                Some(DocumentInitialized(true, None)), // TODO: Parent document id
+                                vec![],
+                                peer_syncs,
+                            )
+                        } else {
+                            debug!("Document could not be created, need more peers");
+                            // Could not create content from this peer's data, needs more peers
+                            (None, vec![], vec![])
+                        }
                     }
+                } else {
+                    panic!("Content needs to exist for non-proxy documents");
                 };
 
             self.state_events_from_update_content_result(
@@ -512,15 +510,14 @@ where
             .unwrap();
     }
 
-    async fn create_content(
+    async fn bootstrap_content(
         &self,
         synced_discovery_key: &[u8; 32],
         synced_contiguous_length: u64,
-        write_discovery_key: &[u8; 32],
+        content: &mut DocumentContent,
         feeds_state: &mut DocumentFeedsState,
         unapplied_entries: &mut UnappliedEntries,
-    ) -> Result<Option<(DocumentContent, Vec<(PeerId, FeedDiscoveryKey, u64)>)>, PeermergeError>
-    {
+    ) -> Result<Option<Vec<(PeerId, FeedDiscoveryKey, u64)>>, PeermergeError> {
         // The document starts from the doc feed, so get that first
         if synced_discovery_key == &self.doc_discovery_key {
             let (init_entries, init_entries_original_offset) = {
@@ -531,26 +528,42 @@ where
                 doc_feed.entries(0, synced_contiguous_length).await?
             };
 
-            // Create DocContent from the feed
-            let (mut init_docs_result, feed_change_result) = init_automerge_docs_from_entries(
-                &self.peer_id,
-                write_discovery_key,
-                synced_discovery_key,
-                synced_contiguous_length,
-                init_entries,
-                init_entries_original_offset,
-                unapplied_entries,
-            )?;
-            let cursors: Vec<DocumentCursor> = feed_change_result
+            // Bootstrap user document from the feed
+            let (mut bootstrap_result, feed_change_result) = {
+                let meta_automerge_doc = content.meta_automerge_doc_mut().unwrap();
+                let result = bootstrap_automerge_user_doc_from_entries(
+                    meta_automerge_doc,
+                    &self.peer_id,
+                    synced_discovery_key,
+                    synced_contiguous_length,
+                    init_entries,
+                    init_entries_original_offset,
+                    unapplied_entries,
+                )?;
+                // Empty meta patches
+                meta_automerge_doc.update_diff_cursor();
+                result
+            };
+
+            let cursor_changes: Vec<(FeedDiscoveryKey, u64)> = feed_change_result
                 .iter()
-                .map(|(discovery_key, feed_change)| {
-                    DocumentCursor::new(*discovery_key, feed_change.length)
-                })
+                .map(|(discovery_key, feed_change)| (*discovery_key, feed_change.length))
                 .collect();
+            content.set_cursors_and_save_data(
+                cursor_changes,
+                DocsChangeResult {
+                    meta_changed: false,
+                    user_changed: false,
+                },
+            );
 
             // Empty patches queue, documents were just initialized, so they can be safely ignored.
-            init_docs_result.user_automerge_doc.update_diff_cursor();
-            init_docs_result.meta_automerge_doc.update_diff_cursor();
+            bootstrap_result.user_automerge_doc.update_diff_cursor();
+
+            // Set values to content
+            content.meta_doc_data = bootstrap_result.meta_doc_data;
+            content.user_doc_data = Some(bootstrap_result.user_doc_data);
+            content.user_automerge_doc = Some(bootstrap_result.user_automerge_doc);
 
             let peer_syncs: Vec<(PeerId, FeedDiscoveryKey, u64)> = feed_change_result
                 .iter()
@@ -561,16 +574,7 @@ where
                     (peer_id, *discovery_key, feed_change.length)
                 })
                 .collect();
-            Ok(Some((
-                DocumentContent::new(
-                    cursors,
-                    init_docs_result.meta_doc_data,
-                    init_docs_result.user_doc_data,
-                    init_docs_result.meta_automerge_doc,
-                    init_docs_result.user_automerge_doc,
-                ),
-                peer_syncs,
-            )))
+            Ok(Some(peer_syncs))
         } else {
             // Got first some other peer's data, need to store it to unapplied changes
             let feed = get_feed(&self.feeds, synced_discovery_key).await.unwrap();
@@ -750,9 +754,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
             decoded_doc_url.doc_url_info.doc_public_key,
             None,
             DocumentFeedsState::new(),
-            Some(DocumentContent::new_proxy(
-                &decoded_doc_url.doc_url_info.doc_discovery_key,
-            )),
+            None,
         );
 
         Self::new_memory(
@@ -833,8 +835,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
         ) = if let Some(write_key_pair) = write_key_pair.take() {
             let write_public_key = *write_key_pair.public.as_bytes();
             let write_discovery_key = discovery_key_from_public_key(&write_public_key);
-            let meta_automerge_doc =
-                init_automerge_doc_from_data(&peer_id, &write_discovery_key, &meta_doc_data);
+            let meta_automerge_doc = init_automerge_doc_from_data(&peer_id, &meta_doc_data);
             let (_, write_feed, _) =
                 create_new_write_memory_feed(write_key_pair, None, encrypted, encryption_key).await;
             (
@@ -849,8 +850,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
             let write_public_key = *write_key_pair.public.as_bytes();
 
             // Init the meta document from the URL
-            let mut meta_automerge_doc =
-                init_automerge_doc_from_data(&peer_id, &write_discovery_key, &meta_doc_data);
+            let mut meta_automerge_doc = init_automerge_doc_from_data(&peer_id, &meta_doc_data);
             let init_peer_entries = init_peer(
                 &mut meta_automerge_doc,
                 None,
@@ -879,7 +879,8 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
         };
 
         // Initialize document state
-        let content = DocumentContent::new_writer(
+        let content = DocumentContent::new(
+            peer_id,
             &decoded_doc_url.doc_url_info.doc_discovery_key,
             0,
             &write_discovery_key,
@@ -1090,8 +1091,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
         let write_public_key = *write_key_pair.public.as_bytes();
 
         // Init the meta document from the URL
-        let mut meta_automerge_doc =
-            init_automerge_doc_from_data(&peer_id, &write_discovery_key, &meta_doc_data);
+        let mut meta_automerge_doc = init_automerge_doc_from_data(&peer_id, &meta_doc_data);
         let init_peer_entries = init_peer(
             &mut meta_automerge_doc,
             None,
@@ -1116,7 +1116,8 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
         .await;
 
         // Initialize document state
-        let content = DocumentContent::new_writer(
+        let content = DocumentContent::new(
+            peer_id,
             &decoded_doc_url.doc_url_info.doc_discovery_key,
             0,
             &write_discovery_key,
@@ -1179,9 +1180,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
             decoded_doc_url.doc_url_info.doc_public_key,
             None,
             DocumentFeedsState::new(),
-            Some(DocumentContent::new_proxy(
-                &decoded_doc_url.doc_url_info.doc_discovery_key,
-            )),
+            None,
         );
 
         Self::new_disk(
@@ -1279,23 +1278,14 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
                 if let Some((content, feeds_state, unapplied_entries)) =
                     document_state_wrapper.content_feeds_state_and_unapplied_entries_mut()
                 {
-                    if let Some(meta_doc_data) = &content.meta_doc_data {
-                        let meta_automerge_doc = init_automerge_doc_from_data(
-                            &write_peer.peer_id,
-                            &write_discovery_key,
-                            meta_doc_data,
-                        );
-                        content.meta_automerge_doc = Some(meta_automerge_doc);
-                    }
+                    let meta_automerge_doc =
+                        init_automerge_doc_from_data(&write_peer.peer_id, &content.meta_doc_data);
+                    content.meta_automerge_doc = Some(meta_automerge_doc);
                     if let Some(user_doc_data) = &content.user_doc_data {
-                        let user_automerge_doc = init_automerge_doc_from_data(
-                            &write_peer.peer_id,
-                            &write_discovery_key,
-                            user_doc_data,
-                        );
+                        let user_automerge_doc =
+                            init_automerge_doc_from_data(&write_peer.peer_id, user_doc_data);
                         content.user_automerge_doc = Some(user_automerge_doc);
                     }
-
                     let changed = update_content(
                         content,
                         feeds_state,
@@ -1522,7 +1512,7 @@ where
 
     // Initialize the documents
     let (mut create_result, init_result, doc_feed_init_entries) =
-        init_automerge_docs(document_id, peer_id, &doc_discovery_key, false, init_cb).unwrap();
+        init_automerge_docs(document_id, peer_id, false, init_cb).unwrap();
     let doc_feed_init_data: Vec<Vec<u8>> = doc_feed_init_entries
         .into_iter()
         .map(|entry| serialize_entry(&entry).unwrap())
@@ -1542,7 +1532,8 @@ where
         .collect();
 
     // Initialize document state
-    let content = DocumentContent::new_writer(
+    let content = DocumentContent::new(
+        *peer_id,
         &doc_discovery_key,
         doc_feed_init_data.len(),
         &write_discovery_key,
@@ -1659,8 +1650,7 @@ async fn update_content_from_edit_result(
     feeds_state: &mut DocumentFeedsState,
 ) -> Result<(Vec<Patch>, Vec<(PeerId, FeedDiscoveryKey, u64)>), PeermergeError> {
     let (user_patches, cursor_changes, peer_syncs, change_result) = {
-        let meta_automerge_doc = content.meta_automerge_doc.as_mut().unwrap();
-        let user_automerge_doc = content.user_automerge_doc.as_mut().unwrap();
+        let (meta_automerge_doc, user_automerge_doc) = content.docs_mut().unwrap();
         let cursor_changes: Vec<([u8; 32], u64)> = result
             .iter()
             .map(|(discovery_key, feed_change)| (*discovery_key, feed_change.length))

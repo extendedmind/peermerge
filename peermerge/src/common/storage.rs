@@ -126,21 +126,10 @@ where
         }
     }
 
-    pub(crate) fn feeds_state_and_unappliend_entries_mut(
-        &mut self,
-    ) -> (&mut DocumentFeedsState, &mut UnappliedEntries) {
-        (&mut self.state.feeds_state, &mut self.unapplied_entries)
-    }
-
     pub(crate) fn filter_watched_patches(&self, patches: &mut Vec<Patch>) {
         if let Some(ids) = &self.watched_ids {
             patches.retain(|patch| ids.contains(&patch.obj));
         }
-    }
-
-    pub(crate) async fn set_content(&mut self, content: DocumentContent) {
-        self.state.content = Some(content);
-        write_document_state(&self.state, &mut self.storage).await;
     }
 
     pub(crate) async fn persist_content(&mut self) {
@@ -190,6 +179,20 @@ where
             .as_mut()
             .and_then(|content| content.user_automerge_doc.as_mut())
     }
+
+    // pub(crate) fn meta_automerge_doc(&self) -> Option<&AutomergeDoc> {
+    //     self.state
+    //         .content
+    //         .as_ref()
+    //         .and_then(|content| content.meta_automerge_doc.as_ref())
+    // }
+
+    // pub(crate) fn meta_automerge_doc_mut(&mut self) -> Option<&mut AutomergeDoc> {
+    //     self.state
+    //         .content
+    //         .as_mut()
+    //         .and_then(|content| content.meta_automerge_doc.as_mut())
+    // }
 
     pub(crate) fn watch(&mut self, ids: Option<Vec<ObjId>>) {
         self.watched_ids = ids;

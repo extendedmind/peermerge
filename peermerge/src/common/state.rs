@@ -549,11 +549,14 @@ impl DocumentCursor {
 
 #[derive(Debug)]
 pub(crate) struct DocumentContent {
+    /// Peer id, stored redundanty to be able to use for actor id
+    /// when loading document.
+    pub(crate) peer_id: PeerId,
     /// Cursors of feeds which have been read to get the below fields.
     /// Can also be empty when meta_doc_data is read from a doc URL.
     pub(crate) cursors: Vec<DocumentCursor>,
-    /// Data blob containing meta_automerge_doc. None for proxy.
-    pub(crate) meta_doc_data: Option<Vec<u8>>,
+    /// Data blob containing meta_automerge_doc.
+    pub(crate) meta_doc_data: Vec<u8>,
     /// Data blob containing user_doc_data. Is missing on
     /// peers until the doc feed is replicated.
     pub(crate) user_doc_data: Option<Vec<u8>>,
@@ -570,7 +573,8 @@ pub(crate) struct DocumentContent {
     pub(crate) user_automerge_doc: Option<AutomergeDoc>,
 }
 impl DocumentContent {
-    pub(crate) fn new_writer(
+    pub(crate) fn new(
+        peer_id: PeerId,
         doc_discovery_key: &FeedDiscoveryKey,
         doc_feed_length: usize,
         write_discovery_key: &FeedDiscoveryKey,
@@ -585,39 +589,17 @@ impl DocumentContent {
             DocumentCursor::new(*write_discovery_key, write_feed_length.try_into().unwrap()),
         ];
         Self {
+            peer_id,
             cursors,
-            meta_doc_data: Some(meta_doc_data),
+            meta_doc_data,
             user_doc_data,
             meta_automerge_doc: Some(meta_automerge_doc),
             user_automerge_doc,
         }
     }
 
-    pub(crate) fn new_proxy(doc_discovery_key: &FeedDiscoveryKey) -> Self {
-        let cursors: Vec<DocumentCursor> = vec![DocumentCursor::new(*doc_discovery_key, 0)];
-        Self {
-            cursors,
-            meta_doc_data: None,
-            user_doc_data: None,
-            meta_automerge_doc: None,
-            user_automerge_doc: None,
-        }
-    }
-
-    pub(crate) fn new(
-        cursors: Vec<DocumentCursor>,
-        meta_doc_data: Vec<u8>,
-        user_doc_data: Vec<u8>,
-        meta_automerge_doc: AutomergeDoc,
-        user_automerge_doc: AutomergeDoc,
-    ) -> Self {
-        Self {
-            cursors,
-            meta_doc_data: Some(meta_doc_data),
-            user_doc_data: Some(user_doc_data),
-            meta_automerge_doc: Some(meta_automerge_doc),
-            user_automerge_doc: Some(user_automerge_doc),
-        }
+    pub(crate) fn is_bootsrapped(&self) -> bool {
+        self.user_doc_data.is_some()
     }
 
     pub(crate) fn cursor_length(&self, discovery_key: &[u8; 32]) -> u64 {
@@ -629,6 +611,26 @@ impl DocumentContent {
             cursor.length
         } else {
             0
+        }
+    }
+
+    pub(crate) fn meta_automerge_doc_mut(&mut self) -> Option<&mut AutomergeDoc> {
+        if let Some(meta_automerge_doc) = self.meta_automerge_doc.as_mut() {
+            Some(meta_automerge_doc)
+        } else {
+            None
+        }
+    }
+
+    pub(crate) fn docs_mut(&mut self) -> Option<(&mut AutomergeDoc, &mut AutomergeDoc)> {
+        if let Some(user_automerge_doc) = self.user_automerge_doc.as_mut() {
+            if let Some(meta_automerge_doc) = self.meta_automerge_doc.as_mut() {
+                Some((user_automerge_doc, meta_automerge_doc))
+            } else {
+                None
+            }
+        } else {
+            None
         }
     }
 
@@ -663,7 +665,7 @@ impl DocumentContent {
                 .meta_automerge_doc
                 .as_mut()
                 .expect("Meta document must be present when setting cursor");
-            self.meta_doc_data = Some(save_automerge_doc(meta_automerge_doc));
+            self.meta_doc_data = save_automerge_doc(meta_automerge_doc);
         }
         if change_result.user_changed {
             let user_automerge_doc = self
