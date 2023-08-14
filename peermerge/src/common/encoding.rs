@@ -51,11 +51,11 @@ impl CompactEncoding<DocumentState> for State {
         self.preencode(&value.version)?;
         self.preencode_fixed_32()?; // doc_public_key
         self.add_end(1)?; // flags
-        let len = value.feeds_state.peer_feeds.len();
+        let len = value.feeds_state.other_feeds.len();
         if len > 0 {
             self.preencode(&len)?;
-            for peer in &value.feeds_state.peer_feeds {
-                self.preencode(peer)?;
+            for feed in &value.feeds_state.other_feeds {
+                self.preencode(feed)?;
             }
         }
         if let Some(write_feed) = &value.feeds_state.write_feed {
@@ -79,12 +79,12 @@ impl CompactEncoding<DocumentState> for State {
         if value.encrypted.unwrap_or(false) {
             flags |= 2;
         }
-        let len = value.feeds_state.peer_feeds.len();
+        let len = value.feeds_state.other_feeds.len();
         if len > 0 {
             flags |= 4;
             self.encode(&len, buffer)?;
-            for peer in &value.feeds_state.peer_feeds {
-                self.encode(peer, buffer)?;
+            for feed in &value.feeds_state.other_feeds {
+                self.encode(feed, buffer)?;
             }
         }
         if let Some(write_feed) = &value.feeds_state.write_feed {
@@ -107,7 +107,7 @@ impl CompactEncoding<DocumentState> for State {
         let flags: u8 = self.decode(buffer)?;
         let proxy = flags & 1 != 0;
         let encrypted: Option<bool> = if !proxy { Some(flags & 2 != 0) } else { None };
-        let peer_feeds: Vec<DocumentFeedInfo> = if flags & 4 != 0 {
+        let other_feeds: Vec<DocumentFeedInfo> = if flags & 4 != 0 {
             let len: usize = self.decode(buffer)?;
             let mut feeds: Vec<DocumentFeedInfo> = Vec::with_capacity(len);
             for _ in 0..len {
@@ -135,7 +135,7 @@ impl CompactEncoding<DocumentState> for State {
             proxy,
             doc_public_key,
             encrypted,
-            DocumentFeedsState::new_from_data(write_feed, peer_feeds),
+            DocumentFeedsState::new_from_data(write_feed, other_feeds),
             content,
         ))
     }
@@ -291,10 +291,10 @@ impl CompactEncoding<BroadcastMessage> for State {
         if let Some(write_feed) = &value.write_feed {
             self.preencode(write_feed)?;
         }
-        let len = value.peer_feeds.len();
+        let len = value.other_feeds.len();
         if len > 0 {
             self.preencode(&len)?;
-            for feed in &value.peer_feeds {
+            for feed in &value.other_feeds {
                 self.preencode(feed)?;
             }
         }
@@ -309,16 +309,16 @@ impl CompactEncoding<BroadcastMessage> for State {
         let flags_index = self.start();
         let mut flags: u8 = 0;
         self.add_start(1)?;
-        if let Some(write_peer) = &value.write_feed {
+        if let Some(write_feed) = &value.write_feed {
             flags |= 1;
-            self.encode(write_peer, buffer)?;
+            self.encode(write_feed, buffer)?;
         }
-        let len = value.peer_feeds.len();
+        let len = value.other_feeds.len();
         if len > 0 {
             flags |= 2;
             self.encode(&len, buffer)?;
-            for peer in &value.peer_feeds {
-                self.encode(peer, buffer)?;
+            for feed in &value.other_feeds {
+                self.encode(feed, buffer)?;
             }
         }
         buffer[flags_index] = flags;
@@ -327,7 +327,7 @@ impl CompactEncoding<BroadcastMessage> for State {
 
     fn decode(&mut self, buffer: &[u8]) -> Result<BroadcastMessage, EncodingError> {
         let flags: u8 = self.decode(buffer)?;
-        let write_peer: Option<DocumentFeedInfo> = if flags & 1 != 0 {
+        let write_feed: Option<DocumentFeedInfo> = if flags & 1 != 0 {
             Some(self.decode(buffer)?)
         } else {
             None
@@ -343,7 +343,7 @@ impl CompactEncoding<BroadcastMessage> for State {
         } else {
             vec![]
         };
-        Ok(BroadcastMessage::new(write_peer, feeds))
+        Ok(BroadcastMessage::new(write_feed, feeds))
     }
 }
 
@@ -354,15 +354,15 @@ impl CompactEncoding<FeedsChangedMessage> for State {
         let len = value.replaced_feeds.len();
         if len > 0 {
             self.preencode(&len)?;
-            for peer in &value.replaced_feeds {
-                self.preencode(peer)?;
+            for feed in &value.replaced_feeds {
+                self.preencode(feed)?;
             }
         }
         let len = value.feeds_to_create.len();
         if len > 0 {
             self.preencode(&len)?;
-            for peer in &value.feeds_to_create {
-                self.preencode(peer)?;
+            for feed in &value.feeds_to_create {
+                self.preencode(feed)?;
             }
         }
         Ok(self.end())

@@ -34,7 +34,7 @@ const CLOSED_LOCAL_SIGNAL_NAME: &str = "closed";
 pub(super) fn create_broadcast_message(feeds_state: &DocumentFeedsState) -> Message {
     let broadcast_message: BroadcastMessage = BroadcastMessage {
         write_feed: feeds_state.write_feed.clone(),
-        peer_feeds: feeds_state.peer_feeds.clone(),
+        other_feeds: feeds_state.other_feeds.clone(),
     };
     let mut enc_state = State::new();
     enc_state
@@ -362,7 +362,7 @@ where
                 let broadcast_message: BroadcastMessage = dec_state.decode(&message.message)?;
                 let (stored_feeds_found, new_remote_feeds) = feeds_state.compare_broadcasted_feeds(
                     broadcast_message.write_feed,
-                    broadcast_message.peer_feeds,
+                    broadcast_message.other_feeds,
                 );
 
                 if stored_feeds_found && new_remote_feeds.is_empty() {

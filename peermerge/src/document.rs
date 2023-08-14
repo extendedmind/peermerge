@@ -1239,7 +1239,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
         feeds.insert(state.doc_discovery_key, Arc::new(Mutex::new(root_feed)));
 
         // Open all peer feeds
-        for peer in &state.feeds_state.peer_feeds {
+        for peer in &state.feeds_state.other_feeds {
             if peer.replaced_by_public_key.is_none() {
                 let discovery_key = discovery_key_from_public_key(&peer.public_key);
                 let (_, peer_feed) = open_disk_feed(

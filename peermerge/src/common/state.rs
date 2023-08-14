@@ -299,8 +299,9 @@ impl DocumentState {
 pub(crate) struct DocumentFeedsState {
     /// Id and public key of personal writeable feed. None if proxy.
     pub(crate) write_feed: Option<DocumentFeedInfo>,
-    /// Id and public key of the other peers' feeds.
-    pub(crate) peer_feeds: Vec<DocumentFeedInfo>,
+    /// Id and public key of peers' feeds and also our replaced write
+    /// feeds.
+    pub(crate) other_feeds: Vec<DocumentFeedInfo>,
 }
 
 impl DocumentFeedsState {
@@ -317,46 +318,46 @@ impl DocumentFeedsState {
 
     pub(crate) fn new_from_data(
         mut write_feed: Option<DocumentFeedInfo>,
-        mut peer_feeds: Vec<DocumentFeedInfo>,
+        mut other_feeds: Vec<DocumentFeedInfo>,
     ) -> Self {
         // For state, populate the discovery keys
         if let Some(write_feed) = write_feed.as_mut() {
             write_feed.populate_discovery_key();
         }
-        for peer_feed in peer_feeds.iter_mut() {
-            peer_feed.populate_discovery_key();
+        for other_feed in other_feeds.iter_mut() {
+            other_feed.populate_discovery_key();
         }
         Self {
             write_feed,
-            peer_feeds,
+            other_feeds,
         }
     }
 
     pub(crate) fn compare_broadcasted_feeds(
         &self,
         remote_write_feed: Option<DocumentFeedInfo>,
-        remote_peer_feeds: Vec<DocumentFeedInfo>,
+        remote_other_feeds: Vec<DocumentFeedInfo>,
     ) -> (bool, Vec<DocumentFeedInfo>) {
         let stored_feeds_found: bool = {
             let stored_write_feed_found = if let Some(stored_write_feed) = &self.write_feed {
-                remote_peer_feeds.contains(stored_write_feed)
+                remote_other_feeds.contains(stored_write_feed)
             } else {
                 true
             };
             stored_write_feed_found
-                && self.peer_feeds.iter().all(|stored_feed| {
+                && self.other_feeds.iter().all(|stored_feed| {
                     let remote_write_feed_matches =
                         if let Some(remote_write_feed) = &remote_write_feed {
                             stored_feed == remote_write_feed
                         } else {
                             false
                         };
-                    remote_write_feed_matches || remote_peer_feeds.contains(stored_feed)
+                    remote_write_feed_matches || remote_other_feeds.contains(stored_feed)
                 })
         };
         let mut new_remote_feeds: Vec<DocumentFeedInfo> =
             if let Some(remote_write_feed) = remote_write_feed {
-                if !self.peer_feeds.iter().any(|feed| {
+                if !self.other_feeds.iter().any(|feed| {
                     feed.peer_id == remote_write_feed.peer_id
                         && feed.public_key == remote_write_feed.public_key
                 }) {
@@ -367,27 +368,27 @@ impl DocumentFeedsState {
             } else {
                 vec![]
             };
-        remote_peer_feeds.into_iter().for_each(|remote_peer_feed| {
+        remote_other_feeds.into_iter().for_each(|remote_other_feed| {
             let writable_matches: bool = if let Some(write_feed) = &self.write_feed {
-                write_feed.peer_id == remote_peer_feed.peer_id
-                    && write_feed.public_key == remote_peer_feed.public_key
+                write_feed.peer_id == remote_other_feed.peer_id
+                    && write_feed.public_key == remote_other_feed.public_key
             } else {
                 false
             };
 
             if !writable_matches
-                && !self.peer_feeds.iter().any(|stored_feed| {
-                    stored_feed.peer_id == remote_peer_feed.peer_id
-                        && stored_feed.public_key == remote_peer_feed.public_key
+                && !self.other_feeds.iter().any(|stored_feed| {
+                    stored_feed.peer_id == remote_other_feed.peer_id
+                        && stored_feed.public_key == remote_other_feed.public_key
                         // If the replaced feed is exactly the same, or then if
                         // we have newer info, then this is not a new feed.
                         && (stored_feed.replaced_by_public_key
-                            == remote_peer_feed.replaced_by_public_key || 
+                            == remote_other_feed.replaced_by_public_key || 
                             (stored_feed.replaced_by_public_key.is_some() 
-                             && remote_peer_feed.replaced_by_public_key.is_none()))
+                             && remote_other_feed.replaced_by_public_key.is_none()))
                 })
             {
-                new_remote_feeds.push(remote_peer_feed);
+                new_remote_feeds.push(remote_other_feed);
             }
         });
 
@@ -406,7 +407,7 @@ impl DocumentFeedsState {
             .iter()
             .filter(|incoming_feed| {
                 !self
-                    .peer_feeds
+                    .other_feeds
                     .iter()
                     .any(|stored_feed| stored_feed == *incoming_feed)
             })
@@ -426,7 +427,7 @@ impl DocumentFeedsState {
                 // differ only in that replaced_by_public_key has
                 // been set.
                 let to_be_mutated_feeds: Vec<&mut DocumentFeedInfo> = self
-                    .peer_feeds
+                    .other_feeds
                     .iter_mut()
                     .filter(|feed| {
                         changed_feeds.iter().any(|changed_feed| {
@@ -448,7 +449,7 @@ impl DocumentFeedsState {
                             add_feed
                         })
                         .collect();
-                    self.peer_feeds.extend(to_add_feeds);
+                    self.other_feeds.extend(to_add_feeds);
                     (true, vec![])
                 } else {
                     // Get the feeds that were replaced
@@ -478,7 +479,7 @@ impl DocumentFeedsState {
                             add_feed
                         })
                         .collect();
-                    self.peer_feeds.extend(to_add_feeds);
+                    self.other_feeds.extend(to_add_feeds);
 
                     (true, replaced_feeds)
                 }
@@ -499,7 +500,7 @@ impl DocumentFeedsState {
         new_write_feed.populate_discovery_key();
         self.write_feed = Some(new_write_feed.clone());
         replaced_write_feed.replaced_by_public_key = Some(new_write_public_key);
-        self.peer_feeds.push(replaced_write_feed.clone());
+        self.other_feeds.push(replaced_write_feed.clone());
 
         // Return values without discovery keys
         replaced_write_feed.discovery_key = None;
@@ -541,12 +542,12 @@ impl DocumentFeedsState {
                     panic!("Invalid write feed change parameters, new write feed missing");
                 }
 
-                // Put the old write feed to the peer_feeds
-                self.peer_feeds.push(old_write_feed);
+                // Put the old write feed to the other_feeds
+                self.other_feeds.push(old_write_feed);
             }
         }
 
-        self.peer_feeds.iter_mut().for_each(|stored_feed| {
+        self.other_feeds.iter_mut().for_each(|stored_feed| {
             if let Some(replaced_feed) = replaced_feeds.iter().find(|replaced_feed| {
                 replaced_feed.public_key == stored_feed.public_key
                     && replaced_feed.peer_id == stored_feed.peer_id
@@ -558,13 +559,13 @@ impl DocumentFeedsState {
         });
         feeds_to_create.into_iter().for_each(|mut feed_to_create| {
             feed_to_create.populate_discovery_key();
-            self.peer_feeds.push(feed_to_create)
+            self.other_feeds.push(feed_to_create)
         });
     }
 
     pub(crate) fn peer_id(&self, discovery_key: &FeedDiscoveryKey) -> PeerId {
         let peer = self
-            .peer_feeds
+            .other_feeds
             .iter()
             .find(|peer| &peer.discovery_key.unwrap() == discovery_key);
         if let Some(peer) = peer {
