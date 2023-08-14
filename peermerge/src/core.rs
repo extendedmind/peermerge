@@ -390,13 +390,13 @@ async fn on_feed_event_memory(
     while let Some(event) = feed_event_receiver.next().await {
         debug!("Received event {:?}", event);
         match event.content {
-            FeedEventContent::NewFeedsBroadcasted(public_keys) => {
+            FeedEventContent::NewFeedsBroadcasted { new_feeds } => {
                 let mut document =
                     get_document_by_discovery_key(&documents, &event.doc_discovery_key)
                         .await
                         .unwrap();
                 document
-                    .process_new_feeds_broadcasted_memory(public_keys)
+                    .process_new_feeds_broadcasted_memory(new_feeds)
                     .await;
             }
             _ => process_feed_event(event, &mut state_event_sender, &mut documents).await,
@@ -574,14 +574,12 @@ async fn on_feed_event_disk(
     while let Some(event) = feed_event_receiver.next().await {
         debug!("Received event {:?}", event);
         match event.content {
-            FeedEventContent::NewFeedsBroadcasted(new_remote_feeds) => {
+            FeedEventContent::NewFeedsBroadcasted { new_feeds } => {
                 let mut document =
                     get_document_by_discovery_key(&documents, &event.doc_discovery_key)
                         .await
                         .unwrap();
-                document
-                    .process_new_feeds_broadcasted_disk(new_remote_feeds)
-                    .await;
+                document.process_new_feeds_broadcasted_disk(new_feeds).await;
             }
             _ => process_feed_event(event, &mut state_event_sender, &mut documents).await,
         }
@@ -618,27 +616,37 @@ async fn process_feed_event<T, U>(
     U: FeedPersistence,
 {
     match event.content {
-        FeedEventContent::NewFeedsBroadcasted(_) => unreachable!("Implemented by concrete type"),
-        FeedEventContent::FeedDisconnected(_) => {
+        FeedEventContent::NewFeedsBroadcasted { .. } => {
+            unreachable!("Implemented by concrete type")
+        }
+        FeedEventContent::FeedDisconnected { .. } => {
             // This is an FYI message, just continue for now
         }
-        FeedEventContent::RemoteFeedSynced((peer_id, discovery_key, synced_contiguous_length)) => {
+        FeedEventContent::RemoteFeedSynced {
+            peer_id,
+            discovery_key,
+            contiguous_length,
+        } => {
             let document = get_document_by_discovery_key(documents, &event.doc_discovery_key)
                 .await
                 .unwrap();
             let state_events = document
-                .process_remote_feed_synced(peer_id, discovery_key, synced_contiguous_length)
+                .process_remote_feed_synced(peer_id, discovery_key, contiguous_length)
                 .await;
             for state_event in state_events {
                 state_event_sender.unbounded_send(state_event).unwrap();
             }
         }
-        FeedEventContent::FeedSynced((peer_id, discovery_key, synced_contiguous_length)) => {
+        FeedEventContent::FeedSynced {
+            peer_id,
+            discovery_key,
+            contiguous_length,
+        } => {
             let mut document = get_document_by_discovery_key(documents, &event.doc_discovery_key)
                 .await
                 .unwrap();
             let state_events = document
-                .process_feed_synced(peer_id, discovery_key, synced_contiguous_length)
+                .process_feed_synced(peer_id, discovery_key, contiguous_length)
                 .await;
             for state_event in state_events {
                 state_event_sender.unbounded_send(state_event).unwrap();

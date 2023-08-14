@@ -250,11 +250,11 @@ where
                         peer_state.synced_contiguous_length = new_info.contiguous_length;
                         Some(FeedEvent::new(
                             peer_state.doc_discovery_key,
-                            FeedSynced((
-                                peer_state.peer_id,
-                                *channel.discovery_key(),
-                                new_info.contiguous_length,
-                            )),
+                            FeedSynced {
+                                peer_id: peer_state.peer_id,
+                                discovery_key: *channel.discovery_key(),
+                                contiguous_length: new_info.contiguous_length,
+                            },
                         ))
                     } else {
                         None
@@ -318,11 +318,11 @@ where
                             // The peer has advertised that they now have what we have
                             let event = Some(FeedEvent::new(
                                 peer_state.doc_discovery_key,
-                                RemoteFeedSynced((
-                                    peer_state.peer_id,
-                                    *channel.discovery_key(),
-                                    peer_state.remote_contiguous_length,
-                                )),
+                                RemoteFeedSynced {
+                                    peer_id: peer_state.peer_id,
+                                    discovery_key: *channel.discovery_key(),
+                                    contiguous_length: peer_state.remote_contiguous_length,
+                                },
                             ));
                             peer_state.notified_remote_synced_contiguous_length =
                                 peer_state.remote_contiguous_length;
@@ -360,23 +360,23 @@ where
                 let feeds_state = peer_state.feeds_state.as_mut().unwrap();
                 let mut dec_state = State::from_buffer(&message.message);
                 let broadcast_message: BroadcastMessage = dec_state.decode(&message.message)?;
-                let (stored_feeds_found, new_remote_feeds) = feeds_state.compare_broadcasted_feeds(
+                let (stored_feeds_found, new_feeds) = feeds_state.compare_broadcasted_feeds(
                     broadcast_message.write_feed,
                     broadcast_message.other_feeds,
                 );
 
-                if stored_feeds_found && new_remote_feeds.is_empty() {
+                if stored_feeds_found && new_feeds.is_empty() {
                     // Don't re-initialize if this has already been synced, meaning this is a
                     // broadcast that notifies a new third party feed after the initial handshake.
                     if !peer_state.sync_sent {
                         let messages = create_initial_synchronize(hypercore, peer_state).await;
                         channel.send_batch(&messages).await?;
                     }
-                } else if !new_remote_feeds.is_empty() {
+                } else if !new_feeds.is_empty() {
                     // New remote feeds found, return a feed event
                     return Ok(Some(FeedEvent::new(
                         peer_state.doc_discovery_key,
-                        NewFeedsBroadcasted(new_remote_feeds),
+                        NewFeedsBroadcasted { new_feeds },
                     )));
                 }
             }
@@ -471,7 +471,9 @@ where
         Message::Close(message) => {
             return Ok(Some(FeedEvent::new(
                 peer_state.doc_discovery_key,
-                FeedDisconnected(message.channel),
+                FeedDisconnected {
+                    channel: message.channel,
+                },
             )));
         }
         _ => {

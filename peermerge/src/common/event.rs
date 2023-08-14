@@ -45,8 +45,20 @@ impl FeedEvent {
 
 #[derive(Clone, Debug)]
 pub(crate) enum FeedEventContent {
-    NewFeedsBroadcasted(Vec<DocumentFeedInfo>),
-    FeedSynced((Option<PeerId>, FeedDiscoveryKey, u64)),
-    FeedDisconnected(u64),
-    RemoteFeedSynced((Option<PeerId>, FeedDiscoveryKey, u64)),
+    NewFeedsBroadcasted {
+        new_feeds: Vec<DocumentFeedInfo>,
+    },
+    FeedSynced {
+        peer_id: Option<PeerId>,
+        discovery_key: FeedDiscoveryKey,
+        contiguous_length: u64,
+    },
+    FeedDisconnected {
+        channel: u64,
+    },
+    RemoteFeedSynced {
+        peer_id: Option<PeerId>,
+        discovery_key: FeedDiscoveryKey,
+        contiguous_length: u64,
+    },
 }

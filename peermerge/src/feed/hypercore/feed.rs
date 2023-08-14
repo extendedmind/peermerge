@@ -97,7 +97,8 @@ where
     let event = on_message(hypercore, peer_state, channel, message).await?;
     if let Some(event) = event {
         feed_event_sender.unbounded_send(event.clone())?;
-        if let FeedEventContent::FeedDisconnected(_) = event.content {
+        if let FeedEventContent::FeedDisconnected { channel } = event.content {
+            debug!("Disconnected channel {channel}");
             return Ok(true);
         }
     }
