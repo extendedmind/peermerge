@@ -102,35 +102,21 @@ pub(crate) fn read_document_type_and_header(
             .unwrap()
             .into_string()
             .unwrap();
-
-        let document_header: Option<NameDescription> =
-            if document_header_keys.iter().any(|key| key == NAME_KEY) {
-                let name: String = meta_automerge_doc
-                    .get(&document_header_id, NAME_KEY)
+        let document_header: Option<NameDescription> = meta_automerge_doc
+            .get(&document_header_id, NAME_KEY)
+            .unwrap()
+            .and_then(|result| result.0.to_scalar().cloned())
+            .map(|name_scalar_value| {
+                let name = name_scalar_value.into_string().unwrap();
+                let description: Option<String> = meta_automerge_doc
+                    .get(&document_header_id, DESCRIPTION_KEY)
                     .unwrap()
                     .and_then(|result| result.0.to_scalar().cloned())
-                    .unwrap()
-                    .into_string()
-                    .unwrap();
-                let description: Option<String> = if document_header_keys
-                    .iter()
-                    .any(|key| key == DESCRIPTION_KEY)
-                {
-                    let description: String = meta_automerge_doc
-                        .get(&document_header_id, DESCRIPTION_KEY)
-                        .unwrap()
-                        .and_then(|result| result.0.to_scalar().cloned())
-                        .unwrap()
-                        .into_string()
-                        .unwrap();
-                    Some(description)
-                } else {
-                    None
-                };
-                Some(NameDescription { name, description })
-            } else {
-                None
-            };
+                    .map(|description_scalar_value| {
+                        description_scalar_value.into_string().unwrap()
+                    });
+                NameDescription { name, description }
+            });
         Some((document_type, document_header))
     } else {
         None
@@ -154,29 +140,17 @@ pub(crate) fn read_peer_header(
             .unwrap()
             .map(|result| result.1)
             .unwrap();
-        let peer_keys: Vec<_> = meta_automerge_doc.keys(&peer_id).collect();
-
-        if peer_keys.iter().any(|key| key == NAME_KEY) {
-            let name: String = meta_automerge_doc
-                .get(&peer_id, NAME_KEY)
+        if let Some(name_scalar_value) = meta_automerge_doc
+            .get(&peer_id, NAME_KEY)
+            .unwrap()
+            .and_then(|result| result.0.to_scalar().cloned())
+        {
+            let name: String = name_scalar_value.into_string().unwrap();
+            let description: Option<String> = meta_automerge_doc
+                .get(&peer_id, DESCRIPTION_KEY)
                 .unwrap()
                 .and_then(|result| result.0.to_scalar().cloned())
-                .unwrap()
-                .into_string()
-                .unwrap();
-            let description: Option<String> = if peer_keys.iter().any(|key| key == DESCRIPTION_KEY)
-            {
-                let description: String = meta_automerge_doc
-                    .get(&peer_id, DESCRIPTION_KEY)
-                    .unwrap()
-                    .and_then(|result| result.0.to_scalar().cloned())
-                    .unwrap()
-                    .into_string()
-                    .unwrap();
-                Some(description)
-            } else {
-                None
-            };
+                .map(|description_scalar_value| description_scalar_value.into_string().unwrap());
             Some(NameDescription { name, description })
         } else {
             None
