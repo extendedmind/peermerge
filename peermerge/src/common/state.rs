@@ -1,11 +1,9 @@
 use std::fmt::Debug;
 
-use automerge::{ReadDoc, ROOT};
 use uuid::Uuid;
 
 use crate::{
-    automerge::{save_automerge_doc, AutomergeDoc, DocsChangeResult},
-    encode_base64_nopad,
+    automerge::{save_automerge_doc, AutomergeDoc, DocsChangeResult, read_document_type_and_header, read_peer_header},
     feed::{FeedDiscoveryKey, FeedPublicKey},
     DocUrlInfo, DocumentId, DocumentInfo, NameDescription, PeerId,
 };
@@ -175,53 +173,7 @@ impl DocumentState {
     pub(crate) fn document_type_and_header(&self) -> Option<(String, Option<NameDescription>)> {
         if let Some(content) = &self.content {
             if let Some(meta_automerge_doc) = &content.meta_automerge_doc {
-                let document_header_id = meta_automerge_doc
-                    .get(ROOT, "h")
-                    .unwrap()
-                    .map(|result| result.1)
-                    .unwrap();
-
-                let document_header_keys: Vec<_> =
-                    meta_automerge_doc.keys(&document_header_id).collect();
-                if document_header_keys.iter().any(|key| key == "t") {
-                    let document_type: String = meta_automerge_doc
-                        .get(&document_header_id, "t")
-                        .unwrap()
-                        .and_then(|result| result.0.to_scalar().cloned())
-                        .unwrap()
-                        .into_string()
-                        .unwrap();
-
-                    let document_header: Option<NameDescription> =
-                        if document_header_keys.iter().any(|key| key == "n") {
-                            let name: String = meta_automerge_doc
-                                .get(&document_header_id, "n")
-                                .unwrap()
-                                .and_then(|result| result.0.to_scalar().cloned())
-                                .unwrap()
-                                .into_string()
-                                .unwrap();
-                            let description: Option<String> =
-                                if document_header_keys.iter().any(|key| key == "d") {
-                                    let description: String = meta_automerge_doc
-                                        .get(&document_header_id, "d")
-                                        .unwrap()
-                                        .and_then(|result| result.0.to_scalar().cloned())
-                                        .unwrap()
-                                        .into_string()
-                                        .unwrap();
-                                    Some(description)
-                                } else {
-                                    None
-                                };
-                            Some(NameDescription { name, description })
-                        } else {
-                            None
-                        };
-                    Some((document_type, document_header))
-                } else {
-                    None
-                }
+                read_document_type_and_header(meta_automerge_doc)
             } else {
                 None
             }
@@ -233,49 +185,7 @@ impl DocumentState {
     pub(crate) fn peer_header(&self, peer_id: &PeerId) -> Option<NameDescription> {
         if let Some(content) = &self.content {
             if let Some(meta_automerge_doc) = &content.meta_automerge_doc {
-                let peers_id = meta_automerge_doc
-                    .get(ROOT, "p")
-                    .unwrap()
-                    .map(|result| result.1)
-                    .unwrap();
-                let peer_key = encode_base64_nopad(peer_id);
-                let mut peers_id_keys = meta_automerge_doc.keys(&peers_id);
-                if peers_id_keys.any(|key| key == peer_key) {
-                    let peer_id = meta_automerge_doc
-                        .get(&peers_id, peer_key)
-                        .unwrap()
-                        .map(|result| result.1)
-                        .unwrap();
-                    let peer_keys: Vec<_> = meta_automerge_doc.keys(&peer_id).collect();
-
-                    if peer_keys.iter().any(|key| key == "n") {
-                        let name: String = meta_automerge_doc
-                            .get(&peer_id, "n")
-                            .unwrap()
-                            .and_then(|result| result.0.to_scalar().cloned())
-                            .unwrap()
-                            .into_string()
-                            .unwrap();
-                        let description: Option<String> = if peer_keys.iter().any(|key| key == "d")
-                        {
-                            let description: String = meta_automerge_doc
-                                .get(&peer_id, "d")
-                                .unwrap()
-                                .and_then(|result| result.0.to_scalar().cloned())
-                                .unwrap()
-                                .into_string()
-                                .unwrap();
-                            Some(description)
-                        } else {
-                            None
-                        };
-                        Some(NameDescription { name, description })
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
+                read_peer_header(meta_automerge_doc, peer_id)
             } else {
                 None
             }

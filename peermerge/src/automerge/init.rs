@@ -4,7 +4,10 @@ use automerge::{
 };
 use std::collections::HashMap;
 
-use super::{apply_entries_autocommit, ApplyEntriesFeedChange, AutomergeDoc, UnappliedEntries};
+use super::{
+    apply_entries_autocommit, init_meta_automerge_doc, save_first_peer, ApplyEntriesFeedChange,
+    AutomergeDoc, UnappliedEntries,
+};
 use crate::{
     common::entry::{Entry, EntryContent},
     common::{
@@ -33,29 +36,8 @@ where
     F: FnOnce(&mut Transaction) -> Result<O, AutomergeError>,
 {
     let actor_id = generate_actor_id(write_peer_id);
-
-    let mut meta_automerge_doc = Automerge::new().with_actor(actor_id.clone());
-    meta_automerge_doc
-        .transact_with::<_, _, AutomergeError, _>(
-            |_| CommitOptions::default().with_message(format!("init:{PEERMERGE_VERSION}")),
-            |tx| {
-                // Use short keys because this doc needs to be stored to the doc URL.
-                tx.put(ROOT, "v", PEERMERGE_VERSION as i32)?;
-                tx.put(ROOT, "i", document_id.to_vec())?;
-                // Document header
-                tx.put_object(ROOT, "h", automerge::ObjType::Map)?;
-                // Peers map
-                tx.put_object(ROOT, "p", automerge::ObjType::Map)?;
-                if child {
-                    // pArents map
-                    tx.put_object(ROOT, "a", automerge::ObjType::Map)?;
-                }
-                Ok(())
-            },
-        )
-        .unwrap();
-    let meta_doc_data = meta_automerge_doc.save();
-    let meta_automerge_doc: AutoCommit = AutoCommit::load(&meta_doc_data).unwrap();
+    let (meta_automerge_doc, meta_doc_data) =
+        init_meta_automerge_doc(&actor_id, document_id, child);
 
     let mut user_automerge_doc = Automerge::new().with_actor(actor_id);
     let result = user_automerge_doc
@@ -93,30 +75,13 @@ pub(crate) fn init_first_peer(
     document_type: &str,
     document_header: &Option<NameDescription>,
 ) -> Result<Vec<Entry>, PeermergeError> {
-    let peers_id = meta_automerge_doc
-        .get(ROOT, "p")
-        .unwrap()
-        .map(|result| result.1)
-        .unwrap();
-    let peer_key = encode_base64_nopad(peer_id);
-    let peer_header_id =
-        meta_automerge_doc.put_object(&peers_id, peer_key, automerge::ObjType::Map)?;
-    meta_automerge_doc.put(&peer_header_id, "n", &peer_header.name)?;
-    if let Some(description) = &peer_header.description {
-        meta_automerge_doc.put(&peer_header_id, "d", description)?;
-    }
-    let document_header_id = meta_automerge_doc
-        .get(ROOT, "h")
-        .unwrap()
-        .map(|result| result.1)
-        .unwrap();
-    meta_automerge_doc.put(&document_header_id, "t", document_type)?;
-    if let Some(document_header) = &document_header {
-        meta_automerge_doc.put(&document_header_id, "n", &document_header.name)?;
-        if let Some(description) = &document_header.description {
-            meta_automerge_doc.put(&document_header_id, "d", description)?;
-        }
-    }
+    save_first_peer(
+        meta_automerge_doc,
+        peer_id,
+        peer_header,
+        document_type,
+        document_header,
+    )?;
     let meta_doc_data = save_automerge_doc(meta_automerge_doc);
     meta_automerge_doc.update_diff_cursor();
     let entries = split_datas_into_entries(&meta_doc_data, &None, false, MAX_DATA_CHUNK_BYTES);
@@ -150,11 +115,7 @@ pub(crate) fn init_peer(
         }
     }
     let meta_doc_data = save_automerge_doc(meta_automerge_doc);
-    let user_doc_data: Option<Vec<u8>> = if let Some(user_automerge_doc) = user_automerge_doc {
-        Some(save_automerge_doc(user_automerge_doc))
-    } else {
-        None
-    };
+    let user_doc_data: Option<Vec<u8>> = user_automerge_doc.map(save_automerge_doc);
     meta_automerge_doc.update_diff_cursor();
     let entries =
         split_datas_into_entries(&meta_doc_data, &user_doc_data, false, MAX_DATA_CHUNK_BYTES);
