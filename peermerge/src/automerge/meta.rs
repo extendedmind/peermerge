@@ -10,6 +10,7 @@ use crate::{
 
 const VERSION_KEY: &str = "v";
 const DOCUMENT_HEADER_KEY: &str = "h";
+const DOCUMENT_TYPE_KEY: &str = "t";
 const DOCUMENT_ID_KEY: &str = "i";
 const PEERS_MAP_KEY: &str = "p";
 const PARENTS_MAP_KEY: &str = "a";
@@ -70,7 +71,7 @@ pub(super) fn save_first_peer(
         .unwrap()
         .map(|result| result.1)
         .unwrap();
-    meta_automerge_doc.put(&document_header_id, "t", document_type)?;
+    meta_automerge_doc.put(&document_header_id, DOCUMENT_TYPE_KEY, document_type)?;
     if let Some(document_header) = &document_header {
         meta_automerge_doc.put(&document_header_id, NAME_KEY, &document_header.name)?;
         if let Some(description) = &document_header.description {
@@ -90,9 +91,12 @@ pub(crate) fn read_document_type_and_header(
         .unwrap();
 
     let document_header_keys: Vec<_> = meta_automerge_doc.keys(&document_header_id).collect();
-    if document_header_keys.iter().any(|key| key == "t") {
+    if document_header_keys
+        .iter()
+        .any(|key| key == DOCUMENT_TYPE_KEY)
+    {
         let document_type: String = meta_automerge_doc
-            .get(&document_header_id, "t")
+            .get(&document_header_id, DOCUMENT_TYPE_KEY)
             .unwrap()
             .and_then(|result| result.0.to_scalar().cloned())
             .unwrap()
