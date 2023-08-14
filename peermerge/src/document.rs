@@ -232,7 +232,7 @@ where
                 sender
                     .unbounded_send(StateEvent::new(
                         self.doc_discovery_key,
-                        DocumentChanged((change_id, patches)),
+                        DocumentChanged { change_id, patches },
                     ))
                     .unwrap();
             }
@@ -381,7 +381,11 @@ where
         if let Some(peer_id) = peer_id {
             vec![StateEvent::new(
                 self.id(),
-                RemotePeerSynced((peer_id, discovery_key, synced_contiguous_length)),
+                RemotePeerSynced {
+                    peer_id,
+                    discovery_key,
+                    contiguous_length: synced_contiguous_length,
+                },
             )]
         } else {
             // Peer id is not available for the doc feed only, don't send that
@@ -406,7 +410,11 @@ where
                 // Just notify a peer sync forward
                 return vec![StateEvent::new(
                     self.id(),
-                    PeerSynced((peer_id, discovery_key, synced_contiguous_length)),
+                    PeerSynced {
+                        peer_id,
+                        discovery_key,
+                        contiguous_length: synced_contiguous_length,
+                    },
                 )];
             } else {
                 // Peer id is not available for the doc feed only, don't send that
@@ -451,7 +459,10 @@ where
                             debug!("Document created, saving and returning DocumentInitialized");
                             document_state.persist_content().await;
                             (
-                                Some(DocumentInitialized(true, None)), // TODO: Parent document id
+                                Some(DocumentInitialized {
+                                    new_document: true,
+                                    parent_document_id: None, // TODO: Parent document id
+                                }),
                                 vec![],
                                 peer_syncs,
                             )
@@ -627,14 +638,29 @@ where
         let mut state_events: Vec<StateEvent> = vec![];
         let peer_synced_state_events: Vec<StateEvent> = peer_syncs
             .iter()
-            .map(|sync| StateEvent::new(self.id(), PeerSynced((sync.0, sync.1, sync.2))))
+            .map(|sync| {
+                StateEvent::new(
+                    self.id(),
+                    PeerSynced {
+                        peer_id: sync.0,
+                        discovery_key: sync.1,
+                        contiguous_length: sync.2,
+                    },
+                )
+            })
             .collect();
         state_events.extend(peer_synced_state_events);
         if let Some(event) = document_initialized {
             state_events.push(StateEvent::new(self.id(), event));
         }
         if !patches.is_empty() {
-            state_events.push(StateEvent::new(self.id(), DocumentChanged((None, patches))));
+            state_events.push(StateEvent::new(
+                self.id(),
+                DocumentChanged {
+                    change_id: None,
+                    patches,
+                },
+            ));
         }
         state_events
     }

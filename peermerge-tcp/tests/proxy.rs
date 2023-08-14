@@ -128,20 +128,22 @@ async fn process_proxy_state_event(
     while let Some(event) = proxy_state_event_receiver.next().await {
         info!("Received event {:?}", event);
         match event.content {
-            PeerSynced((_, _, len)) => {
+            PeerSynced {
+                contiguous_length, ..
+            } => {
                 peer_syncs += 1;
                 if peer_syncs == 1 {
-                    assert_eq!(len, 1);
+                    assert_eq!(contiguous_length, 1);
                 } else if peer_syncs == 2 {
-                    assert_eq!(len, 2);
+                    assert_eq!(contiguous_length, 2);
                 } else {
                     panic!("Too many peer syncs");
                 }
             }
-            RemotePeerSynced(_) => {
+            RemotePeerSynced { .. } => {
                 panic!("Should not get remote peer synced events {event:?}");
             }
-            DocumentChanged(_) => {
+            DocumentChanged { .. } => {
                 panic!("Should not get document changed event {event:?}");
             }
             _ => {
@@ -166,29 +168,31 @@ async fn process_creator_state_events(
             event, document_changes
         );
         match event.content {
-            PeerSynced(_) => {
+            PeerSynced { .. } => {
                 panic!("Should not get remote peer synced events {event:?}");
             }
-            DocumentInitialized(..) => {
+            DocumentInitialized { .. } => {
                 // Skip
             }
-            RemotePeerSynced((_, _, len)) => {
+            RemotePeerSynced {
+                contiguous_length, ..
+            } => {
                 remote_peer_syncs += 1;
                 if remote_peer_syncs == 1 {
-                    assert_eq!(len, 1);
+                    assert_eq!(contiguous_length, 1);
                     peermerge
                         .transact_mut(&doc_id, |doc| doc.put(ROOT, "test", "value"), None)
                         .await?;
                 } else if remote_peer_syncs == 2 {
-                    assert_eq!(len, 2);
+                    assert_eq!(contiguous_length, 2);
                     assert_eq!(document_changes.len(), 1);
                     break;
                 }
             }
-            DocumentChanged((_, patches)) => {
+            DocumentChanged { patches, .. } => {
                 document_changes.push(patches);
             }
-            Reattached(_) => {
+            Reattached { .. } => {
                 panic!("Should not get reattached");
             }
         }

@@ -29,7 +29,7 @@ async fn append_three(
 
     while let Some(event) = receiver.next().await {
         match event.content {
-            PeerSynced(_) => {
+            PeerSynced { .. } => {
                 sync_remaining -= 1;
                 // println!(
                 //     "PS i={} sr={}, rsr={}, pr={}",
@@ -39,7 +39,7 @@ async fn append_three(
                     break;
                 }
             }
-            DocumentChanged((change_id, patches)) => {
+            DocumentChanged { change_id, patches } => {
                 if let Some(change_id) = change_id {
                     assert_eq!(change_id, i.to_le_bytes().to_vec());
                 }
@@ -52,7 +52,7 @@ async fn append_three(
                     break;
                 }
             }
-            RemotePeerSynced(..) => {
+            RemotePeerSynced { .. } => {
                 remote_sync_remaining -= 1;
                 // println!(
                 //     "RPS: i={} sr={}, rsr={}, pr={}",
@@ -63,10 +63,10 @@ async fn append_three(
                     break;
                 }
             }
-            DocumentInitialized(..) => {
+            DocumentInitialized { .. } => {
                 panic!("Should not get document initialized");
             }
-            Reattached(_) => {
+            Reattached { .. } => {
                 panic!("Should not get reattached");
             }
         }

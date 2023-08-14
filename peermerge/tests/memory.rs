@@ -176,7 +176,11 @@ async fn process_joiner_state_event(
         );
 
         match event.content {
-            PeerSynced((peer_id, _, len)) => {
+            PeerSynced {
+                peer_id,
+                contiguous_length,
+                ..
+            } => {
                 let name = peermerge
                     .peer_header(&event.document_id, &peer_id)
                     .await
@@ -218,15 +222,19 @@ async fn process_joiner_state_event(
                 } else {
                     assert!(name == "creator" || name == "latecomer");
                 }
-                peer_synced.insert(name.clone(), len);
+                peer_synced.insert(name.clone(), contiguous_length);
             }
-            RemotePeerSynced((peer_id, _, len)) => {
-                remote_peer_synced.insert(peer_id, len);
+            RemotePeerSynced {
+                peer_id,
+                contiguous_length,
+                ..
+            } => {
+                remote_peer_synced.insert(peer_id, contiguous_length);
             }
-            DocumentInitialized(..) => {
+            DocumentInitialized { .. } => {
                 // Skip
             }
-            DocumentChanged((_, patches)) => {
+            DocumentChanged { patches, .. } => {
                 if document_changes.is_empty() {
                     assert_eq!(patches.len(), 1); // "Hello" in one TextValue
                     document_changes.push(patches);
@@ -340,20 +348,28 @@ async fn process_creator_state_events(
 
         let text_id = text_id.clone();
         match event.content {
-            PeerSynced((peer_id, _, len)) => {
+            PeerSynced {
+                peer_id,
+                contiguous_length,
+                ..
+            } => {
                 let name = peermerge
                     .peer_header(&event.document_id, &peer_id)
                     .await
                     .unwrap()
                     .name;
-                peer_synced.insert(name.clone(), len);
+                peer_synced.insert(name.clone(), contiguous_length);
                 if latecomer_attached {
                     assert!(name == "joiner" || name == "latecomer");
                 } else {
                     assert_eq!(name, "joiner");
                 }
             }
-            RemotePeerSynced((peer_id, _, len)) => {
+            RemotePeerSynced {
+                peer_id,
+                contiguous_length,
+                ..
+            } => {
                 if remote_peer_synced.is_empty() {
                     peermerge
                         .transact_mut(
@@ -365,9 +381,9 @@ async fn process_creator_state_events(
                         .unwrap();
                     assert_text_equals(&peermerge, &doc_id, &text_id, "Hello").await;
                 }
-                remote_peer_synced.insert(peer_id, len);
+                remote_peer_synced.insert(peer_id, contiguous_length);
             }
-            DocumentChanged((_, patches)) => {
+            DocumentChanged { patches, .. } => {
                 let document_changes_len = document_changes.len();
                 match document_changes_len {
                     0 => {
@@ -504,7 +520,7 @@ async fn process_creator_state_events(
                     }
                 };
             }
-            DocumentInitialized(..) => {
+            DocumentInitialized { .. } => {
                 // Skip
             }
             _ => {
@@ -533,14 +549,18 @@ async fn process_latecomer_state_event(
             document_changes.len()
         );
         match event.content {
-            PeerSynced((peer_id, _, len)) => {
+            PeerSynced {
+                peer_id,
+                contiguous_length,
+                ..
+            } => {
                 let name = peermerge
                     .peer_header(&event.document_id, &peer_id)
                     .await
                     .unwrap()
                     .name;
                 assert!(name == "creator" || name == "joiner");
-                peer_synced.insert(name.clone(), len);
+                peer_synced.insert(name.clone(), contiguous_length);
                 if peer_synced.contains_key("creator")
                     && peer_synced.contains_key("joiner")
                     && text_id.is_none()
@@ -578,13 +598,17 @@ async fn process_latecomer_state_event(
                         .await?;
                 }
             }
-            RemotePeerSynced((peer_id, _, len)) => {
-                remote_peer_synced.insert(peer_id, len);
+            RemotePeerSynced {
+                peer_id,
+                contiguous_length,
+                ..
+            } => {
+                remote_peer_synced.insert(peer_id, contiguous_length);
             }
-            DocumentInitialized(..) => {
+            DocumentInitialized { .. } => {
                 // Ignore, this happens with the root hypercore
             }
-            DocumentChanged((_, patches)) => {
+            DocumentChanged { patches, .. } => {
                 if document_changes.is_empty() {
                     assert_eq!(patches.len(), 1); // Two local additions as one Splice
                     assert_text_equals_either(

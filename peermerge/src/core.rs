@@ -120,7 +120,10 @@ where
                         sender
                             .unbounded_send(StateEvent::new(
                                 doc_discovery_key,
-                                StateEventContent::DocumentChanged((None, patches)),
+                                StateEventContent::DocumentChanged {
+                                    change_id: None,
+                                    patches,
+                                },
                             ))
                             .unwrap();
                     }
@@ -600,7 +603,10 @@ async fn notify_document_initialized(
         state_event_sender
             .unbounded_send(StateEvent::new(
                 *document_id,
-                StateEventContent::DocumentInitialized(new_document, None), // TODO: child
+                StateEventContent::DocumentInitialized {
+                    new_document,
+                    parent_document_id: None, // TODO: child
+                },
             ))
             .unwrap();
     }

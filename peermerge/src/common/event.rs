@@ -21,11 +21,27 @@ impl StateEvent {
 
 #[derive(Clone, Debug)]
 pub enum StateEventContent {
-    PeerSynced((PeerId, FeedDiscoveryKey, u64)),
-    RemotePeerSynced((PeerId, FeedDiscoveryKey, u64)),
-    Reattached(NameDescription),
-    DocumentInitialized(bool, Option<DocumentId>),
-    DocumentChanged((Option<Vec<u8>>, Vec<Patch>)),
+    PeerSynced {
+        peer_id: PeerId,
+        discovery_key: FeedDiscoveryKey,
+        contiguous_length: u64,
+    },
+    RemotePeerSynced {
+        peer_id: PeerId,
+        discovery_key: FeedDiscoveryKey,
+        contiguous_length: u64,
+    },
+    Reattached {
+        peer_header: NameDescription,
+    },
+    DocumentInitialized {
+        new_document: bool,
+        parent_document_id: Option<DocumentId>,
+    },
+    DocumentChanged {
+        change_id: Option<Vec<u8>>,
+        patches: Vec<Patch>,
+    },
 }
 
 #[derive(Clone, Debug)]

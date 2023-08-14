@@ -234,12 +234,14 @@ async fn process_proxy_state_event_with_creator(
     while let Some(event) = proxy_state_event_receiver.next().await {
         info!("Received event {:?}", event);
         match event.content {
-            PeerSynced((_, _, len)) => {
+            PeerSynced {
+                contiguous_length, ..
+            } => {
                 peer_syncs += 1;
                 if peer_syncs == 1 {
-                    assert_eq!(len, 1);
+                    assert_eq!(contiguous_length, 1);
                 } else if peer_syncs == 2 {
-                    assert_eq!(len, 2);
+                    assert_eq!(contiguous_length, 2);
                     break;
                 } else {
                     panic!("Too many peer syncs");
@@ -267,26 +269,28 @@ async fn process_creator_state_events(
             event, document_changes
         );
         match event.content {
-            PeerSynced(_) => {
+            PeerSynced { .. } => {
                 panic!("Creator should not get peer synced events {event:?}");
             }
-            RemotePeerSynced((_, _, len)) => {
+            RemotePeerSynced {
+                contiguous_length, ..
+            } => {
                 remote_peer_syncs += 1;
                 if remote_peer_syncs == 1 {
-                    assert_eq!(len, 1);
+                    assert_eq!(contiguous_length, 1);
                     peermerge
                         .transact_mut(&doc_id, |doc| doc.put(ROOT, "creator", "testing"), None)
                         .await?;
                 } else if remote_peer_syncs == 2 {
-                    assert_eq!(len, 2);
+                    assert_eq!(contiguous_length, 2);
                     assert_eq!(document_changes.len(), 1);
                     break;
                 }
             }
-            DocumentChanged((_, patches)) => {
+            DocumentChanged { patches, .. } => {
                 document_changes.push(patches);
             }
-            DocumentInitialized(..) => {
+            DocumentInitialized { .. } => {
                 // Skip
             }
             _ => {
@@ -306,23 +310,27 @@ async fn process_proxy_state_event_with_joiner_initial(
     while let Some(event) = proxy_state_event_receiver.next().await {
         info!("Received event {:?}", event);
         match event.content {
-            PeerSynced((_, _, len)) => {
+            PeerSynced {
+                contiguous_length, ..
+            } => {
                 peer_syncs += 1;
                 if peer_syncs == 1 {
                     // The first one that will come is joiners own write feed with init
-                    assert_eq!(len, 1);
+                    assert_eq!(contiguous_length, 1);
                 } else if peer_syncs == 2 {
                     // ..after that the same but now with a change.
-                    assert_eq!(len, 2);
+                    assert_eq!(contiguous_length, 2);
                     break;
                 } else {
                     panic!("Too many peer syncs");
                 }
             }
-            RemotePeerSynced((_, _, len)) => {
+            RemotePeerSynced {
+                contiguous_length, ..
+            } => {
                 remote_peer_syncs += 1;
                 if remote_peer_syncs == 1 {
-                    assert_eq!(len, 2);
+                    assert_eq!(contiguous_length, 2);
                 } else {
                     panic!("Too many remote peer syncs");
                 }
@@ -351,7 +359,11 @@ async fn process_joiner_state_events_initial(
             event, document_changes
         );
         match event.content {
-            PeerSynced((peer_id, _, len)) => {
+            PeerSynced {
+                peer_id,
+                contiguous_length,
+                ..
+            } => {
                 let name = peermerge
                     .peer_header(&event.document_id, &peer_id)
                     .await
@@ -361,7 +373,7 @@ async fn process_joiner_state_events_initial(
                 // The first one is the creators write feed
                 assert_eq!(name, "creator");
                 if peer_syncs == 1 {
-                    assert_eq!(len, 2);
+                    assert_eq!(contiguous_length, 2);
                     creator_synced = true;
                     if document_initialized {
                         peermerge
@@ -372,16 +384,18 @@ async fn process_joiner_state_events_initial(
                     panic!("Too many peer syncs");
                 }
             }
-            RemotePeerSynced((_, _, len)) => {
+            RemotePeerSynced {
+                contiguous_length, ..
+            } => {
                 // Only remote peer it can sync is its own writer
-                if len == 2 {
+                if contiguous_length == 2 {
                     break;
                 }
             }
-            DocumentChanged((_, patches)) => {
+            DocumentChanged { patches, .. } => {
                 document_changes.push(patches);
             }
-            DocumentInitialized(..) => {
+            DocumentInitialized { .. } => {
                 document_initialized = true;
                 if creator_synced {
                     peermerge
@@ -406,23 +420,27 @@ async fn process_proxy_state_event_with_joiner_reopen(
     while let Some(event) = proxy_state_event_receiver.next().await {
         info!("Received event {:?}", event);
         match event.content {
-            PeerSynced((_, _, len)) => {
+            PeerSynced {
+                contiguous_length, ..
+            } => {
                 peer_syncs += 1;
                 if peer_syncs == 1 {
                     // The first one that will come is joiners own write feed with init, original
                     // change and reopen change
-                    assert_eq!(len, 3);
+                    assert_eq!(contiguous_length, 3);
                     break;
                 } else {
                     panic!("Too many peer syncs");
                 }
             }
-            RemotePeerSynced((_, _, len)) => {
+            RemotePeerSynced {
+                contiguous_length, ..
+            } => {
                 remote_peer_syncs += 1;
                 if remote_peer_syncs == 1 {
-                    assert_eq!(len, 2);
+                    assert_eq!(contiguous_length, 2);
                 } else if remote_peer_syncs == 2 {
-                    assert_eq!(len, 2);
+                    assert_eq!(contiguous_length, 2);
                 } else {
                     panic!("Too many remote peer syncs");
                 }
@@ -451,9 +469,11 @@ async fn process_joiner_state_events_reopen(
             event, document_changes
         );
         match event.content {
-            PeerSynced((_, _, len)) => {
+            PeerSynced {
+                contiguous_length, ..
+            } => {
                 // There are two, creator and joiner itself, both have init and one change
-                if len == 2 {
+                if contiguous_length == 2 {
                     full_peer_syncs += 1;
                 }
                 if full_peer_syncs == 2 {
@@ -479,10 +499,10 @@ async fn process_joiner_state_events_reopen(
                     }
                 }
             }
-            DocumentChanged((_, patches)) => {
+            DocumentChanged { patches, .. } => {
                 document_changes.push(patches);
             }
-            DocumentInitialized(..) => {
+            DocumentInitialized { .. } => {
                 document_initialized = true;
                 if creator_and_joiner_synced {
                     let value = peermerge
@@ -504,11 +524,13 @@ async fn process_joiner_state_events_reopen(
                         .await?;
                 }
             }
-            Reattached(peer_header) => {
+            Reattached { peer_header } => {
                 assert_eq!(peer_header, NameDescription::new("joiner"))
             }
-            RemotePeerSynced((_, _, len)) => {
-                assert_eq!(len, 3);
+            RemotePeerSynced {
+                contiguous_length, ..
+            } => {
+                assert_eq!(contiguous_length, 3);
                 break;
             }
         }

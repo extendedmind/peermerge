@@ -258,7 +258,11 @@ async fn process_joiner_state_event(
             event, document_changes
         );
         match event.content {
-            PeerSynced((peer_id, _, len)) => {
+            PeerSynced {
+                peer_id,
+                contiguous_length,
+                ..
+            } => {
                 let name = peermerge
                     .peer_header(&event.document_id, &peer_id)
                     .await
@@ -266,7 +270,7 @@ async fn process_joiner_state_event(
                     .name;
                 assert_eq!(name, "creator");
                 let expected_len = if expected_scalars.len() > 1 { 2 } else { 1 };
-                assert_eq!(len, expected_len);
+                assert_eq!(contiguous_length, expected_len);
                 for (field, expected) in &expected_scalars {
                     let value = peermerge
                         .transact(&doc_id, |doc| get_scalar(doc, ROOT, field))
@@ -277,11 +281,11 @@ async fn process_joiner_state_event(
                 notify_one_condvar(assert_sync.clone()).await;
                 break;
             }
-            RemotePeerSynced(_) => {}
-            DocumentInitialized(..) => {
+            RemotePeerSynced { .. } => {}
+            DocumentInitialized { .. } => {
                 // Just ignore for now
             }
-            DocumentChanged((change_id, patches)) => {
+            DocumentChanged { change_id, patches } => {
                 assert!(change_id.is_none());
                 document_changes.push(patches);
             }
@@ -306,7 +310,11 @@ async fn process_creator_state_events(
     while let Some(event) = creator_state_event_receiver.next().await {
         info!("Received event {:?}", event);
         match event.content {
-            PeerSynced((peer_id, _, len)) => {
+            PeerSynced {
+                peer_id,
+                contiguous_length,
+                ..
+            } => {
                 let name = peermerge
                     .peer_header(&event.document_id, &peer_id)
                     .await
@@ -317,7 +325,7 @@ async fn process_creator_state_events(
                     panic!("Invalid creator peer sync {name:?}");
                 }
                 assert_eq!(name, "joiner");
-                assert_eq!(len, expected_scalars.len() as u64);
+                assert_eq!(contiguous_length, expected_scalars.len() as u64);
                 for (field, expected) in &expected_scalars {
                     let value = peermerge
                         .transact(&doc_id, |doc| get_scalar(doc, ROOT, field))
@@ -328,9 +336,11 @@ async fn process_creator_state_events(
                 wait_for_condvar(assert_sync).await;
                 break;
             }
-            RemotePeerSynced((_, _, len)) => {
+            RemotePeerSynced {
+                contiguous_length, ..
+            } => {
                 if expected_scalars.len() > 1 {
-                    assert_eq!(len, 2);
+                    assert_eq!(contiguous_length, 2);
                     for (field, expected) in &expected_scalars {
                         let value = peermerge
                             .transact(&doc_id, |doc| get_scalar(doc, ROOT, field))
@@ -343,7 +353,7 @@ async fn process_creator_state_events(
                     break;
                 }
             }
-            DocumentChanged((_, patches)) => {
+            DocumentChanged { patches, .. } => {
                 assert_eq!(patches.len(), expected_changes);
                 document_changes.push(patches);
             }

@@ -253,31 +253,31 @@ where
 
     while let Some(event) = state_event_receiver.next().await {
         match event.content {
-            RemotePeerSynced(..) => {
+            RemotePeerSynced { .. } => {
                 remote_sync_remaining -= 1;
                 // println!(
                 //     "RPS i={} sr={}, rsr={}, pr={}",
                 //     i, sync_remaining, remote_sync_remaining, document_initialized_remaining
                 // );
             }
-            PeerSynced(..) => {
+            PeerSynced { .. } => {
                 sync_remaining -= 1;
                 // println!(
                 //     "PS i={} sr={}, rsr={}, pr={}",
                 //     i, sync_remaining, remote_sync_remaining, document_initialized_remaining
                 // );
             }
-            DocumentChanged(..) => {
+            DocumentChanged { .. } => {
                 // Ignore
             }
-            DocumentInitialized(..) => {
+            DocumentInitialized { .. } => {
                 document_initialized_remaining -= 1;
                 // println!(
                 //     "DI i={} sr={}, rsr={}, pr={}",
                 //     i, sync_remaining, remote_sync_remaining, document_initialized_remaining
                 // );
             }
-            Reattached(_) => {
+            Reattached { .. } => {
                 panic!("Should not get reattached");
             }
         }
