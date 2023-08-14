@@ -57,10 +57,6 @@ impl PeermergeState {
 #[derive(Debug)]
 pub(crate) struct DocumentState {
     pub(crate) version: u8,
-    /// Doc feed's public key
-    pub(crate) doc_public_key: FeedPublicKey,
-    /// Doc feed's discovery key. Derived from doc_public_key.
-    pub(crate) doc_discovery_key: FeedDiscoveryKey,
     /// Document id. Derived from doc_discovery_key.
     pub(crate) document_id: DocumentId,
     /// Is the document encrypted. If None it is unknown and proxy must be true.
@@ -75,7 +71,6 @@ pub(crate) struct DocumentState {
 impl DocumentState {
     pub(crate) fn new(
         proxy: bool,
-        doc_public_key: FeedPublicKey,
         encrypted: Option<bool>,
         feeds_state: DocumentFeedsState,
         content: Option<DocumentContent>,
@@ -83,7 +78,6 @@ impl DocumentState {
         Self::new_with_version(
             PEERMERGE_VERSION,
             proxy,
-            doc_public_key,
             encrypted,
             feeds_state,
             content,
@@ -93,17 +87,13 @@ impl DocumentState {
     pub(crate) fn new_with_version(
         version: u8,
         proxy: bool,
-        doc_public_key: FeedPublicKey,
         encrypted: Option<bool>,
         feeds_state: DocumentFeedsState,
         content: Option<DocumentContent>,
     ) -> Self {
-        let doc_discovery_key = discovery_key_from_public_key(&doc_public_key);
-        let document_id = document_id_from_discovery_key(&doc_discovery_key);
+        let document_id = document_id_from_discovery_key(&feeds_state.doc_discovery_key);
         Self {
             version,
-            doc_public_key,
-            doc_discovery_key,
             document_id,
             encrypted,
             proxy,
@@ -132,7 +122,7 @@ impl DocumentState {
     }
 
     pub(crate) fn proxy_doc_url(&self) -> String {
-        encode_doc_url(&self.doc_public_key, false, &None, &None)
+        encode_doc_url(&self.feeds_state.doc_public_key, false, &None, &None)
     }
 
     pub(crate) fn doc_url(
@@ -145,7 +135,7 @@ impl DocumentState {
         }
         if let Some((document_type, document_header)) = self.document_type_and_header() {
             encode_doc_url(
-                &self.doc_public_key,
+                &self.feeds_state.doc_public_key,
                 false,
                 &Some(DocUrlAppendix {
                     meta_doc_data: initial_meta_doc_data,
@@ -165,8 +155,8 @@ impl DocumentState {
                 self.version,
                 false, // TODO: Child documents
                 crate::FeedType::Hypercore,
-                self.doc_public_key,
-                self.doc_discovery_key,
+                self.feeds_state.doc_public_key,
+                self.feeds_state.doc_discovery_key,
                 self.document_id,
             )
         } else {
@@ -174,8 +164,8 @@ impl DocumentState {
                 self.version,
                 false, // TODO: child documents
                 crate::FeedType::Hypercore,
-                self.doc_public_key,
-                self.doc_discovery_key,
+                self.feeds_state.doc_public_key,
+                self.feeds_state.doc_discovery_key,
                 self.document_id,
                 self.encrypted.unwrap(),
             )
@@ -297,6 +287,10 @@ impl DocumentState {
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct DocumentFeedsState {
+    /// Doc feed's public key
+    pub(crate) doc_public_key: FeedPublicKey,
+    /// Doc feed's discovery key. Derived from doc_public_key.
+    pub(crate) doc_discovery_key: FeedDiscoveryKey,
     /// Id and public key of personal writeable feed. None if proxy.
     pub(crate) write_feed: Option<DocumentFeedInfo>,
     /// Id and public key of peers' feeds and also our replaced write
@@ -305,21 +299,26 @@ pub(crate) struct DocumentFeedsState {
 }
 
 impl DocumentFeedsState {
-    pub(crate) fn new() -> Self {
-        Self::new_from_data(None, vec![])
+    pub(crate) fn new(doc_public_key: FeedPublicKey) -> Self {
+        Self::new_from_data(doc_public_key, None, vec![])
     }
 
-    pub(crate) fn new_writer(peer_id: &PeerId, write_public_key: &FeedPublicKey) -> Self {
+    pub(crate) fn new_writer(
+        doc_public_key: FeedPublicKey,
+        peer_id: &PeerId, write_public_key: &FeedPublicKey) -> Self {
         Self::new_from_data(
+            doc_public_key,
             Some(DocumentFeedInfo::new(*peer_id, *write_public_key, None)),
             vec![],
         )
     }
 
     pub(crate) fn new_from_data(
+        doc_public_key: FeedPublicKey,
         mut write_feed: Option<DocumentFeedInfo>,
         mut other_feeds: Vec<DocumentFeedInfo>,
     ) -> Self {
+        let doc_discovery_key = discovery_key_from_public_key(&doc_public_key);
         // For state, populate the discovery keys
         if let Some(write_feed) = write_feed.as_mut() {
             write_feed.populate_discovery_key();
@@ -328,6 +327,8 @@ impl DocumentFeedsState {
             other_feed.populate_discovery_key();
         }
         Self {
+            doc_public_key,
+            doc_discovery_key,
             write_feed,
             other_feeds,
         }
@@ -774,6 +775,7 @@ mod tests {
 
     #[test]
     fn feeds_state_write_all_new_remote() -> anyhow::Result<()> {
+        let doc_public_key: [u8; 32] = [100; 32];
         let my_id: [u8; 16] = [0; 16];
         let my_write_feed: DocumentFeedInfo = DocumentFeedInfo::new(my_id, [0; 32], None);
         let peer_1_id: [u8; 16] = [1; 16];
@@ -783,7 +785,7 @@ mod tests {
         let peer_3_id: [u8; 16] = [3; 16];
         let peer_3: DocumentFeedInfo = DocumentFeedInfo::new(peer_3_id, [3; 32], None);
 
-        let mut fs = DocumentFeedsState::new_from_data(Some(my_write_feed.clone()), vec![]);
+        let mut fs = DocumentFeedsState::new_from_data(doc_public_key, Some(my_write_feed.clone()), vec![]);
         let mut fs_copy = fs.clone();
         assert_eq!(fs, fs_copy);
 

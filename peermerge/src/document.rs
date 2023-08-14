@@ -745,9 +745,8 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
         // Initialize document state
         let state = DocumentState::new(
             proxy,
-            decoded_doc_url.doc_url_info.doc_public_key,
             None,
-            DocumentFeedsState::new(),
+            DocumentFeedsState::new(decoded_doc_url.doc_url_info.doc_public_key),
             None,
         );
 
@@ -888,9 +887,12 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
         );
         let state = DocumentState::new(
             false,
-            decoded_doc_url.doc_url_info.doc_public_key,
             Some(encrypted),
-            DocumentFeedsState::new_writer(&peer_id, &write_public_key),
+            DocumentFeedsState::new_writer(
+                decoded_doc_url.doc_url_info.doc_public_key,
+                &peer_id,
+                &write_public_key,
+            ),
             Some(content),
         );
 
@@ -1125,9 +1127,12 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
         );
         let state = DocumentState::new(
             proxy,
-            decoded_doc_url.doc_url_info.doc_public_key,
             Some(encrypted),
-            DocumentFeedsState::new_writer(&peer_id, &write_public_key),
+            DocumentFeedsState::new_writer(
+                decoded_doc_url.doc_url_info.doc_public_key,
+                &peer_id,
+                &write_public_key,
+            ),
             Some(content),
         );
 
@@ -1173,9 +1178,8 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
         // Initialize document state
         let state = DocumentState::new(
             proxy,
-            decoded_doc_url.doc_url_info.doc_public_key,
             None,
-            DocumentFeedsState::new(),
+            DocumentFeedsState::new(decoded_doc_url.doc_url_info.doc_public_key),
             None,
         );
 
@@ -1223,20 +1227,20 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
             }
             false
         };
-        let doc_discovery_key = state.doc_discovery_key;
+        let doc_discovery_key = state.feeds_state.doc_discovery_key;
         let log_context = log_context(state);
 
         // Open root feed
         let feeds: DashMap<[u8; 32], Arc<Mutex<Feed<FeedDiskPersistence>>>> = DashMap::new();
         let (_, root_feed) = open_disk_feed(
             data_root_dir,
-            &state.doc_discovery_key,
+            &doc_discovery_key,
             proxy,
             encrypted,
             encryption_key,
         )
         .await;
-        feeds.insert(state.doc_discovery_key, Arc::new(Mutex::new(root_feed)));
+        feeds.insert(doc_discovery_key, Arc::new(Mutex::new(root_feed)));
 
         // Open all peer feeds
         for peer in &state.feeds_state.other_feeds {
@@ -1262,7 +1266,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
                     "open_disk: peers={}, writable, proxy={proxy}, encrypted={encrypted}",
                     feeds.len() - 1
                 );
-                if write_peer.public_key != state.doc_public_key {
+                if write_peer.public_key != state.feeds_state.doc_public_key {
                     let (_, write_feed) = open_disk_feed(
                         data_root_dir,
                         &write_discovery_key,
@@ -1550,9 +1554,8 @@ where
     );
     let state = DocumentState::new(
         false,
-        doc_public_key,
         Some(encrypted),
-        DocumentFeedsState::new_writer(peer_id, &write_public_key),
+        DocumentFeedsState::new_writer(doc_public_key, peer_id, &write_public_key),
         Some(content),
     );
 

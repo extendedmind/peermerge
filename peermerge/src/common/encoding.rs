@@ -49,18 +49,8 @@ impl CompactEncoding<PeermergeState> for State {
 impl CompactEncoding<DocumentState> for State {
     fn preencode(&mut self, value: &DocumentState) -> Result<usize, EncodingError> {
         self.preencode(&value.version)?;
-        self.preencode_fixed_32()?; // doc_public_key
         self.add_end(1)?; // flags
-        let len = value.feeds_state.other_feeds.len();
-        if len > 0 {
-            self.preencode(&len)?;
-            for feed in &value.feeds_state.other_feeds {
-                self.preencode(feed)?;
-            }
-        }
-        if let Some(write_feed) = &value.feeds_state.write_feed {
-            self.preencode(write_feed)?;
-        }
+        self.preencode(&value.feeds_state)?; // flags
         if let Some(content) = &value.content {
             self.preencode(content)?;
         }
@@ -69,7 +59,6 @@ impl CompactEncoding<DocumentState> for State {
 
     fn encode(&mut self, value: &DocumentState, buffer: &mut [u8]) -> Result<usize, EncodingError> {
         self.encode(&value.version, buffer)?;
-        self.encode_fixed_32(&value.doc_public_key, buffer)?;
         let flags_index = self.start();
         let mut flags: u8 = 0;
         self.add_start(1)?;
@@ -79,20 +68,9 @@ impl CompactEncoding<DocumentState> for State {
         if value.encrypted.unwrap_or(false) {
             flags |= 2;
         }
-        let len = value.feeds_state.other_feeds.len();
-        if len > 0 {
-            flags |= 4;
-            self.encode(&len, buffer)?;
-            for feed in &value.feeds_state.other_feeds {
-                self.encode(feed, buffer)?;
-            }
-        }
-        if let Some(write_feed) = &value.feeds_state.write_feed {
-            flags |= 8;
-            self.encode(write_feed, buffer)?;
-        }
+        self.encode(&value.feeds_state, buffer)?;
         if let Some(content) = &value.content {
-            flags |= 16;
+            flags |= 4;
             self.encode(content, buffer)?;
         }
 
@@ -102,30 +80,11 @@ impl CompactEncoding<DocumentState> for State {
 
     fn decode(&mut self, buffer: &[u8]) -> Result<DocumentState, EncodingError> {
         let version: u8 = self.decode(buffer)?;
-        let doc_public_key: FeedPublicKey =
-            self.decode_fixed_32(buffer)?.to_vec().try_into().unwrap();
         let flags: u8 = self.decode(buffer)?;
         let proxy = flags & 1 != 0;
         let encrypted: Option<bool> = if !proxy { Some(flags & 2 != 0) } else { None };
-        let other_feeds: Vec<DocumentFeedInfo> = if flags & 4 != 0 {
-            let len: usize = self.decode(buffer)?;
-            let mut feeds: Vec<DocumentFeedInfo> = Vec::with_capacity(len);
-            for _ in 0..len {
-                let feed: DocumentFeedInfo = self.decode(buffer)?;
-                feeds.push(feed);
-            }
-            feeds
-        } else {
-            vec![]
-        };
-
-        let write_feed: Option<DocumentFeedInfo> = if flags & 8 != 0 {
-            Some(self.decode(buffer)?)
-        } else {
-            None
-        };
-
-        let content: Option<DocumentContent> = if flags & 16 != 0 {
+        let feeds_state: DocumentFeedsState = self.decode(buffer)?;
+        let content: Option<DocumentContent> = if flags & 4 != 0 {
             Some(self.decode(buffer)?)
         } else {
             None
@@ -133,9 +92,8 @@ impl CompactEncoding<DocumentState> for State {
         Ok(DocumentState::new_with_version(
             version,
             proxy,
-            doc_public_key,
             encrypted,
-            DocumentFeedsState::new_from_data(write_feed, other_feeds),
+            feeds_state,
             content,
         ))
     }
@@ -180,6 +138,78 @@ impl CompactEncoding<DocumentFeedInfo> for State {
             id,
             public_key,
             replaced_by_public_key,
+        ))
+    }
+}
+
+impl CompactEncoding<DocumentFeedsState> for State {
+    fn preencode(&mut self, value: &DocumentFeedsState) -> Result<usize, EncodingError> {
+        self.preencode_fixed_32()?; // doc_public_key
+        self.add_end(1)?; // flags
+        let len = value.other_feeds.len();
+        if len > 0 {
+            self.preencode(&len)?;
+            for feed in &value.other_feeds {
+                self.preencode(feed)?;
+            }
+        }
+        if let Some(write_feed) = &value.write_feed {
+            self.preencode(write_feed)?;
+        }
+        Ok(self.end())
+    }
+
+    fn encode(
+        &mut self,
+        value: &DocumentFeedsState,
+        buffer: &mut [u8],
+    ) -> Result<usize, EncodingError> {
+        self.encode_fixed_32(&value.doc_public_key, buffer)?;
+        let flags_index = self.start();
+        let mut flags: u8 = 0;
+        self.add_start(1)?;
+        let len = value.other_feeds.len();
+        if len > 0 {
+            flags |= 1;
+            self.encode(&len, buffer)?;
+            for feed in &value.other_feeds {
+                self.encode(feed, buffer)?;
+            }
+        }
+        if let Some(write_feed) = &value.write_feed {
+            flags |= 2;
+            self.encode(write_feed, buffer)?;
+        }
+
+        buffer[flags_index] = flags;
+        Ok(self.start())
+    }
+
+    fn decode(&mut self, buffer: &[u8]) -> Result<DocumentFeedsState, EncodingError> {
+        let doc_public_key: FeedPublicKey =
+            self.decode_fixed_32(buffer)?.to_vec().try_into().unwrap();
+        let flags: u8 = self.decode(buffer)?;
+        let other_feeds: Vec<DocumentFeedInfo> = if flags & 1 != 0 {
+            let len: usize = self.decode(buffer)?;
+            let mut feeds: Vec<DocumentFeedInfo> = Vec::with_capacity(len);
+            for _ in 0..len {
+                let feed: DocumentFeedInfo = self.decode(buffer)?;
+                feeds.push(feed);
+            }
+            feeds
+        } else {
+            vec![]
+        };
+        let write_feed: Option<DocumentFeedInfo> = if flags & 2 != 0 {
+            Some(self.decode(buffer)?)
+        } else {
+            None
+        };
+
+        Ok(DocumentFeedsState::new_from_data(
+            doc_public_key,
+            write_feed,
+            other_feeds,
         ))
     }
 }
