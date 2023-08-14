@@ -182,6 +182,15 @@ impl DocumentState {
         }
     }
 
+    pub(crate) fn peer_ids(&self) -> Vec<PeerId> {
+        let mut peer_ids: Vec<PeerId> = self.feeds_state.other_feeds.iter().map(|other_feed| other_feed.peer_id).collect();
+        if let Some(write_feed) = &self.feeds_state.write_feed {
+            peer_ids.push(write_feed.peer_id);
+        }
+        peer_ids.dedup();
+        peer_ids
+    }
+
     pub(crate) fn peer_header(&self, peer_id: &PeerId) -> Option<NameDescription> {
         if let Some(content) = &self.content {
             if let Some(meta_automerge_doc) = &content.meta_automerge_doc {

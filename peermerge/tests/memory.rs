@@ -58,10 +58,10 @@ async fn memory_three_writers() -> anyhow::Result<()> {
         .await?;
     assert_eq!(
         peermerge_creator
-            .feed_discovery_keys(&creator_doc_info.id())
+            .peer_ids(&creator_doc_info.id())
             .await
             .len(),
-        2
+        1
     );
 
     // Insert a map with a text field to the document

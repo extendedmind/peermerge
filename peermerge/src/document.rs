@@ -127,8 +127,9 @@ where
         get_feed(&self.feeds, discovery_key).await
     }
 
-    pub(crate) async fn feed_discovery_keys(&self) -> Vec<FeedDiscoveryKey> {
-        get_feed_discovery_keys(&self.feeds).await
+    pub(crate) async fn peer_ids(&self) -> Vec<PeerId> {
+        let document_state_wrapper = self.document_state.lock().await;
+        document_state_wrapper.state().peer_ids()
     }
 
     pub(crate) async fn feeds_state(&self) -> DocumentFeedsState {

@@ -221,9 +221,9 @@ where
     }
 
     #[instrument(skip(self), fields(peer_name = self.default_peer_header.name))]
-    pub async fn feed_discovery_keys(&self, document_id: &DocumentId) -> Vec<[u8; 32]> {
+    pub async fn peer_ids(&self, document_id: &DocumentId) -> Vec<PeerId> {
         let document = get_document(&self.documents, document_id).await.unwrap();
-        document.feed_discovery_keys().await
+        document.peer_ids().await
     }
 
     #[instrument(skip(self), fields(peer_name = self.default_peer_header.name))]
