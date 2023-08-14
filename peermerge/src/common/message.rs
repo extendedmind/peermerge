@@ -25,20 +25,17 @@ impl BroadcastMessage {
 #[derive(Debug)]
 pub(crate) struct FeedsChangedMessage {
     pub(crate) doc_discovery_key: FeedDiscoveryKey,
-    pub(crate) incoming_feeds: Vec<DocumentFeedInfo>,
     pub(crate) replaced_feeds: Vec<DocumentFeedInfo>,
     pub(crate) feeds_to_create: Vec<DocumentFeedInfo>,
 }
 impl FeedsChangedMessage {
     pub(crate) fn new(
         doc_discovery_key: FeedDiscoveryKey,
-        incoming_feeds: Vec<DocumentFeedInfo>,
         replaced_feeds: Vec<DocumentFeedInfo>,
         feeds_to_create: Vec<DocumentFeedInfo>,
     ) -> Self {
         Self {
             doc_discovery_key,
-            incoming_feeds,
             replaced_feeds,
             feeds_to_create,
         }

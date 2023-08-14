@@ -330,13 +330,8 @@ fn is_init_entries(entries: &Vec<Entry>) -> bool {
     if entries.is_empty() {
         return false;
     }
-    match entries[0].content {
-        EntryContent::InitDoc { .. } => {
-            return true;
-        }
-        EntryContent::InitPeer { .. } => {
-            return true;
-        }
-        _ => return false,
-    }
+    matches!(
+        entries[0].content,
+        EntryContent::InitDoc { .. } | EntryContent::InitPeer { .. }
+    )
 }

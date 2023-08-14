@@ -574,13 +574,13 @@ async fn on_feed_event_disk(
     while let Some(event) = feed_event_receiver.next().await {
         debug!("Received event {:?}", event);
         match event.content {
-            FeedEventContent::NewFeedsBroadcasted(public_keys) => {
+            FeedEventContent::NewFeedsBroadcasted(new_remote_feeds) => {
                 let mut document =
                     get_document_by_discovery_key(&documents, &event.doc_discovery_key)
                         .await
                         .unwrap();
                 document
-                    .process_new_feeds_broadcasted_disk(public_keys)
+                    .process_new_feeds_broadcasted_disk(new_remote_feeds)
                     .await;
             }
             _ => process_feed_event(event, &mut state_event_sender, &mut documents).await,

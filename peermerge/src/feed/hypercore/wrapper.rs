@@ -148,14 +148,12 @@ where
     pub(crate) async fn notify_feeds_changed(
         &mut self,
         doc_discovery_key: FeedDiscoveryKey,
-        incoming_feeds: Vec<DocumentFeedInfo>,
         replaced_feeds: Vec<DocumentFeedInfo>,
         feeds_to_create: Vec<DocumentFeedInfo>,
     ) -> Result<(), PeermergeError> {
         if !self.channel_senders.is_empty() {
             let message = create_feeds_changed_local_signal(
                 doc_discovery_key,
-                incoming_feeds,
                 replaced_feeds,
                 feeds_to_create,
             );

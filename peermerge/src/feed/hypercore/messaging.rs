@@ -77,13 +77,11 @@ pub(super) fn create_feed_synced_local_signal(contiguous_length: u64) -> Message
 
 pub(super) fn create_feeds_changed_local_signal(
     doc_discovery_key: FeedDiscoveryKey,
-    incoming_feeds: Vec<DocumentFeedInfo>,
     replaced_feeds: Vec<DocumentFeedInfo>,
     feeds_to_create: Vec<DocumentFeedInfo>,
 ) -> Message {
     let message = FeedsChangedMessage {
         doc_discovery_key,
-        incoming_feeds,
         replaced_feeds,
         feeds_to_create,
     };
@@ -362,13 +360,12 @@ where
                 let feeds_state = peer_state.feeds_state.as_mut().unwrap();
                 let mut dec_state = State::from_buffer(&message.message);
                 let broadcast_message: BroadcastMessage = dec_state.decode(&message.message)?;
-                let new_remote_feeds = feeds_state
-                    .filter_new_feeds(&broadcast_message.write_feed, &broadcast_message.peer_feeds);
+                let (stored_feeds_found, new_remote_feeds) = feeds_state.compare_broadcasted_feeds(
+                    broadcast_message.write_feed,
+                    broadcast_message.peer_feeds,
+                );
 
-                if new_remote_feeds.is_empty()
-                    && feeds_state
-                        .feeds_match(&broadcast_message.write_feed, &broadcast_message.peer_feeds)
-                {
+                if stored_feeds_found && new_remote_feeds.is_empty() {
                     // Don't re-initialize if this has already been synced, meaning this is a
                     // broadcast that notifies a new third party feed after the initial handshake.
                     if !peer_state.sync_sent {
@@ -376,7 +373,7 @@ where
                         channel.send_batch(&messages).await?;
                     }
                 } else if !new_remote_feeds.is_empty() {
-                    // New feeds found, return a feed event
+                    // New remote feeds found, return a feed event
                     return Ok(Some(FeedEvent::new(
                         peer_state.doc_discovery_key,
                         NewFeedsBroadcasted(new_remote_feeds),
@@ -439,8 +436,11 @@ where
                 let mut dec_state = State::from_buffer(&data);
                 let feeds_changed_message: FeedsChangedMessage = dec_state.decode(&data)?;
 
-                // Merge new feeds to the feeds state
-                feeds_state.merge_incoming_feeds(&feeds_changed_message.incoming_feeds);
+                // Set replaced feeds and feeds to create to the feeds state
+                feeds_state.set_replaced_feeds_and_feeds_to_create(
+                    feeds_changed_message.replaced_feeds,
+                    feeds_changed_message.feeds_to_create,
+                );
 
                 // Transmit this event forward to the protocol
                 channel

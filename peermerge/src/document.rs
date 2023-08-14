@@ -489,7 +489,6 @@ where
     #[instrument(level = "debug", skip_all, fields(ctx = self.log_context))]
     async fn notify_feeds_changed(
         &mut self,
-        incoming_feeds: Vec<DocumentFeedInfo>,
         replaced_feeds: Vec<DocumentFeedInfo>,
         feeds_to_create: Vec<DocumentFeedInfo>,
     ) {
@@ -500,12 +499,7 @@ where
             .unwrap();
         let mut doc_feed = doc_feed.lock().await;
         doc_feed
-            .notify_feeds_changed(
-                self.doc_discovery_key,
-                incoming_feeds,
-                replaced_feeds,
-                feeds_to_create,
-            )
+            .notify_feeds_changed(self.doc_discovery_key, replaced_feeds, feeds_to_create)
             .await
             .unwrap();
     }
@@ -771,11 +765,13 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
     #[instrument(level = "debug", skip_all, fields(ctx = self.log_context))]
     pub(crate) async fn process_new_feeds_broadcasted_memory(
         &mut self,
-        incoming_feeds: Vec<DocumentFeedInfo>,
+        new_remote_feeds: Vec<DocumentFeedInfo>,
     ) -> bool {
         let (changed, replaced_feeds, feeds_to_create) = {
             let mut document_state = self.document_state.lock().await;
-            document_state.process_incoming_feeds(&incoming_feeds).await
+            document_state
+                .merge_new_remote_feeds(&new_remote_feeds)
+                .await
         };
         if changed {
             {
@@ -784,7 +780,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
                     .await;
             }
             {
-                self.notify_feeds_changed(incoming_feeds, replaced_feeds, feeds_to_create)
+                self.notify_feeds_changed(replaced_feeds, feeds_to_create)
                     .await;
             }
         }
@@ -1337,11 +1333,13 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
     #[instrument(level = "debug", skip_all, fields(ctx = self.log_context))]
     pub(crate) async fn process_new_feeds_broadcasted_disk(
         &mut self,
-        incoming_feeds: Vec<DocumentFeedInfo>,
+        new_remote_feeds: Vec<DocumentFeedInfo>,
     ) -> bool {
         let (changed, replaced_feeds, feeds_to_create) = {
             let mut document_state = self.document_state.lock().await;
-            document_state.process_incoming_feeds(&incoming_feeds).await
+            document_state
+                .merge_new_remote_feeds(&new_remote_feeds)
+                .await
         };
         if changed {
             {
@@ -1350,7 +1348,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
                     .await;
             }
             {
-                self.notify_feeds_changed(incoming_feeds, replaced_feeds, feeds_to_create)
+                self.notify_feeds_changed(replaced_feeds, feeds_to_create)
                     .await;
             }
         }

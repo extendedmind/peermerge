@@ -295,7 +295,7 @@ impl DocumentState {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct DocumentFeedsState {
     /// Id and public key of personal writeable feed. None if proxy.
     pub(crate) write_feed: Option<DocumentFeedInfo>,
@@ -332,62 +332,77 @@ impl DocumentFeedsState {
         }
     }
 
-    pub(crate) fn filter_new_feeds(
+    pub(crate) fn compare_broadcasted_feeds(
         &self,
-        remote_write_feed: &Option<DocumentFeedInfo>,
-        remote_peer_feeds: &[DocumentFeedInfo],
-    ) -> Vec<DocumentFeedInfo> {
-        let mut new_remote_feeds: Vec<DocumentFeedInfo> = remote_peer_feeds
-            .iter()
-            .filter(|remote_peer_feed| {
-                let writable_matches: bool = if let Some(write_feed) = &self.write_feed {
-                    write_feed == *remote_peer_feed
+        remote_write_feed: Option<DocumentFeedInfo>,
+        remote_peer_feeds: Vec<DocumentFeedInfo>,
+    ) -> (bool, Vec<DocumentFeedInfo>) {
+        let stored_feeds_found: bool = {
+            let stored_write_feed_found = if let Some(stored_write_feed) = &self.write_feed {
+                remote_peer_feeds.contains(stored_write_feed)
+            } else {
+                true
+            };
+            stored_write_feed_found
+                && self.peer_feeds.iter().all(|stored_feed| {
+                    let remote_write_feed_matches =
+                        if let Some(remote_write_feed) = &remote_write_feed {
+                            stored_feed == remote_write_feed
+                        } else {
+                            false
+                        };
+                    remote_write_feed_matches || remote_peer_feeds.contains(stored_feed)
+                })
+        };
+        let mut new_remote_feeds: Vec<DocumentFeedInfo> =
+            if let Some(remote_write_feed) = remote_write_feed {
+                if !self.peer_feeds.iter().any(|feed| {
+                    feed.peer_id == remote_write_feed.peer_id
+                        && feed.public_key == remote_write_feed.public_key
+                }) {
+                    vec![remote_write_feed]
                 } else {
-                    false
-                };
-                !writable_matches && !self.peer_feeds.contains(remote_peer_feed)
-            })
-            .cloned()
-            .collect();
-        if let Some(remote_write_feed) = remote_write_feed {
-            if !self
-                .peer_feeds
-                .iter()
-                .any(|feed| feed.public_key == remote_write_feed.public_key)
+                    vec![]
+                }
+            } else {
+                vec![]
+            };
+        remote_peer_feeds.into_iter().for_each(|remote_peer_feed| {
+            let writable_matches: bool = if let Some(write_feed) = &self.write_feed {
+                write_feed.peer_id == remote_peer_feed.peer_id
+                    && write_feed.public_key == remote_peer_feed.public_key
+            } else {
+                false
+            };
+
+            if !writable_matches
+                && !self.peer_feeds.iter().any(|stored_feed| {
+                    stored_feed.peer_id == remote_peer_feed.peer_id
+                        && stored_feed.public_key == remote_peer_feed.public_key
+                        // If the replaced feed is exactly the same, or then if
+                        // we have newer info, then this is not a new feed.
+                        && (stored_feed.replaced_by_public_key
+                            == remote_peer_feed.replaced_by_public_key || 
+                            (stored_feed.replaced_by_public_key.is_some() 
+                             && remote_peer_feed.replaced_by_public_key.is_none()))
+                })
             {
-                new_remote_feeds.push(remote_write_feed.clone());
+                new_remote_feeds.push(remote_peer_feed);
             }
-        }
-        new_remote_feeds
-    }
+        });
 
-    /// Do the public keys match those given
-    pub(crate) fn feeds_match(
-        &self,
-        remote_write_feed: &Option<DocumentFeedInfo>,
-        remote_feeds: &[DocumentFeedInfo],
-    ) -> bool {
-        let mut remote_feeds: Vec<DocumentFeedInfo> = remote_feeds.to_vec();
-        if let Some(remote_write_feed) = remote_write_feed {
-            remote_feeds.push(remote_write_feed.clone());
-        }
-        remote_feeds.sort();
-
-        let mut feeds: Vec<DocumentFeedInfo> = self.peer_feeds.clone();
-
-        if let Some(write_feed) = &self.write_feed {
-            feeds.push(write_feed.clone());
-        }
-        feeds.sort();
-        remote_feeds == feeds
+        (stored_feeds_found, new_remote_feeds)
     }
 
     /// Merge incoming feeds into existing feeds
-    pub(crate) fn merge_incoming_feeds(
+    pub(crate) fn merge_new_feeds(
         &mut self,
-        incoming_feeds: &[DocumentFeedInfo],
+        new_feeds: &[DocumentFeedInfo],
     ) -> (bool, Vec<DocumentFeedInfo>, Vec<DocumentFeedInfo>) {
-        let changed_feeds: Vec<DocumentFeedInfo> = incoming_feeds
+        // First make sure that some other thread didn't already
+        // merge some of these, in which case there are less changed
+        // feeds than new feeds.
+        let changed_feeds: Vec<DocumentFeedInfo> = new_feeds
             .iter()
             .filter(|incoming_feed| {
                 !self
@@ -402,6 +417,7 @@ impl DocumentFeedsState {
             .filter(|changed_feed| changed_feed.replaced_by_public_key.is_none())
             .cloned()
             .collect();
+
         let (changed, replaced_feeds): (bool, Vec<DocumentFeedInfo>) = {
             if changed_feeds.is_empty() {
                 (false, vec![])
@@ -469,6 +485,81 @@ impl DocumentFeedsState {
             }
         };
         (changed, replaced_feeds, feeds_to_create)
+    }
+
+    /// Replace the write feed's public key, returns the replaced_feeds and feeds_to_create.
+    #[allow(dead_code)] // TODO: Remote when implemented
+    pub(crate) fn replace_write_public_key(
+        &mut self,
+        new_write_public_key: FeedPublicKey,
+    ) -> (Vec<DocumentFeedInfo>, Vec<DocumentFeedInfo>) {
+        let mut replaced_write_feed = self.write_feed.clone().unwrap();
+        let mut new_write_feed =
+            DocumentFeedInfo::new(replaced_write_feed.peer_id, new_write_public_key, None);
+        new_write_feed.populate_discovery_key();
+        self.write_feed = Some(new_write_feed.clone());
+        replaced_write_feed.replaced_by_public_key = Some(new_write_public_key);
+        self.peer_feeds.push(replaced_write_feed.clone());
+
+        // Return values without discovery keys
+        replaced_write_feed.discovery_key = None;
+        new_write_feed.discovery_key = None;
+        (vec![replaced_write_feed], vec![new_write_feed])
+    }
+
+    /// Set result received from merge_incoming_peers or replace_write_public_key into this feeds state
+    pub(crate) fn set_replaced_feeds_and_feeds_to_create(
+        &mut self,
+        replaced_feeds: Vec<DocumentFeedInfo>,
+        mut feeds_to_create: Vec<DocumentFeedInfo>,
+    ) {
+        if let Some(write_feed) = self.write_feed.as_mut() {
+            if let Some(replaced_write_feed) = replaced_feeds.iter().find(|replaced_feed| {
+                replaced_feed.peer_id == write_feed.peer_id
+                    && replaced_feed.public_key == write_feed.public_key
+            }) {
+                let mut old_write_feed = write_feed.clone();
+                old_write_feed.replaced_by_public_key = replaced_write_feed.replaced_by_public_key;
+
+                // The write feed needs to be replaced, the new one needs to be in feeds_to_create
+                let mut write_feed_index: Option<usize> = None;
+                for (i, feed_to_create) in feeds_to_create.iter().enumerate() {
+                    if Some(feed_to_create.public_key) == replaced_write_feed.replaced_by_public_key
+                    {
+                        write_feed_index = Some(i);
+                    }
+                }
+                if let Some(write_feed_index) = write_feed_index {
+                    *write_feed = feeds_to_create
+                        .drain(write_feed_index..write_feed_index + 1)
+                        .collect::<Vec<DocumentFeedInfo>>()
+                        .into_iter()
+                        .next()
+                        .unwrap();
+                    write_feed.populate_discovery_key();
+                } else {
+                    panic!("Invalid write feed change parameters, new write feed missing");
+                }
+
+                // Put the old write feed to the peer_feeds
+                self.peer_feeds.push(old_write_feed);
+            }
+        }
+
+        self.peer_feeds.iter_mut().for_each(|stored_feed| {
+            if let Some(replaced_feed) = replaced_feeds.iter().find(|replaced_feed| {
+                replaced_feed.public_key == stored_feed.public_key
+                    && replaced_feed.peer_id == stored_feed.peer_id
+                    && stored_feed.replaced_by_public_key.is_none()
+                    && replaced_feed.replaced_by_public_key.is_some()
+            }) {
+                stored_feed.replaced_by_public_key = replaced_feed.replaced_by_public_key;
+            }
+        });
+        feeds_to_create.into_iter().for_each(|mut feed_to_create| {
+            feed_to_create.populate_discovery_key();
+            self.peer_feeds.push(feed_to_create)
+        });
     }
 
     pub(crate) fn peer_id(&self, discovery_key: &FeedDiscoveryKey) -> PeerId {
@@ -672,5 +763,116 @@ impl DocumentContent {
                 .expect("User document must be present when setting cursor");
             self.user_doc_data = Some(save_automerge_doc(user_automerge_doc));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+
+    use super::*;
+
+    #[test]
+    fn feeds_state_write_all_new_remote() -> anyhow::Result<()> {
+        let my_id: [u8; 16] = [0; 16];
+        let my_write_feed: DocumentFeedInfo = DocumentFeedInfo::new(my_id, [0; 32], None);
+        let peer_1_id: [u8; 16] = [1; 16];
+        let mut peer_1_write: DocumentFeedInfo = DocumentFeedInfo::new(peer_1_id, [1; 32], None);
+        let peer_2_id: [u8; 16] = [2; 16];
+        let peer_2: DocumentFeedInfo = DocumentFeedInfo::new(peer_2_id, [2; 32], None);
+        let peer_3_id: [u8; 16] = [3; 16];
+        let peer_3: DocumentFeedInfo = DocumentFeedInfo::new(peer_3_id, [3; 32], None);
+
+        let mut fs = DocumentFeedsState::new_from_data(Some(my_write_feed.clone()), vec![]);
+        let mut fs_copy = fs.clone();
+        assert_eq!(fs, fs_copy);
+
+        // Remote sends new peers and doesn't know about our write feed
+        let (stored_feeds_found, new_remote_feeds) = fs.compare_broadcasted_feeds(
+            Some(peer_1_write.clone()),
+            vec![peer_2.clone(), peer_3.clone()],
+        );
+        assert!(!stored_feeds_found);
+        assert_eq!(
+            new_remote_feeds,
+            vec![peer_1_write.clone(), peer_2.clone(), peer_3.clone()]
+        );
+
+        let (changed, replaced_feeds, feeds_to_create) = fs.merge_new_feeds(&new_remote_feeds);
+        assert!(changed);
+        assert!(replaced_feeds.is_empty());
+        assert_eq!(
+            feeds_to_create,
+            vec![peer_1_write.clone(), peer_2.clone(), peer_3.clone()]
+        );
+        fs_copy.set_replaced_feeds_and_feeds_to_create(replaced_feeds, feeds_to_create);
+        assert_eq!(fs, fs_copy);
+
+        // Remote sends our feed as well
+        let (stored_feeds_found, new_remote_feeds) = fs.compare_broadcasted_feeds(
+            Some(peer_1_write.clone()),
+            vec![peer_3.clone(), peer_2.clone(), my_write_feed.clone()],
+        );
+        assert!(stored_feeds_found);
+        assert!(new_remote_feeds.is_empty());
+
+        // We replace our write feed
+        let my_new_write_feed_pk: [u8; 32] = [4; 32];
+        let my_new_write_feed =
+            DocumentFeedInfo::new(my_write_feed.peer_id, my_new_write_feed_pk, None);
+        let my_replaced_write_feed = DocumentFeedInfo::new(
+                my_write_feed.peer_id,
+                my_write_feed.public_key,
+                Some(my_new_write_feed_pk)
+            );
+        let (replaced_feeds, feeds_to_create) = fs.replace_write_public_key(my_new_write_feed_pk);
+        assert_eq!(fs.write_feed, Some(my_new_write_feed.clone()));
+        assert_eq!(
+            replaced_feeds,
+            vec![my_replaced_write_feed.clone()]
+        );
+        assert_eq!(feeds_to_create, vec![my_new_write_feed.clone()]);
+        fs_copy.set_replaced_feeds_and_feeds_to_create(replaced_feeds, feeds_to_create);
+        assert_eq!(fs, fs_copy);
+
+        // The peer replaces their write key too
+        let new_peer_1_write_pk: [u8; 32] = [5; 32];
+        let new_peer_1_write: DocumentFeedInfo =
+            DocumentFeedInfo::new(peer_1_id, new_peer_1_write_pk, None);
+        peer_1_write.replaced_by_public_key = Some(new_peer_1_write_pk);
+        let (stored_feeds_found, new_remote_feeds) = fs.compare_broadcasted_feeds(
+            Some(new_peer_1_write.clone()),
+            vec![
+                peer_3.clone(),
+                peer_2.clone(),
+                my_write_feed,
+                peer_1_write.clone(),
+            ],
+        );
+        assert!(!stored_feeds_found);
+        assert_eq!(new_remote_feeds, vec![new_peer_1_write.clone(), peer_1_write.clone()]);
+        let (changed, replaced_feeds, feeds_to_create) = fs.merge_new_feeds(&new_remote_feeds);
+        assert!(changed);
+        assert_eq!(replaced_feeds, vec![peer_1_write.clone()]);
+        assert_eq!(
+            feeds_to_create,
+            vec![new_peer_1_write.clone()]
+        );
+        fs_copy.set_replaced_feeds_and_feeds_to_create(replaced_feeds, feeds_to_create);
+        assert_eq!(fs, fs_copy);
+
+        // Remote sends our changed feed as well
+        let (stored_feeds_found, new_remote_feeds) = fs.compare_broadcasted_feeds(
+            Some(new_peer_1_write),
+            vec![
+                peer_3,
+                peer_2,
+                my_new_write_feed,
+                my_replaced_write_feed,
+                peer_1_write,
+            ],
+        );
+        assert!(stored_feeds_found);
+        assert!(new_remote_feeds.is_empty());
+        Ok(())
     }
 }

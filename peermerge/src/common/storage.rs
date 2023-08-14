@@ -96,12 +96,12 @@ impl<T> DocStateWrapper<T>
 where
     T: RandomAccess + Debug + Send,
 {
-    pub(crate) async fn process_incoming_feeds(
+    pub(crate) async fn merge_new_remote_feeds(
         &mut self,
-        incoming_feeds: &[DocumentFeedInfo],
+        new_remote_feeds: &[DocumentFeedInfo],
     ) -> (bool, Vec<DocumentFeedInfo>, Vec<DocumentFeedInfo>) {
         let (changed, replaced_feeds, feeds_to_create) =
-            self.state.feeds_state.merge_incoming_feeds(incoming_feeds);
+            self.state.feeds_state.merge_new_feeds(new_remote_feeds);
         if changed {
             write_document_state(&self.state, &mut self.storage).await;
         }

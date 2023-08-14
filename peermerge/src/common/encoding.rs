@@ -351,13 +351,6 @@ impl CompactEncoding<FeedsChangedMessage> for State {
     fn preencode(&mut self, value: &FeedsChangedMessage) -> Result<usize, EncodingError> {
         self.preencode_fixed_32()?;
         self.add_end(1)?; // flags
-        let len = value.incoming_feeds.len();
-        if len > 0 {
-            self.preencode(&len)?;
-            for peer in &value.incoming_feeds {
-                self.preencode(peer)?;
-            }
-        }
         let len = value.replaced_feeds.len();
         if len > 0 {
             self.preencode(&len)?;
@@ -384,17 +377,9 @@ impl CompactEncoding<FeedsChangedMessage> for State {
         let flags_index = self.start();
         let mut flags: u8 = 0;
         self.add_start(1)?;
-        let len = value.incoming_feeds.len();
-        if len > 0 {
-            flags |= 1;
-            self.encode(&len, buffer)?;
-            for feed in &value.incoming_feeds {
-                self.encode(feed, buffer)?;
-            }
-        }
         let len = value.replaced_feeds.len();
         if len > 0 {
-            flags |= 2;
+            flags |= 1;
             self.encode(&len, buffer)?;
             for feed in &value.replaced_feeds {
                 self.encode(feed, buffer)?;
@@ -402,7 +387,7 @@ impl CompactEncoding<FeedsChangedMessage> for State {
         }
         let len = value.feeds_to_create.len();
         if len > 0 {
-            flags |= 4;
+            flags |= 2;
             self.encode(&len, buffer)?;
             for feed in &value.feeds_to_create {
                 self.encode(feed, buffer)?;
@@ -416,7 +401,7 @@ impl CompactEncoding<FeedsChangedMessage> for State {
         let doc_discovery_key: [u8; 32] =
             self.decode_fixed_32(buffer)?.to_vec().try_into().unwrap();
         let flags: u8 = self.decode(buffer)?;
-        let incoming_feeds: Vec<DocumentFeedInfo> = if flags & 1 != 0 {
+        let replaced_feeds: Vec<DocumentFeedInfo> = if flags & 1 != 0 {
             let len: usize = self.decode(buffer)?;
             let mut feeds: Vec<DocumentFeedInfo> = Vec::with_capacity(len);
             for _ in 0..len {
@@ -427,18 +412,7 @@ impl CompactEncoding<FeedsChangedMessage> for State {
         } else {
             vec![]
         };
-        let replaced_feeds: Vec<DocumentFeedInfo> = if flags & 2 != 0 {
-            let len: usize = self.decode(buffer)?;
-            let mut feeds: Vec<DocumentFeedInfo> = Vec::with_capacity(len);
-            for _ in 0..len {
-                let feed: DocumentFeedInfo = self.decode(buffer)?;
-                feeds.push(feed);
-            }
-            feeds
-        } else {
-            vec![]
-        };
-        let feeds_to_create: Vec<DocumentFeedInfo> = if flags & 4 != 0 {
+        let feeds_to_create: Vec<DocumentFeedInfo> = if flags & 2 != 0 {
             let len: usize = self.decode(buffer)?;
             let mut feeds: Vec<DocumentFeedInfo> = Vec::with_capacity(len);
             for _ in 0..len {
@@ -452,7 +426,6 @@ impl CompactEncoding<FeedsChangedMessage> for State {
 
         Ok(FeedsChangedMessage::new(
             doc_discovery_key,
-            incoming_feeds,
             replaced_feeds,
             feeds_to_create,
         ))
