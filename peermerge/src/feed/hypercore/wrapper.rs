@@ -29,7 +29,7 @@ use super::{
 use crate::{
     common::{
         cipher::EntryCipher,
-        entry::{shrink_entries, Entry},
+        entry::{shrink_entries, Entry, ShrunkEntries},
         state::{DocumentFeedInfo, DocumentFeedsState},
         utils::Mutex,
         FeedEvent,
@@ -107,19 +107,28 @@ impl<T> HypercoreWrapper<T>
 where
     T: RandomAccess + Debug + Send + 'static,
 {
-    pub(crate) async fn append(&mut self, data: &[u8]) -> Result<u64, PeermergeError> {
+    pub(crate) async fn append_batch(
+        &mut self,
+        data_batch: Vec<Vec<u8>>,
+    ) -> Result<u64, PeermergeError> {
         if self.proxy {
             panic!("Can not append to a proxy");
         }
         let outcome = {
             let mut hypercore = self.hypercore.lock().await;
-
             if let Some(entry_cipher) = &self.entry_cipher {
-                let encrypted =
-                    entry_cipher.encrypt(&self.public_key, hypercore.info().length, data);
-                hypercore.append(&encrypted).await?
+                let original_length = hypercore.info().length;
+                let mut encrypted_data_array: Vec<Vec<u8>> = Vec::with_capacity(data_batch.len());
+                for (i, data) in data_batch.iter().enumerate() {
+                    encrypted_data_array.push(entry_cipher.encrypt(
+                        &self.public_key,
+                        original_length + i as u64,
+                        data,
+                    ))
+                }
+                hypercore.append_batch(&encrypted_data_array).await?
             } else {
-                hypercore.append(data).await?
+                hypercore.append_batch(&data_batch).await?
             }
         };
         if !self.channel_senders.is_empty() {
@@ -179,7 +188,7 @@ where
         &mut self,
         index: u64,
         len: u64,
-    ) -> Result<(Vec<Entry>, u64), PeermergeError> {
+    ) -> Result<ShrunkEntries, PeermergeError> {
         if self.proxy {
             panic!("Can not get entries from a proxy");
         }

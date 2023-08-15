@@ -488,6 +488,7 @@ enum EntryType {
     InitPeer = 1,
     DocPart = 2,
     Change = 3,
+    ChangePart = 4,
 }
 
 impl EntryType {
@@ -497,6 +498,7 @@ impl EntryType {
             EntryContent::InitPeer { .. } => Self::InitPeer,
             EntryContent::DocPart { .. } => Self::DocPart,
             EntryContent::Change { .. } => Self::Change,
+            EntryContent::ChangePart { .. } => Self::ChangePart,
         }
     }
 }
@@ -517,7 +519,11 @@ impl TryFrom<u8> for EntryType {
 impl CompactEncoding<Entry> for State {
     fn preencode(&mut self, value: &Entry) -> Result<usize, EncodingError> {
         self.preencode(&value.version)?;
-        self.add_end(2)?; // entry_type and flags
+        if !matches!(value.content, EntryContent::ChangePart { .. }) {
+            self.add_end(2)?; // entry_type and flags
+        } else {
+            self.add_end(1)?; // entry_type
+        };
         match &value.content {
             EntryContent::InitDoc {
                 doc_part_count,
@@ -554,7 +560,14 @@ impl CompactEncoding<Entry> for State {
                     self.preencode(user_doc_data)?;
                 }
             }
-            EntryContent::Change { data, .. } => {
+            EntryContent::Change {
+                data, part_count, ..
+            } => {
+                self.preencode(part_count)?;
+                self.preencode(data)?;
+            }
+            EntryContent::ChangePart { index, data } => {
+                self.preencode(index)?;
                 self.preencode(data)?;
             }
         }
@@ -563,14 +576,16 @@ impl CompactEncoding<Entry> for State {
 
     fn encode(&mut self, value: &Entry, buffer: &mut [u8]) -> Result<usize, EncodingError> {
         self.encode(&value.version, buffer)?;
-        self.encode(
-            &(EntryType::from_entry_content(&value.content) as u8),
-            buffer,
-        )?;
-        let flags_index = self.start();
+        let entry_type = EntryType::from_entry_content(&value.content);
+        self.encode(&(entry_type as u8), buffer)?;
         let mut flags: u8 = 0;
-        self.add_start(1)?;
-
+        let flags_index: usize = if entry_type != EntryType::ChangePart {
+            let index = self.start();
+            self.add_start(1)?;
+            index
+        } else {
+            0
+        };
         match &value.content {
             EntryContent::InitDoc {
                 doc_part_count,
@@ -611,21 +626,37 @@ impl CompactEncoding<Entry> for State {
                     self.encode(user_doc_data, buffer)?;
                 }
             }
-            EntryContent::Change { meta, data, .. } => {
+            EntryContent::Change {
+                meta,
+                data,
+                part_count,
+                ..
+            } => {
                 if *meta {
                     flags |= 1;
                 }
+                self.encode(part_count, buffer)?;
+                self.encode(data, buffer)?;
+            }
+            EntryContent::ChangePart { index, data } => {
+                self.encode(index, buffer)?;
                 self.encode(data, buffer)?;
             }
         }
-        buffer[flags_index] = flags;
+        if !matches!(value.content, EntryContent::ChangePart { .. }) {
+            buffer[flags_index] = flags;
+        }
         Ok(self.start())
     }
 
     fn decode(&mut self, buffer: &[u8]) -> Result<Entry, EncodingError> {
         let version: u8 = self.decode(buffer)?;
         let entry_type: EntryType = self.decode_u8(buffer)?.try_into().unwrap();
-        let flags: u8 = self.decode(buffer)?;
+        let flags: u8 = if entry_type != EntryType::ChangePart {
+            self.decode(buffer)?
+        } else {
+            0
+        };
         let content = match entry_type {
             EntryType::InitDoc => {
                 let doc_part_count: u32 = self.decode(buffer)?;
@@ -676,8 +707,14 @@ impl CompactEncoding<Entry> for State {
             }
             EntryType::Change => {
                 let meta: bool = flags & 1 != 0;
+                let part_count: u32 = self.decode(buffer)?;
                 let data: Vec<u8> = self.decode(buffer)?;
-                EntryContent::new_change(meta, data)
+                EntryContent::new_change(meta, part_count, data)
+            }
+            EntryType::ChangePart => {
+                let index: u32 = self.decode(buffer)?;
+                let data: Vec<u8> = self.decode(buffer)?;
+                EntryContent::ChangePart { index, data }
             }
         };
 

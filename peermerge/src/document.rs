@@ -1,5 +1,6 @@
 use automerge::transaction::Transaction;
 use automerge::{AutomergeError, ObjId, Patch};
+use compact_encoding::EncodingError;
 use dashmap::DashMap;
 use futures::channel::mpsc::UnboundedSender;
 use hypercore_protocol::hypercore::PartialKeypair;
@@ -20,7 +21,7 @@ use crate::automerge::{
 };
 use crate::common::cipher::{decode_doc_url, encode_document_id, encode_proxy_doc_url};
 use crate::common::encoding::serialize_entry;
-use crate::common::entry::EntryContent;
+use crate::common::entry::{EntryContent, ShrunkEntries};
 use crate::common::keys::{
     discovery_key_from_public_key, document_id_from_discovery_key, generate_keys, Keypair,
 };
@@ -33,7 +34,7 @@ use crate::feed::{create_new_read_disk_feed, create_new_write_disk_feed, open_di
 #[cfg(not(target_arch = "wasm32"))]
 use crate::FeedDiskPersistence;
 use crate::{
-    common::{entry::Entry, state::DocumentContent, storage::DocStateWrapper},
+    common::{state::DocumentContent, storage::DocStateWrapper},
     feed::{
         create_new_read_memory_feed, create_new_write_memory_feed, get_feed,
         get_feed_discovery_keys, Feed,
@@ -193,26 +194,31 @@ where
         }
         let (result, patches) = {
             let mut document_state = self.document_state.lock().await;
-            let (entry, result, patches) =
+            let (entries, result, patches) =
                 if let Some(doc) = document_state.user_automerge_doc_mut() {
-                    let (entry, result) = transact_mut_autocommit(false, doc, cb).unwrap();
-                    let patches = if entry.is_some() {
+                    let (entries, result) = transact_mut_autocommit(false, doc, cb).unwrap();
+                    let patches = if !entries.is_empty() {
                         doc.diff_incremental()
                     } else {
                         vec![]
                     };
-                    (entry, result, patches)
+                    (entries, result, patches)
                 } else {
                     unimplemented!(
                     "TODO: No proper error code for trying to change before a document is synced"
                 );
                 };
-            if let Some(entry) = entry {
+            if !entries.is_empty() {
                 let write_discovery_key = document_state.write_discovery_key();
                 let length = {
                     let write_feed = get_feed(&self.feeds, &write_discovery_key).await.unwrap();
                     let mut write_feed = write_feed.lock().await;
-                    write_feed.append(&serialize_entry(&entry)?).await?
+
+                    let entry_data_batch: Vec<Vec<u8>> = entries
+                        .into_iter()
+                        .map(|entry| serialize_entry(&entry))
+                        .collect::<Result<Vec<Vec<u8>>, EncodingError>>()?;
+                    write_feed.append_batch(entry_data_batch).await?
                 };
                 document_state
                     .set_cursor_and_save_data(
@@ -315,7 +321,7 @@ where
                 .await
                 .unwrap();
             let mut doc_feed = doc_feed.lock().await;
-            let init_doc_entry = &doc_feed.entries(0, 1).await?.0[0];
+            let init_doc_entry = &doc_feed.entries(0, 1).await?.entries[0];
             let meta_doc_data = match &init_doc_entry.content {
                 EntryContent::InitDoc { meta_doc_data, .. } => meta_doc_data,
                 _ => panic!("Invalid doc feed"),
@@ -526,7 +532,7 @@ where
     ) -> Result<Option<Vec<(PeerId, FeedDiscoveryKey, u64)>>, PeermergeError> {
         // The document starts from the doc feed, so get that first
         if synced_discovery_key == &self.doc_discovery_key {
-            let (init_entries, init_entries_original_offset) = {
+            let entries = {
                 let doc_feed = get_feed(&self.feeds, &self.doc_discovery_key)
                     .await
                     .unwrap();
@@ -542,8 +548,7 @@ where
                     &self.peer_id,
                     synced_discovery_key,
                     synced_contiguous_length,
-                    init_entries,
-                    init_entries_original_offset,
+                    entries,
                     unapplied_entries,
                 )?;
                 // Empty meta patches
@@ -586,11 +591,11 @@ where
             let feed = get_feed(&self.feeds, synced_discovery_key).await.unwrap();
             let mut feed = feed.lock().await;
             let current_length = unapplied_entries.current_length(synced_discovery_key);
-            let (entries, original_offset) = feed
+            let shrunk_entries = feed
                 .entries(current_length, synced_contiguous_length - current_length)
                 .await?;
-            let mut new_length = current_length + original_offset + 1;
-            for entry in entries {
+            let mut new_length = current_length + shrunk_entries.shrunk_count + 1;
+            for entry in shrunk_entries.entries.into_iter() {
                 unapplied_entries.add(synced_discovery_key, new_length, entry, vec![]);
                 new_length += 1;
             }
@@ -1613,11 +1618,11 @@ where
 {
     let mut changed = false;
     for discovery_key in get_feed_discovery_keys(feeds).await {
-        let (contiguous_length, entries) =
+        let (contiguous_length, shrunk_entries) =
             get_new_entries(&discovery_key, None, content, &feeds).await?;
 
         let result = update_content_with_entries(
-            entries,
+            shrunk_entries,
             &discovery_key,
             contiguous_length,
             doc_discovery_key,
@@ -1639,7 +1644,7 @@ async fn get_new_entries<T>(
     known_contiguous_length: Option<u64>,
     content: &DocumentContent,
     feeds: &Arc<DashMap<[u8; 32], Arc<Mutex<Feed<T>>>>>,
-) -> Result<(u64, Vec<Entry>), PeermergeError>
+) -> Result<(u64, ShrunkEntries), PeermergeError>
 where
     T: RandomAccess + Debug + Send + 'static,
 {
@@ -1650,14 +1655,14 @@ where
     } else {
         feed.contiguous_length().await
     };
-    let (entries, _) = feed
+    let shrunk_entries = feed
         .entries(content.cursor_length(discovery_key), contiguous_length)
         .await?;
-    Ok((contiguous_length, entries))
+    Ok((contiguous_length, shrunk_entries))
 }
 
 async fn update_content_with_entries(
-    entries: Vec<Entry>,
+    shrunk_entries: ShrunkEntries,
     synced_discovery_key: &[u8; 32],
     synced_contiguous_length: u64,
     doc_discovery_key: &[u8; 32],
@@ -1671,7 +1676,7 @@ async fn update_content_with_entries(
         user_automerge_doc,
         synced_discovery_key,
         synced_contiguous_length,
-        entries,
+        shrunk_entries,
         unapplied_entries,
     )?;
     update_content_from_edit_result(result, doc_discovery_key, content, feeds_state).await

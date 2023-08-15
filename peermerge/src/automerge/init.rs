@@ -9,7 +9,7 @@ use super::{
     AutomergeDoc, UnappliedEntries,
 };
 use crate::{
-    common::entry::{Entry, EntryContent},
+    common::entry::{Entry, EntryContent, ShrunkEntries},
     common::{
         constants::{MAX_DATA_CHUNK_BYTES, PEERMERGE_VERSION},
         entry::split_datas_into_entries,
@@ -133,8 +133,7 @@ pub(crate) fn bootstrap_automerge_user_doc_from_entries(
     write_peer_id: &PeerId,
     synced_discovery_key: &FeedDiscoveryKey,
     synced_contiguous_length: u64,
-    mut entries: Vec<Entry>,
-    entries_original_offset: u64,
+    mut shrunk_entries: ShrunkEntries,
     unapplied_entries: &mut UnappliedEntries,
 ) -> Result<
     (
@@ -143,8 +142,9 @@ pub(crate) fn bootstrap_automerge_user_doc_from_entries(
     ),
     PeermergeError,
 > {
-    assert!(!entries.is_empty());
-    let init_entry = entries
+    assert!(!shrunk_entries.entries.is_empty());
+    let init_entry = shrunk_entries
+        .entries
         .drain(0..1)
         .collect::<Vec<Entry>>()
         .into_iter()
@@ -171,7 +171,7 @@ pub(crate) fn bootstrap_automerge_user_doc_from_entries(
         ),
         _ => panic!("Invalid init entries"),
     };
-    assert_eq!(entries_original_offset, doc_part_count as u64);
+    assert_eq!(shrunk_entries.shrunk_count, doc_part_count as u64);
     let actor_id = generate_actor_id(write_peer_id);
     let mut user_automerge_doc =
         init_automerge_doc_from_data_with_actor_id(actor_id, &user_doc_data);
@@ -180,12 +180,13 @@ pub(crate) fn bootstrap_automerge_user_doc_from_entries(
         .merge(&mut changed_meta_automerge_doc)
         .unwrap();
 
+    let shrunk_count = shrunk_entries.shrunk_count;
     let mut result = apply_entries_autocommit(
         meta_automerge_doc,
         &mut user_automerge_doc,
         synced_discovery_key,
         synced_contiguous_length,
-        entries,
+        shrunk_entries,
         unapplied_entries,
     )?;
     if !result.contains_key(synced_discovery_key) {
@@ -194,7 +195,7 @@ pub(crate) fn bootstrap_automerge_user_doc_from_entries(
         // the original values.
         result.insert(
             *synced_discovery_key,
-            ApplyEntriesFeedChange::new(1 + entries_original_offset),
+            ApplyEntriesFeedChange::new(1 + shrunk_count),
         );
     }
     let meta_doc_data = save_automerge_doc(meta_automerge_doc);

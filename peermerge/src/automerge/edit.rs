@@ -3,7 +3,10 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use super::AutomergeDoc;
 use crate::{
-    common::entry::{Entry, EntryContent},
+    common::{
+        constants::MAX_DATA_CHUNK_BYTES,
+        entry::{split_change_into_entries, Entry, EntryContent, ShrunkEntries},
+    },
     feed::FeedDiscoveryKey,
     PeermergeError,
 };
@@ -104,6 +107,7 @@ impl UnappliedEntries {
                 for entry in value.1.iter() {
                     match &entry.content {
                         EntryContent::Change { meta, change, .. } => {
+                            let change = change.as_ref().unwrap();
                             if change.deps().iter().all(|dep| {
                                 if user_hashes.contains(dep) {
                                     true
@@ -199,18 +203,21 @@ pub(crate) fn apply_entries_autocommit(
     user_automerge_doc: &mut AutomergeDoc,
     discovery_key: &FeedDiscoveryKey,
     contiguous_length: u64,
-    entries: Vec<Entry>,
+    shrunk_entries: ShrunkEntries,
     unapplied_entries: &mut UnappliedEntries,
 ) -> Result<HashMap<[u8; 32], ApplyEntriesFeedChange>, PeermergeError> {
     let mut result: HashMap<[u8; 32], ApplyEntriesFeedChange> = HashMap::new();
     let mut meta_changes_to_apply: Vec<Change> = vec![];
     let mut user_changes_to_apply: Vec<Change> = vec![];
-    let len = entries.len() as u64;
+    let len = shrunk_entries.entries.len() as u64;
     let mut length = contiguous_length - len;
-    for entry in entries {
+    for entry in shrunk_entries.entries.into_iter() {
         length += 1;
-        match &entry.content {
-            EntryContent::Change { meta, change, .. } => {
+        match entry.content {
+            EntryContent::Change {
+                meta, ref change, ..
+            } => {
+                let change = change.as_ref().unwrap();
                 let reserved: Vec<ObjId> = if !meta && !unapplied_entries.reserved_ids.is_empty() {
                     change
                         .decode()
@@ -244,7 +251,7 @@ pub(crate) fn apply_entries_autocommit(
                         .iter()
                         .all(|dep| user_automerge_doc.get_change_by_hash(dep).is_some())
                 {
-                    if *meta {
+                    if meta {
                         meta_changes_to_apply.push(*change.clone());
                     } else {
                         user_changes_to_apply.push(*change.clone());
@@ -268,12 +275,13 @@ pub(crate) fn apply_entries_autocommit(
                 // Just merge the data into the current docs. This does not mean that
                 // all entries are applied, but they do now end up in what comes out
                 // of save() so they aren't lost.
-                let mut changed_meta_automerge_doc = AutomergeDoc::load(meta_doc_data).unwrap();
+                let mut changed_meta_automerge_doc = AutomergeDoc::load(&meta_doc_data).unwrap();
                 meta_automerge_doc
                     .merge(&mut changed_meta_automerge_doc)
                     .unwrap();
                 if let Some(user_doc_data) = user_doc_data {
-                    let mut changed_user_automerge_doc = AutomergeDoc::load(user_doc_data).unwrap();
+                    let mut changed_user_automerge_doc =
+                        AutomergeDoc::load(&user_doc_data).unwrap();
                     user_automerge_doc
                         .merge(&mut changed_user_automerge_doc)
                         .unwrap();
@@ -337,15 +345,16 @@ pub(crate) fn transact_mut_autocommit<F, O>(
     meta: bool,
     automerge_doc: &mut AutomergeDoc,
     cb: F,
-) -> Result<(Option<Entry>, O), PeermergeError>
+) -> Result<(Vec<Entry>, O), PeermergeError>
 where
     F: FnOnce(&mut AutomergeDoc) -> Result<O, AutomergeError>,
 {
     let result = cb(automerge_doc).unwrap();
-    let entry = automerge_doc
+    let entries: Vec<Entry> = automerge_doc
         .get_last_local_change()
-        .map(|change| Entry::new_change(meta, change.clone()));
-    Ok((entry, result))
+        .map(|change| split_change_into_entries(meta, change.clone(), MAX_DATA_CHUNK_BYTES))
+        .unwrap_or_else(Vec::new);
+    Ok((entries, result))
 }
 
 pub(crate) fn transact_autocommit<F, O>(
@@ -366,7 +375,7 @@ mod tests {
     use super::*;
     use crate::{
         automerge::{init_automerge_doc_from_data, init_automerge_docs},
-        common::keys::generate_keys,
+        common::{entry::shrink_entries, keys::generate_keys},
         uuid::Uuid,
     };
 
@@ -383,8 +392,8 @@ mod tests {
         object: ObjType,
     ) -> Result<(Entry, ObjId), PeermergeError> {
         let id = automerge_doc.put_object(obj, prop, object)?;
-        let change = automerge_doc.get_last_local_change().unwrap().clone();
-        Ok((Entry::new_change(false, change), id))
+        let mut change = automerge_doc.get_last_local_change().unwrap().clone();
+        Ok((Entry::new_change(false, 0, change.bytes().to_vec()), id))
     }
 
     fn put_scalar_autocommit<O: AsRef<ObjId>, P: Into<Prop>, V: Into<ScalarValue>>(
@@ -394,8 +403,8 @@ mod tests {
         value: V,
     ) -> Result<Entry, PeermergeError> {
         automerge_doc.put(obj, prop, value)?;
-        let change = automerge_doc.get_last_local_change().unwrap().clone();
-        Ok(Entry::new_change(false, change))
+        let mut change = automerge_doc.get_last_local_change().unwrap().clone();
+        Ok(Entry::new_change(false, 0, change.bytes().to_vec()))
     }
 
     #[test]
@@ -437,14 +446,14 @@ mod tests {
             &mut user_doc,
             &doc_discovery_key,
             7,
-            vec![
+            shrink_entries(vec![
                 entry_1.clone(),
                 entry_2.clone(),
                 entry_3.clone(),
                 entry_4.clone(),
                 entry_5.clone(),
                 entry_scalar.clone(),
-            ],
+            ]),
             &mut unapplied_entries,
         )?;
         assert_eq!(unapplied_entries.data.len(), 0);
@@ -457,7 +466,7 @@ mod tests {
             &mut user_doc,
             &doc_discovery_key,
             3,
-            vec![entry_1.clone(), entry_2.clone()],
+            shrink_entries(vec![entry_1.clone(), entry_2.clone()]),
             &mut unapplied_entries,
         )?;
         assert_eq!(unapplied_entries.data.len(), 0);
@@ -466,7 +475,7 @@ mod tests {
             &mut user_doc,
             &doc_discovery_key,
             5,
-            vec![entry_3.clone(), entry_4.clone()],
+            shrink_entries(vec![entry_3.clone(), entry_4.clone()]),
             &mut unapplied_entries,
         )?;
         assert_eq!(unapplied_entries.data.len(), 0);
@@ -475,7 +484,7 @@ mod tests {
             &mut user_doc,
             &doc_discovery_key,
             7,
-            vec![entry_5.clone(), entry_scalar.clone()],
+            shrink_entries(vec![entry_5.clone(), entry_scalar.clone()]),
             &mut unapplied_entries,
         )?;
         assert_eq!(unapplied_entries.data.len(), 0);
@@ -488,13 +497,13 @@ mod tests {
             &mut user_doc,
             &doc_discovery_key,
             6,
-            vec![
+            shrink_entries(vec![
                 entry_2.clone(),
                 entry_3.clone(),
                 entry_4.clone(),
                 entry_5.clone(),
                 entry_scalar.clone(),
-            ],
+            ]),
             &mut unapplied_entries,
         )?;
         assert_eq!(unapplied_entries.data.len(), 1);
@@ -512,7 +521,7 @@ mod tests {
             &mut user_doc,
             &peer_1_discovery_key,
             1,
-            vec![entry_1.clone()],
+            shrink_entries(vec![entry_1.clone()]),
             &mut unapplied_entries,
         )?;
         assert_eq!(unapplied_entries.data.len(), 0);
@@ -525,7 +534,7 @@ mod tests {
             &mut user_doc,
             &peer_1_discovery_key,
             4,
-            vec![entry_2, entry_4, entry_scalar],
+            shrink_entries(vec![entry_2, entry_4, entry_scalar]),
             &mut unapplied_entries,
         )?;
         assert_eq!(unapplied_entries.data.len(), 1);
@@ -543,7 +552,7 @@ mod tests {
             &mut user_doc,
             &peer_2_discovery_key,
             3,
-            vec![entry_3, entry_5],
+            shrink_entries(vec![entry_3, entry_5]),
             &mut unapplied_entries,
         )?;
         assert_eq!(unapplied_entries.data.len(), 2);
@@ -570,7 +579,7 @@ mod tests {
             &mut user_doc,
             &doc_discovery_key,
             2,
-            vec![entry_1],
+            shrink_entries(vec![entry_1]),
             &mut unapplied_entries,
         )?;
         assert_eq!(unapplied_entries.data.len(), 0);

@@ -14,7 +14,7 @@ pub(crate) async fn create_new_write_disk_hypercore(
     prefix: &PathBuf,
     key_pair: Keypair,
     discovery_key: &[u8; 32],
-    init_data: Vec<Vec<u8>>,
+    init_data_batch: Vec<Vec<u8>>,
     encrypted: bool,
     encryption_key: &Option<Vec<u8>>,
 ) -> (u64, HypercoreWrapper<RandomAccessDisk>, Option<Vec<u8>>) {
@@ -31,10 +31,7 @@ pub(crate) async fn create_new_write_disk_hypercore(
         .unwrap();
     let (mut wrapper, encryption_key) =
         HypercoreWrapper::from_disk_hypercore(hypercore, false, encrypted, encryption_key, true);
-    let mut len: u64 = 0;
-    for data in init_data {
-        len = wrapper.append(&data).await.unwrap();
-    }
+    let len = wrapper.append_batch(init_data_batch).await.unwrap();
     (len, wrapper, encryption_key)
 }
 
@@ -88,7 +85,7 @@ pub(crate) async fn open_disk_hypercore(
 
 pub(crate) async fn create_new_write_memory_hypercore(
     key_pair: Keypair,
-    init_data: Option<Vec<Vec<u8>>>,
+    init_data_batch: Option<Vec<Vec<u8>>>,
     encrypted: bool,
     encryption_key: &Option<Vec<u8>>,
 ) -> (u64, HypercoreWrapper<RandomAccessMemory>, Option<Vec<u8>>) {
@@ -97,7 +94,7 @@ pub(crate) async fn create_new_write_memory_hypercore(
             public: key_pair.public,
             secret: Some(key_pair.secret),
         },
-        init_data,
+        init_data_batch,
         false,
         encrypted,
         encryption_key,
@@ -127,7 +124,7 @@ pub(crate) async fn create_new_read_memory_hypercore(
 
 async fn create_new_memory_hypercore(
     key_pair: PartialKeypair,
-    init_data: Option<Vec<Vec<u8>>>,
+    init_data_batch: Option<Vec<Vec<u8>>>,
     proxy: bool,
     encrypted: bool,
     encryption_key: &Option<Vec<u8>>,
@@ -144,14 +141,10 @@ async fn create_new_memory_hypercore(
         proxy,
         encrypted,
         encryption_key,
-        init_data.is_some(),
+        init_data_batch.is_some(),
     );
-    let len = if let Some(init_data) = init_data {
-        let mut len: u64 = 0;
-        for data in init_data {
-            len = wrapper.append(&data).await.unwrap();
-        }
-        len
+    let len = if let Some(init_data_batch) = init_data_batch {
+        wrapper.append_batch(init_data_batch).await.unwrap()
     } else {
         0
     };

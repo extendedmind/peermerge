@@ -31,7 +31,7 @@ pub(crate) enum EntryContent {
     },
     DocPart {
         /// Index related to doc_part_count in previous InitDoc or InitPeer
-        /// message.
+        /// entry.
         index: u32,
         /// Data for meta document. All of meta doc will come first,
         /// and only after that the user document.
@@ -43,18 +43,43 @@ pub(crate) enum EntryContent {
     Change {
         /// If true, this is a meta document change, if false, user document.
         meta: bool,
-        change: Box<Change>,
+        /// Number of ChangePart entries coming after this entry. This is > 0
+        /// if data > max_chunk_bytes.
+        part_count: u32,
+        /// Data of the change.
+        data: Vec<u8>,
+        /// Size of the data. Needed when draining the content of the data
+        /// field in data_to_change to know that this has happened.
+        data_len: usize,
+        // Transient change stored into entry on take_change(). None before
+        // data_to_change is called.
+        change: Option<Box<Change>>,
+    },
+    ChangePart {
+        /// Index related to part_count in previous Change entry.
+        index: u32,
+        /// Continuation to the data of the change.
         data: Vec<u8>,
     },
 }
 
 impl EntryContent {
-    pub(crate) fn new_change(meta: bool, data: Vec<u8>) -> Self {
-        let change = Change::from_bytes(data.clone()).unwrap();
+    pub(crate) fn new_change(meta: bool, part_count: u32, data: Vec<u8>) -> Self {
+        let data_len = data.len();
         EntryContent::Change {
             meta,
-            change: Box::new(change),
+            part_count,
             data,
+            data_len,
+            change: None,
+        }
+    }
+
+    /// Effieciency method to move data into the change field
+    pub(crate) fn data_to_change(&mut self) {
+        if let EntryContent::Change { data, change, .. } = self {
+            let drained_data: Vec<u8> = data.drain(..).collect();
+            *change = Some(Box::new(Change::from_bytes(drained_data).unwrap()));
         }
     }
 }
@@ -111,21 +136,28 @@ impl Entry {
         )
     }
 
-    pub(crate) fn new_change(meta: bool, mut change: Change) -> Self {
-        let data = change.bytes().to_vec();
+    pub(crate) fn new_change(meta: bool, part_count: u32, data: Vec<u8>) -> Self {
         Self::new(
             PEERMERGE_VERSION,
-            EntryContent::Change {
-                meta,
-                data,
-                change: Box::new(change),
-            },
+            EntryContent::new_change(meta, part_count, data),
         )
+    }
+
+    pub(crate) fn new_change_part(index: u32, data: Vec<u8>) -> Self {
+        Self::new(PEERMERGE_VERSION, EntryContent::ChangePart { index, data })
     }
 
     pub(crate) fn new(version: u8, content: EntryContent) -> Self {
         Self { version, content }
     }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ShrunkEntries {
+    // Count of entries shrunk from original entries
+    pub(crate) shrunk_count: u64,
+    // Entries without DocPart or ChangePart
+    pub(crate) entries: Vec<Entry>,
 }
 
 pub(crate) fn split_datas_into_entries(
@@ -227,62 +259,82 @@ pub(crate) fn split_datas_into_entries(
     entries
 }
 
-pub(crate) fn shrink_entries(mut entries: Vec<Entry>) -> (Vec<Entry>, u64) {
-    if !is_init_entries(&entries) {
-        return (entries, 0);
+pub(crate) fn split_change_into_entries(
+    meta: bool,
+    mut change: Change,
+    max_chunk_bytes: usize,
+) -> Vec<Entry> {
+    let data = change.bytes();
+    let data_chunks: Vec<Vec<u8>> = data.chunks(max_chunk_bytes).map(|s| s.into()).collect();
+    let part_count: u32 = (data_chunks.len() - 1).try_into().unwrap();
+    let mut entries: Vec<Entry> = Vec::with_capacity(data_chunks.len());
+    for (i, chunk) in data_chunks.into_iter().enumerate() {
+        if i == 0 {
+            entries.push(Entry::new_change(meta, part_count, chunk));
+        } else {
+            entries.push(Entry::new_change_part((i - 1).try_into().unwrap(), chunk));
+        }
     }
-    let mut total_part_count: u32 = 0;
-    let mut part_count: u32 = 0;
-    let mut full_meta_doc_data: Vec<u8> = vec![];
-    let mut full_user_doc_data: Vec<u8> = vec![];
+    entries
+}
+
+pub(crate) fn shrink_entries(mut entries: Vec<Entry>) -> ShrunkEntries {
+    let mut current_master_entry_index: Option<usize> = None;
+    let mut is_init_ongoing: bool = false;
+    let mut is_change_ongoing: bool = false;
+    let mut expected_part_count: u32 = 0;
+    let mut current_part_count: u32 = 0;
+    let mut shrunk_count: u64 = 0;
     let original_entries_len = entries.len();
     for i in 0..original_entries_len {
-        if i == 0 {
-            match &entries[0].content {
-                EntryContent::InitDoc {
-                    doc_part_count,
-                    meta_doc_data,
-                    user_doc_data,
-                } => {
-                    total_part_count = *doc_part_count;
-                    full_meta_doc_data.extend(meta_doc_data);
-                    if let Some(data) = user_doc_data {
-                        full_user_doc_data.extend(data);
-                    }
+        let entries_len = entries.len();
+        let master_entry_index = if let Some(master_entry_index) = current_master_entry_index {
+            master_entry_index
+        } else {
+            let index = i - shrunk_count as usize;
+            match &entries[index].content {
+                EntryContent::InitDoc { doc_part_count, .. } => {
+                    expected_part_count = *doc_part_count;
+                    is_init_ongoing = true;
                 }
-                EntryContent::InitPeer {
-                    doc_part_count,
-                    meta_doc_data,
-                    user_doc_data,
-                } => {
-                    total_part_count = *doc_part_count;
-                    full_meta_doc_data.extend(meta_doc_data);
-                    if let Some(data) = user_doc_data {
-                        full_user_doc_data.extend(data);
-                    }
+                EntryContent::InitPeer { doc_part_count, .. } => {
+                    expected_part_count = *doc_part_count;
+                    is_init_ongoing = true;
                 }
-                _ => panic!("Should never happen"),
-            };
-        } else if entries.len() > 1 {
-            let doc_part: bool = matches!(&entries[1].content, EntryContent::DocPart { .. });
-            if doc_part {
-                // Drain entries from after the init entry
+                EntryContent::Change { part_count, .. } => {
+                    expected_part_count = *part_count;
+                    is_change_ongoing = true;
+                }
+                _ => panic!("Invalid entries read"),
+            }
+            current_master_entry_index = Some(index);
+            index
+        };
+
+        if entries_len > master_entry_index + 1 {
+            if matches!(
+                &entries[master_entry_index + 1].content,
+                EntryContent::DocPart { .. } | EntryContent::ChangePart { .. }
+            ) {
+                // Drain an entry from after the InitDoc/InitPeer/Change entry
                 let part_entry = entries
-                    .drain(1..2)
+                    .drain(master_entry_index + 1..master_entry_index + 2)
                     .collect::<Vec<Entry>>()
                     .into_iter()
                     .next()
                     .unwrap();
-                let init_entry = entries.get_mut(0).unwrap();
+                let master_entry = entries.get_mut(master_entry_index).unwrap();
+                current_part_count += 1;
                 match part_entry.content {
                     EntryContent::DocPart {
                         index,
                         meta_doc_data: meta_doc_data_part,
                         user_doc_data: user_doc_data_part,
                     } => {
-                        part_count += 1;
-                        assert_eq!(index, i as u32 - 1);
-                        match &mut init_entry.content {
+                        assert_eq!(index, current_part_count - 1);
+                        assert!(!is_change_ongoing);
+                        assert!(is_init_ongoing);
+                        match &mut master_entry.content {
                             EntryContent::InitDoc {
                                 meta_doc_data,
                                 user_doc_data,
@@ -318,44 +370,112 @@ pub(crate) fn shrink_entries(mut entries: Vec<Entry>) -> (Vec<Entry>, u64) {
                             _ => panic!("Should never happen"),
                         }
                     }
+                    EntryContent::ChangePart {
+                        index,
+                        data: data_part,
+                    } => {
+                        assert_eq!(index, current_part_count - 1);
+                        assert!(is_change_ongoing);
+                        assert!(!is_init_ongoing);
+                        match &mut master_entry.content {
+                            EntryContent::Change { data, .. } => {
+                                data.extend(data_part);
+                            }
+                            _ => panic!("Should never happen"),
+                        }
+                    }
                     _ => panic!("Should never happen"),
                 }
+                shrunk_count += 1;
+                if current_part_count == expected_part_count {
+                    current_master_entry_index = None;
+                    is_init_ongoing = false;
+                    is_change_ongoing = false;
+                    current_part_count = 0;
+                    expected_part_count = 0;
+                }
+            } else {
+                if is_change_ongoing {
+                    // The next one isn't a ChangePart but something else, move data to master
+                    // for the Change master entry
+                    let change_entry = entries.get_mut(master_entry_index).unwrap();
+                    change_entry.content.data_to_change();
+                }
+                current_master_entry_index = None;
+                is_init_ongoing = false;
+                is_change_ongoing = false;
+                current_part_count = 0;
+                expected_part_count = 0;
             }
         } else {
+            if is_change_ongoing {
+                // There aren't more entries, but the last one was change, move data to master
+                let change_entry = entries.get_mut(master_entry_index).unwrap();
+                change_entry.content.data_to_change();
+            }
+            // Stop looping to avoid overflow
             break;
         }
     }
-    assert_eq!(total_part_count, part_count);
-    (entries, total_part_count.into())
-}
-
-fn is_init_entries(entries: &Vec<Entry>) -> bool {
-    if entries.is_empty() {
-        return false;
+    ShrunkEntries {
+        entries,
+        shrunk_count,
     }
-    matches!(
-        entries[0].content,
-        EntryContent::InitDoc { .. } | EntryContent::InitPeer { .. }
-    )
 }
 
 #[cfg(test)]
 mod tests {
 
+    use automerge::{transaction::Transactable, ObjId, Prop, ScalarValue, ROOT};
+
+    use crate::{AutomergeDoc, PeermergeError};
+
     use super::*;
+
+    fn put_scalar_autocommit<O: AsRef<ObjId>, P: Into<Prop>, V: Into<ScalarValue>>(
+        automerge_doc: &mut AutomergeDoc,
+        obj: O,
+        prop: P,
+        value: V,
+    ) -> Result<Change, PeermergeError> {
+        automerge_doc.put(obj, prop, value)?;
+        let change = automerge_doc.get_last_local_change().unwrap().clone();
+        Ok(change)
+    }
 
     #[test]
     fn entries_split_and_shrink() -> anyhow::Result<()> {
-        let small_meta_doc_data: Vec<u8> = vec![0; 4];
-        let small_user_doc_data: Vec<u8> = vec![1; 4];
+        let mini_meta_doc_data: Vec<u8> = vec![0; 4];
+        let mini_user_doc_data: Vec<u8> = vec![1; 4];
 
-        let big_meta_doc_data: Vec<u8> = vec![2; 16];
-        let big_user_doc_data: Vec<u8> = vec![3; 16];
+        let small_meta_doc_data: Vec<u8> = vec![2; 16];
+        let small_user_doc_data: Vec<u8> = vec![3; 16];
+        let big_user_doc_data: Vec<u8> = vec![3; 250];
 
-        // Both fit exactly
+        let mut doc: AutomergeDoc = AutomergeDoc::new();
+        let medium_change: Change = put_scalar_autocommit(
+            &mut doc,
+            ROOT,
+            "medium",
+            (0..5).map(|_| "X").collect::<String>(),
+        )?;
+        let big_change: Change = put_scalar_autocommit(
+            &mut doc,
+            ROOT,
+            "big",
+            (0..200).map(|_| "X").collect::<String>(),
+        )?;
+        let big_change_2: Change = put_scalar_autocommit(
+            &mut doc,
+            ROOT,
+            "big2",
+            (0..200).map(|_| "Y").collect::<String>(),
+        )?;
+
+        // Meta and user fit exactly
         let entries = split_datas_into_entries(
-            &small_meta_doc_data,
-            &Some(small_user_doc_data.clone()),
+            &mini_meta_doc_data,
+            &Some(mini_user_doc_data.clone()),
             true,
             8,
         );
@@ -363,72 +483,78 @@ mod tests {
             entries,
             vec![Entry::new_init_doc(
                 0,
-                small_meta_doc_data.clone(),
-                Some(small_user_doc_data.clone()),
+                mini_meta_doc_data.clone(),
+                Some(mini_user_doc_data.clone()),
             )],
         );
-        assert_eq!(shrink_entries(entries.clone()), (entries, 0));
+        assert_eq!(
+            shrink_entries(entries.clone()),
+            ShrunkEntries {
+                entries,
+                shrunk_count: 0
+            }
+        );
 
         // Both exactly to two different parts
         let entries = split_datas_into_entries(
-            &small_meta_doc_data,
-            &Some(small_user_doc_data.clone()),
+            &mini_meta_doc_data,
+            &Some(mini_user_doc_data.clone()),
             true,
             4,
         );
         assert_eq!(
             entries,
             vec![
-                Entry::new_init_doc(1, small_meta_doc_data.clone(), None),
-                Entry::new_doc_part(0, None, Some(small_user_doc_data.clone()))
+                Entry::new_init_doc(1, mini_meta_doc_data.clone(), None),
+                Entry::new_doc_part(0, None, Some(mini_user_doc_data.clone()))
             ],
         );
         assert_eq!(
             shrink_entries(entries),
-            (
-                vec![Entry::new_init_doc(
+            ShrunkEntries {
+                entries: vec![Entry::new_init_doc(
                     1,
-                    small_meta_doc_data.clone(),
-                    Some(small_user_doc_data.clone())
+                    mini_meta_doc_data.clone(),
+                    Some(mini_user_doc_data.clone())
                 )],
-                1
-            ),
+                shrunk_count: 1
+            },
         );
 
         // Meta overflows
         let entries = split_datas_into_entries(
-            &big_meta_doc_data,
-            &Some(small_user_doc_data.clone()),
+            &small_meta_doc_data,
+            &Some(mini_user_doc_data.clone()),
             false,
             10,
         );
         assert_eq!(
             entries,
             vec![
-                Entry::new_init_peer(1, big_meta_doc_data[..10].to_vec(), None),
+                Entry::new_init_peer(1, small_meta_doc_data[..10].to_vec(), None),
                 Entry::new_doc_part(
                     0,
-                    Some(big_meta_doc_data[10..].to_vec()),
-                    Some(small_user_doc_data.clone())
+                    Some(small_meta_doc_data[10..].to_vec()),
+                    Some(mini_user_doc_data.clone())
                 )
             ],
         );
         assert_eq!(
             shrink_entries(entries),
-            (
-                vec![Entry::new_init_peer(
+            ShrunkEntries {
+                entries: vec![Entry::new_init_peer(
                     1,
-                    big_meta_doc_data.clone(),
-                    Some(small_user_doc_data.clone())
+                    small_meta_doc_data.clone(),
+                    Some(mini_user_doc_data.clone())
                 )],
-                1
-            ),
+                shrunk_count: 1
+            },
         );
 
         // User overflows
         let entries = split_datas_into_entries(
-            &small_meta_doc_data,
-            &Some(big_user_doc_data.clone()),
+            &mini_meta_doc_data,
+            &Some(small_user_doc_data.clone()),
             false,
             10,
         );
@@ -437,58 +563,158 @@ mod tests {
             vec![
                 Entry::new_init_peer(
                     1,
-                    small_meta_doc_data.clone(),
-                    Some(big_user_doc_data[..6].to_vec())
+                    mini_meta_doc_data.clone(),
+                    Some(small_user_doc_data[..6].to_vec())
                 ),
-                Entry::new_doc_part(0, None, Some(big_user_doc_data[6..].to_vec()))
+                Entry::new_doc_part(0, None, Some(small_user_doc_data[6..].to_vec()))
             ],
         );
         assert_eq!(
             shrink_entries(entries),
-            (
-                vec![Entry::new_init_peer(
+            ShrunkEntries {
+                entries: vec![Entry::new_init_peer(
                     1,
-                    small_meta_doc_data.clone(),
-                    Some(big_user_doc_data.clone())
+                    mini_meta_doc_data.clone(),
+                    Some(small_user_doc_data.clone())
                 )],
-                1
-            ),
+                shrunk_count: 1
+            },
         );
 
         // Both overflow
         let entries = split_datas_into_entries(
-            &big_meta_doc_data,
-            &Some(big_user_doc_data.clone()),
+            &small_meta_doc_data,
+            &Some(small_user_doc_data.clone()),
             false,
             5,
         );
         assert_eq!(
             entries,
             vec![
-                Entry::new_init_peer(6, big_meta_doc_data[..5].to_vec(), None),
-                Entry::new_doc_part(0, Some(big_meta_doc_data[5..10].to_vec()), None),
-                Entry::new_doc_part(1, Some(big_meta_doc_data[10..15].to_vec()), None),
+                Entry::new_init_peer(6, small_meta_doc_data[..5].to_vec(), None),
+                Entry::new_doc_part(0, Some(small_meta_doc_data[5..10].to_vec()), None),
+                Entry::new_doc_part(1, Some(small_meta_doc_data[10..15].to_vec()), None),
                 Entry::new_doc_part(
                     2,
-                    Some(big_meta_doc_data[15..16].to_vec()),
-                    Some(big_user_doc_data[0..4].to_vec())
+                    Some(small_meta_doc_data[15..16].to_vec()),
+                    Some(small_user_doc_data[0..4].to_vec())
                 ),
-                Entry::new_doc_part(3, None, Some(big_user_doc_data[4..9].to_vec())),
-                Entry::new_doc_part(4, None, Some(big_user_doc_data[9..14].to_vec())),
-                Entry::new_doc_part(5, None, Some(big_user_doc_data[14..16].to_vec())),
+                Entry::new_doc_part(3, None, Some(small_user_doc_data[4..9].to_vec())),
+                Entry::new_doc_part(4, None, Some(small_user_doc_data[9..14].to_vec())),
+                Entry::new_doc_part(5, None, Some(small_user_doc_data[14..16].to_vec())),
             ],
         );
         assert_eq!(
             shrink_entries(entries),
-            (
-                vec![Entry::new_init_peer(
+            ShrunkEntries {
+                entries: vec![Entry::new_init_peer(
                     6,
-                    big_meta_doc_data,
-                    Some(big_user_doc_data)
+                    small_meta_doc_data,
+                    Some(small_user_doc_data)
                 )],
-                6
-            ),
+                shrunk_count: 6
+            },
         );
+
+        // Changes after init, no overflow
+        let mut entries = split_datas_into_entries(
+            &mini_meta_doc_data,
+            &Some(mini_user_doc_data.clone()),
+            true,
+            8,
+        );
+        entries.extend(split_change_into_entries(
+            false,
+            medium_change.clone(),
+            100, // this change is 65 bytes at the time of writing
+        ));
+        assert_eq!(entries.len(), 2);
+        let shrunk_entries = shrink_entries(entries);
+        assert_eq!(shrunk_entries.shrunk_count, 0);
+        if let EntryContent::Change { change, .. } = &shrunk_entries.entries[1].content {
+            assert!(change.is_some())
+        } else {
+            panic!("Invalid entry {:?}", shrunk_entries.entries[1]);
+        }
+
+        // User overflowing init, change fits
+        let mut entries = split_datas_into_entries(
+            &mini_meta_doc_data,
+            &Some(big_user_doc_data.clone()),
+            true,
+            100,
+        );
+        entries.extend(split_change_into_entries(
+            false,
+            medium_change.clone(),
+            100, // this change is 65 bytes at the time of writing
+        ));
+        assert_eq!(entries.len(), 4);
+        let shrunk_entries = shrink_entries(entries);
+        assert_eq!(shrunk_entries.shrunk_count, 2);
+        if let EntryContent::Change { change, .. } = &shrunk_entries.entries[1].content {
+            assert!(change.is_some())
+        } else {
+            panic!("Invalid entry {:?}", shrunk_entries.entries[1]);
+        }
+
+        // User and change overflowing
+        let mut entries = split_datas_into_entries(
+            &mini_meta_doc_data,
+            &Some(big_user_doc_data.clone()),
+            true,
+            100,
+        );
+        entries.extend(split_change_into_entries(
+            false,
+            big_change.clone(),
+            100, // this change is 65 bytes at the time of writing
+        ));
+        assert_eq!(entries.len(), 5);
+
+        let shrunk_entries = shrink_entries(entries);
+        assert_eq!(shrunk_entries.shrunk_count, 3);
+        if let EntryContent::Change { change, .. } = &shrunk_entries.entries[1].content {
+            assert!(change.is_some())
+        } else {
+            panic!("Invalid entry {:?}", shrunk_entries.entries[1]);
+        }
+
+        // User and two changes overflowing with smaller change in between
+        let mut entries =
+            split_datas_into_entries(&mini_meta_doc_data, &Some(big_user_doc_data), true, 100);
+        entries.extend(split_change_into_entries(
+            false, big_change, 100, // this change is 65 bytes at the time of writing
+        ));
+        entries.extend(split_change_into_entries(
+            false,
+            medium_change,
+            100, // this change is 65 bytes at the time of writing
+        ));
+        entries.extend(split_change_into_entries(
+            false,
+            big_change_2,
+            100, // this change is 65 bytes at the time of writing
+        ));
+        assert_eq!(entries.len(), 8);
+
+        let shrunk_entries = shrink_entries(entries);
+        assert_eq!(shrunk_entries.shrunk_count, 4);
+        if let EntryContent::Change { change, .. } = &shrunk_entries.entries[1].content {
+            assert!(change.is_some())
+        } else {
+            panic!("Invalid entry {:?}", shrunk_entries.entries[1]);
+        }
+        if let EntryContent::Change { change, .. } = &shrunk_entries.entries[2].content {
+            assert!(change.is_some())
+        } else {
+            panic!("Invalid entry {:?}", shrunk_entries.entries[1]);
+        }
+        if let EntryContent::Change { change, .. } = &shrunk_entries.entries[3].content {
+            assert!(change.is_some())
+        } else {
+            panic!("Invalid entry {:?}", shrunk_entries.entries[1]);
+        }
 
         Ok(())
     }
