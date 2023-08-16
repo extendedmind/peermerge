@@ -24,7 +24,6 @@ use wasm_bindgen_futures::spawn_local;
 use crate::feed::FeedDiskPersistence;
 use crate::{
     automerge::AutomergeDoc,
-    builder::{DiskPeermergeOptions, MemoryPeermergeOptions},
     common::{
         cipher::{
             decode_encryption_key, decode_key_pair, encode_document_id, encode_encryption_key,
@@ -35,8 +34,9 @@ use crate::{
         utils::Mutex,
         FeedEventContent,
     },
-    document::get_document_by_discovery_key,
+    document::{get_document_by_discovery_key, DocumentWriteSettings},
     feed::{FeedMemoryPersistence, FeedPersistence, Protocol},
+    options::{DiskPeermergeOptions, MemoryPeermergeOptions},
     DocumentSharingInfo, PeerId, PeermergeError, StateEventContent,
 };
 use crate::{
@@ -62,6 +62,8 @@ where
     /// to new documents. Can be something different within individual
     /// documents as they change over time.
     default_peer_header: NameDescription,
+    // Settings for document writing
+    document_write_settings: DocumentWriteSettings,
     /// Prefix
     prefix: PathBuf,
     /// Current storable state
@@ -257,7 +259,15 @@ where
 
 impl Peermerge<RandomAccessMemory, FeedMemoryPersistence> {
     pub async fn new_memory(options: MemoryPeermergeOptions) -> Self {
-        let wrapper = PeermergeStateWrapper::new_memory(&options.default_peer_header).await;
+        let document_write_settings = DocumentWriteSettings {
+            max_entry_data_size_bytes: options.max_entry_data_size_bytes,
+            max_write_feed_length: options.max_write_feed_length,
+        };
+        let wrapper = PeermergeStateWrapper::new_memory(
+            &options.default_peer_header,
+            document_write_settings.clone(),
+        )
+        .await;
         Self {
             peer_id: wrapper.state.peer_id,
             default_peer_header: options.default_peer_header,
@@ -265,6 +275,7 @@ impl Peermerge<RandomAccessMemory, FeedMemoryPersistence> {
             peermerge_state: Arc::new(Mutex::new(wrapper)),
             documents: Arc::new(DashMap::new()),
             state_event_sender: Arc::new(Mutex::new(options.state_event_sender)),
+            document_write_settings,
         }
     }
 
@@ -284,6 +295,7 @@ impl Peermerge<RandomAccessMemory, FeedMemoryPersistence> {
             document_type,
             document_header,
             encrypted,
+            self.document_write_settings.clone(),
             init_cb,
         )
         .await?;
@@ -303,6 +315,7 @@ impl Peermerge<RandomAccessMemory, FeedMemoryPersistence> {
             &self.default_peer_header,
             doc_url,
             &decode_encryption_key(encryption_key),
+            self.document_write_settings.clone(),
         )
         .await?;
         Ok(self.add_document(document).await)
@@ -323,6 +336,7 @@ impl Peermerge<RandomAccessMemory, FeedMemoryPersistence> {
             &self.default_peer_header.name,
             doc_url,
             &decode_encryption_key(encryption_key),
+            self.document_write_settings.clone(),
         )
         .await?;
         Ok(self.add_document(document).await)
@@ -413,9 +427,16 @@ async fn on_feed_event_memory(
 #[cfg(not(target_arch = "wasm32"))]
 impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
     pub async fn create_new_disk(options: DiskPeermergeOptions) -> Self {
-        let wrapper =
-            PeermergeStateWrapper::new_disk(&options.default_peer_header, &options.data_root_dir)
-                .await;
+        let document_write_settings = DocumentWriteSettings {
+            max_entry_data_size_bytes: options.max_entry_data_size_bytes,
+            max_write_feed_length: options.max_write_feed_length,
+        };
+        let wrapper = PeermergeStateWrapper::new_disk(
+            &options.default_peer_header,
+            &options.data_root_dir,
+            document_write_settings.clone(),
+        )
+        .await;
         Self {
             peer_id: wrapper.state.peer_id,
             default_peer_header: options.default_peer_header,
@@ -423,6 +444,7 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
             peermerge_state: Arc::new(Mutex::new(wrapper)),
             documents: Arc::new(DashMap::new()),
             state_event_sender: Arc::new(Mutex::new(options.state_event_sender)),
+            document_write_settings,
         }
     }
 
@@ -453,6 +475,7 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
         let state = state_wrapper.state();
         let peer_id = state.peer_id;
         let default_peer_header = state.default_peer_header.clone();
+        let document_write_settings = state.document_writer_settings.clone();
         let documents: DashMap<DocumentId, Document<RandomAccessDisk, FeedDiskPersistence>> =
             DashMap::new();
         for document_id in &state_wrapper.state.document_ids {
@@ -460,8 +483,13 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
                 decode_encryption_key(&encryption_keys.get(document_id).cloned());
             let postfix = encode_document_id(document_id);
             let document_data_root_dir = data_root_dir.join(postfix);
-            let document =
-                Document::open_disk(peer_id, &encryption_key, &document_data_root_dir).await?;
+            let document = Document::open_disk(
+                peer_id,
+                &encryption_key,
+                &document_data_root_dir,
+                document_write_settings.clone(),
+            )
+            .await?;
             if let Some(state_event_sender) = state_event_sender.as_mut() {
                 notify_document_initialized(state_event_sender, false, document_id).await;
             }
@@ -475,6 +503,7 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
             peermerge_state: Arc::new(Mutex::new(state_wrapper)),
             documents: Arc::new(documents),
             state_event_sender: Arc::new(Mutex::new(state_event_sender)),
+            document_write_settings,
         })
     }
 
@@ -494,6 +523,7 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
             document_type,
             document_header,
             encrypted,
+            self.document_write_settings.clone(),
             init_cb,
             &self.prefix,
         )
@@ -515,6 +545,7 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
             doc_url,
             &decode_encryption_key(encryption_key),
             &self.prefix,
+            self.document_write_settings.clone(),
         )
         .await?;
         Ok(self.add_document(document).await)

@@ -11,7 +11,7 @@ use super::{
 use crate::{
     common::entry::{Entry, EntryContent, ShrunkEntries},
     common::{
-        constants::{MAX_DATA_CHUNK_BYTES, PEERMERGE_VERSION},
+        constants::{DEFAULT_MAX_ENTRY_DATA_SIZE_BYTES, PEERMERGE_VERSION},
         entry::split_datas_into_entries,
     },
     encode_base64_nopad,
@@ -54,7 +54,7 @@ where
         &meta_doc_data,
         &Some(user_doc_data.clone()),
         true,
-        MAX_DATA_CHUNK_BYTES,
+        DEFAULT_MAX_ENTRY_DATA_SIZE_BYTES,
     );
     Ok((
         InitAutomergeDocsResult {
@@ -84,7 +84,12 @@ pub(crate) fn init_first_peer(
     )?;
     let meta_doc_data = save_automerge_doc(meta_automerge_doc);
     meta_automerge_doc.update_diff_cursor();
-    let entries = split_datas_into_entries(&meta_doc_data, &None, false, MAX_DATA_CHUNK_BYTES);
+    let entries = split_datas_into_entries(
+        &meta_doc_data,
+        &None,
+        false,
+        DEFAULT_MAX_ENTRY_DATA_SIZE_BYTES,
+    );
     Ok(entries)
 }
 
@@ -117,8 +122,12 @@ pub(crate) fn init_peer(
     let meta_doc_data = save_automerge_doc(meta_automerge_doc);
     let user_doc_data: Option<Vec<u8>> = user_automerge_doc.map(save_automerge_doc);
     meta_automerge_doc.update_diff_cursor();
-    let entries =
-        split_datas_into_entries(&meta_doc_data, &user_doc_data, false, MAX_DATA_CHUNK_BYTES);
+    let entries = split_datas_into_entries(
+        &meta_doc_data,
+        &user_doc_data,
+        false,
+        DEFAULT_MAX_ENTRY_DATA_SIZE_BYTES,
+    );
     Ok(entries)
 }
 

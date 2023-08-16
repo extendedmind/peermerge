@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use super::AutomergeDoc;
 use crate::{
     common::{
-        constants::MAX_DATA_CHUNK_BYTES,
+        constants::DEFAULT_MAX_ENTRY_DATA_SIZE_BYTES,
         entry::{split_change_into_entries, Entry, EntryContent, ShrunkEntries},
     },
     feed::FeedDiscoveryKey,
@@ -352,7 +352,9 @@ where
     let result = cb(automerge_doc).unwrap();
     let entries: Vec<Entry> = automerge_doc
         .get_last_local_change()
-        .map(|change| split_change_into_entries(meta, change.clone(), MAX_DATA_CHUNK_BYTES))
+        .map(|change| {
+            split_change_into_entries(meta, change.clone(), DEFAULT_MAX_ENTRY_DATA_SIZE_BYTES)
+        })
         .unwrap_or_else(Vec::new);
     Ok((entries, result))
 }
