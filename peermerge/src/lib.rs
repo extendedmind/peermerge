@@ -1,8 +1,12 @@
 mod automerge;
+mod builder;
 mod common;
 mod core;
 mod document;
 mod feed;
+
+#[macro_use]
+extern crate derive_builder;
 
 // Custom types and traits
 pub type DocumentId = [u8; 32];
@@ -19,6 +23,7 @@ pub use crate::common::{
     StateEventContent,
 };
 pub use crate::core::Peermerge;
+pub use builder::*;
 #[cfg(not(target_arch = "wasm32"))]
 pub use feed::FeedDiskPersistence;
 pub use feed::{FeedMemoryPersistence, FeedPersistence};

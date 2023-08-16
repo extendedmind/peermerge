@@ -4,8 +4,8 @@ use futures::{
     stream::StreamExt,
 };
 use peermerge::{
-    get_doc_url_info, DocumentId, FeedDiskPersistence, NameDescription, Patch, Peermerge,
-    StateEvent, StateEventContent::*,
+    get_doc_url_info, DiskPeermergeOptionsBuilder, DocumentId, FeedDiskPersistence,
+    NameDescription, Patch, Peermerge, StateEvent, StateEventContent::*,
 };
 use random_access_disk::RandomAccessDisk;
 use std::{collections::HashMap, sync::Arc};
@@ -48,8 +48,13 @@ async fn disk_two_peers(encrypted: bool) -> anyhow::Result<()> {
     // std::fs::create_dir_all(&debug).unwrap();
     // let creator_dir = std::path::Path::new(&debug).to_path_buf();
 
-    let mut peermerge_creator =
-        Peermerge::create_new_disk(NameDescription::new("creator"), None, &creator_dir).await;
+    let mut peermerge_creator = Peermerge::create_new_disk(
+        DiskPeermergeOptionsBuilder::default()
+            .default_peer_header(NameDescription::new("creator"))
+            .data_root_dir(creator_dir.clone())
+            .build()?,
+    )
+    .await;
     let document_name = "disk_test";
     let (creator_doc_info, _) = peermerge_creator
         .create_new_document_disk(
@@ -83,8 +88,13 @@ async fn disk_two_peers(encrypted: bool) -> anyhow::Result<()> {
     // std::fs::create_dir_all(&debug).unwrap();
     // let joiner_dir = std::path::Path::new(&debug).to_path_buf();
 
-    let mut peermerge_joiner =
-        Peermerge::create_new_disk(NameDescription::new("joiner"), None, &joiner_dir).await;
+    let mut peermerge_joiner = Peermerge::create_new_disk(
+        DiskPeermergeOptionsBuilder::default()
+            .default_peer_header(NameDescription::new("joiner"))
+            .data_root_dir(joiner_dir.clone())
+            .build()?,
+    )
+    .await;
     let joiner_doc_info = peermerge_joiner
         .attach_writer_document_disk(&doc_url, &encryption_key)
         .await?;

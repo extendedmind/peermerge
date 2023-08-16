@@ -7,8 +7,9 @@ use futures::channel::mpsc::{
 use futures::stream::StreamExt;
 use hypercore_protocol::{Duplex, Protocol, ProtocolBuilder};
 use peermerge::{
-    DocumentId, FeedDiskPersistence, FeedMemoryPersistence, FeedPersistence, NameDescription,
-    Peermerge, RandomAccess, StateEvent, StateEventContent::*, ROOT,
+    DiskPeermergeOptionsBuilder, DocumentId, FeedDiskPersistence, FeedMemoryPersistence,
+    FeedPersistence, MemoryPeermergeOptionsBuilder, NameDescription, Peermerge, RandomAccess,
+    StateEvent, StateEventContent::*, ROOT,
 };
 use random_access_disk::RandomAccessDisk;
 use random_access_memory::RandomAccessMemory;
@@ -30,8 +31,11 @@ pub async fn setup_peermerge_mesh_memory(
     ) = unbounded();
     let mut peermerge_creator: Peermerge<RandomAccessMemory, FeedMemoryPersistence> =
         Peermerge::new_memory(
-            NameDescription::new(creator_name),
-            Some(state_event_sender.clone()),
+            MemoryPeermergeOptionsBuilder::default()
+                .default_peer_header(NameDescription::new(creator_name))
+                .state_event_sender(state_event_sender.clone())
+                .build()
+                .unwrap(),
         )
         .await;
     let (doc_info, _) = peermerge_creator
@@ -65,8 +69,11 @@ pub async fn setup_peermerge_mesh_memory(
 
         let peer_name = format!("p{}", i + 1);
         let mut peermerge_peer = Peermerge::new_memory(
-            NameDescription::new(&peer_name),
-            Some(state_event_sender.clone()),
+            MemoryPeermergeOptionsBuilder::default()
+                .default_peer_header(NameDescription::new(&peer_name))
+                .state_event_sender(state_event_sender.clone())
+                .build()
+                .unwrap(),
         )
         .await;
         let _doc_info = peermerge_peer
@@ -120,9 +127,12 @@ pub async fn setup_peermerge_mesh_disk(
     ) = unbounded();
     let mut peermerge_creator: Peermerge<RandomAccessDisk, FeedDiskPersistence> =
         Peermerge::create_new_disk(
-            NameDescription::new(creator_name),
-            Some(state_event_sender.clone()),
-            &creator_dir,
+            DiskPeermergeOptionsBuilder::default()
+                .default_peer_header(NameDescription::new(creator_name))
+                .state_event_sender(state_event_sender.clone())
+                .data_root_dir(creator_dir.clone())
+                .build()
+                .unwrap(),
         )
         .await;
     let (doc_info, _) = peermerge_creator
@@ -165,9 +175,12 @@ pub async fn setup_peermerge_mesh_disk(
             .unwrap()
             .into_path();
         let mut peermerge_peer = Peermerge::create_new_disk(
-            NameDescription::new(&peer_name),
-            Some(state_event_sender.clone()),
-            &peer_dir,
+            DiskPeermergeOptionsBuilder::default()
+                .default_peer_header(NameDescription::new(&peer_name))
+                .state_event_sender(state_event_sender.clone())
+                .data_root_dir(peer_dir.clone())
+                .build()
+                .unwrap(),
         )
         .await;
         let doc_info = peermerge_peer

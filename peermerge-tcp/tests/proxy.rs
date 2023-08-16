@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use futures::stream::StreamExt;
 use peermerge::transaction::Transactable;
-use peermerge::ROOT;
 use peermerge::{get_doc_url_info, DocumentId};
+use peermerge::{DiskPeermergeOptionsBuilder, ROOT};
 use peermerge::{
     FeedDiskPersistence, Peermerge, RandomAccessDisk, StateEvent, StateEventContent::*,
 };
@@ -37,9 +37,11 @@ async fn tcp_proxy_disk_encrypted() -> anyhow::Result<()> {
         .unwrap()
         .into_path();
     let mut peermerge_creator = Peermerge::create_new_disk(
-        NameDescription::new("creator"),
-        Some(creator_state_event_sender),
-        &creator_dir,
+        DiskPeermergeOptionsBuilder::default()
+            .default_peer_header(NameDescription::new("creator"))
+            .state_event_sender(creator_state_event_sender)
+            .data_root_dir(creator_dir.clone())
+            .build()?,
     )
     .await;
     let (creator_doc_info, _) = peermerge_creator
@@ -72,9 +74,11 @@ async fn tcp_proxy_disk_encrypted() -> anyhow::Result<()> {
         .into_path();
 
     let mut peermerge_proxy = Peermerge::create_new_disk(
-        NameDescription::new("proxy"),
-        Some(proxy_state_event_sender),
-        &proxy_dir,
+        DiskPeermergeOptionsBuilder::default()
+            .default_peer_header(NameDescription::new("proxy"))
+            .state_event_sender(proxy_state_event_sender)
+            .data_root_dir(proxy_dir.clone())
+            .build()?,
     )
     .await;
     let peermerge_proxy_for_task = peermerge_proxy.clone();

@@ -24,6 +24,7 @@ use wasm_bindgen_futures::spawn_local;
 use crate::feed::FeedDiskPersistence;
 use crate::{
     automerge::AutomergeDoc,
+    builder::{DiskPeermergeOptions, MemoryPeermergeOptions},
     common::{
         cipher::{
             decode_encryption_key, decode_key_pair, encode_document_id, encode_encryption_key,
@@ -255,18 +256,15 @@ where
 // Memory
 
 impl Peermerge<RandomAccessMemory, FeedMemoryPersistence> {
-    pub async fn new_memory(
-        peer_header: NameDescription,
-        state_event_sender: Option<UnboundedSender<StateEvent>>,
-    ) -> Self {
-        let wrapper = PeermergeStateWrapper::new_memory(&peer_header).await;
+    pub async fn new_memory(options: MemoryPeermergeOptions) -> Self {
+        let wrapper = PeermergeStateWrapper::new_memory(&options.default_peer_header).await;
         Self {
             peer_id: wrapper.state.peer_id,
-            default_peer_header: peer_header,
+            default_peer_header: options.default_peer_header,
             prefix: PathBuf::new(),
             peermerge_state: Arc::new(Mutex::new(wrapper)),
             documents: Arc::new(DashMap::new()),
-            state_event_sender: Arc::new(Mutex::new(state_event_sender)),
+            state_event_sender: Arc::new(Mutex::new(options.state_event_sender)),
         }
     }
 
@@ -414,19 +412,17 @@ async fn on_feed_event_memory(
 
 #[cfg(not(target_arch = "wasm32"))]
 impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
-    pub async fn create_new_disk(
-        peer_header: NameDescription,
-        state_event_sender: Option<UnboundedSender<StateEvent>>,
-        data_root_dir: &PathBuf,
-    ) -> Self {
-        let wrapper = PeermergeStateWrapper::new_disk(&peer_header, data_root_dir).await;
+    pub async fn create_new_disk(options: DiskPeermergeOptions) -> Self {
+        let wrapper =
+            PeermergeStateWrapper::new_disk(&options.default_peer_header, &options.data_root_dir)
+                .await;
         Self {
             peer_id: wrapper.state.peer_id,
-            default_peer_header: peer_header,
-            prefix: data_root_dir.clone(),
+            default_peer_header: options.default_peer_header,
+            prefix: options.data_root_dir.clone(),
             peermerge_state: Arc::new(Mutex::new(wrapper)),
             documents: Arc::new(DashMap::new()),
-            state_event_sender: Arc::new(Mutex::new(state_event_sender)),
+            state_event_sender: Arc::new(Mutex::new(options.state_event_sender)),
         }
     }
 
