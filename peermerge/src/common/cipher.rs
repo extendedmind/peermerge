@@ -243,7 +243,7 @@ pub(crate) fn decode_encryption_key(encryption_key: &Option<String>) -> Option<V
 }
 
 pub(crate) fn decode_key_pair(key_pair: &str) -> (PeerId, Vec<u8>) {
-    let decoded = decode_base32(key_pair, 16 + 64);
+    let decoded = decode_base32(key_pair, 16 + 32);
     (decoded[..16].try_into().unwrap(), decoded[16..].to_vec())
 }
 

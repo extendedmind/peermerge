@@ -23,7 +23,7 @@ use crate::common::cipher::{decode_doc_url, encode_document_id, encode_proxy_doc
 use crate::common::encoding::serialize_entry;
 use crate::common::entry::{EntryContent, ShrunkEntries};
 use crate::common::keys::{
-    discovery_key_from_public_key, document_id_from_discovery_key, generate_keys, Keypair,
+    discovery_key_from_public_key, document_id_from_discovery_key, generate_keys, SigningKey,
 };
 use crate::common::state::{DocumentFeedInfo, DocumentFeedsState, DocumentState};
 use crate::common::utils::{Mutex, YieldNow};
@@ -775,7 +775,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
 
     pub(crate) async fn reattach_writer_memory(
         peer_id: PeerId,
-        write_key_pair: Keypair,
+        write_key_pair: SigningKey,
         peer_name: &str,
         doc_url: &str,
         encryption_key: &Option<Vec<u8>>,
@@ -865,7 +865,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
         doc_url: &str,
         encryption_key: &Option<Vec<u8>>,
         settings: DocumentSettings,
-        mut write_key_pair: Option<Keypair>,
+        mut write_key_pair: Option<SigningKey>,
     ) -> Result<Self, PeermergeError> {
         let proxy = false;
 
@@ -902,7 +902,8 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
             write_feed_init_data_len,
             meta_automerge_doc,
         ) = if let Some(write_key_pair) = write_key_pair.take() {
-            let write_public_key = *write_key_pair.public.as_bytes();
+            let write_verifying_key = write_key_pair.verifying_key();
+            let write_public_key = write_verifying_key.to_bytes();
             let write_discovery_key = discovery_key_from_public_key(&write_public_key);
             let meta_automerge_doc = init_automerge_doc_from_data(&peer_id, &meta_doc_data);
             let (_, write_feed, _) =
@@ -916,7 +917,8 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
             )
         } else {
             let (write_key_pair, write_discovery_key) = generate_keys();
-            let write_public_key = *write_key_pair.public.as_bytes();
+            let write_verifying_key = write_key_pair.verifying_key();
+            let write_public_key = write_verifying_key.to_bytes();
 
             // Init the meta document from the URL
             let mut meta_automerge_doc = init_automerge_doc_from_data(&peer_id, &meta_doc_data);
@@ -1168,7 +1170,8 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
 
         // Create the write feed keys
         let (write_key_pair, write_discovery_key) = generate_keys();
-        let write_public_key = *write_key_pair.public.as_bytes();
+        let write_verifying_key = write_key_pair.verifying_key();
+        let write_public_key = write_verifying_key.to_bytes();
 
         // Init the meta document from the URL
         let mut meta_automerge_doc = init_automerge_doc_from_data(&peer_id, &meta_doc_data);
@@ -1580,9 +1583,9 @@ where
 
 struct PrepareCreateResult {
     document_id: DocumentId,
-    doc_key_pair: Keypair,
+    doc_key_pair: SigningKey,
     doc_discovery_key: FeedDiscoveryKey,
-    write_key_pair: Keypair,
+    write_key_pair: SigningKey,
     write_discovery_key: [u8; 32],
     doc_feed_init_data: Vec<Vec<u8>>,
     write_feed_init_data: Vec<Vec<u8>>,
@@ -1603,12 +1606,14 @@ where
 {
     // Generate a doc feed key pair, its discovery key and the public key string
     let (doc_key_pair, doc_discovery_key) = generate_keys();
-    let doc_public_key = *doc_key_pair.public.as_bytes();
+    let doc_verifying_key = doc_key_pair.verifying_key();
+    let doc_public_key = doc_verifying_key.to_bytes();
     let document_id = document_id_from_discovery_key(&doc_discovery_key);
 
     // Generate a writeable feed key pair, its discovery key and the public key string
     let (write_key_pair, write_discovery_key) = generate_keys();
-    let write_public_key = *write_key_pair.public.as_bytes();
+    let write_verifying_key = write_key_pair.verifying_key();
+    let write_public_key = write_verifying_key.to_bytes();
 
     // Initialize the documents
     let (mut create_result, init_result, doc_feed_init_entries) = init_automerge_docs(

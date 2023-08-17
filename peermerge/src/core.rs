@@ -29,7 +29,7 @@ use crate::{
             decode_encryption_key, decode_key_pair, encode_document_id, encode_encryption_key,
             encode_key_pair,
         },
-        keys::{key_pair_from_bytes, partial_key_pair_to_bytes},
+        keys::{partial_key_pair_to_bytes, signing_key_from_bytes},
         storage::PeermergeStateWrapper,
         utils::Mutex,
         FeedEventContent,
@@ -330,7 +330,7 @@ impl Peermerge<RandomAccessMemory, FeedMemoryPersistence> {
         write_key_pair: &str,
     ) -> Result<DocumentInfo, PeermergeError> {
         let (peer_id, write_key_pair_bytes) = decode_key_pair(write_key_pair);
-        let write_key_pair = key_pair_from_bytes(&write_key_pair_bytes);
+        let write_key_pair = signing_key_from_bytes(&write_key_pair_bytes);
         let document = Document::reattach_writer_memory(
             peer_id,
             write_key_pair,
