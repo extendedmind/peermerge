@@ -3,10 +3,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use super::AutomergeDoc;
 use crate::{
-    common::{
-        constants::DEFAULT_MAX_ENTRY_DATA_SIZE_BYTES,
-        entry::{split_change_into_entries, Entry, EntryContent, ShrunkEntries},
-    },
+    common::entry::{split_change_into_entries, Entry, EntryContent, ShrunkEntries},
     feed::FeedDiscoveryKey,
     PeermergeError,
 };
@@ -344,6 +341,7 @@ pub(crate) fn apply_unapplied_entries_autocommit(
 pub(crate) fn transact_mut_autocommit<F, O>(
     meta: bool,
     automerge_doc: &mut AutomergeDoc,
+    max_entry_data_size_bytes: usize,
     cb: F,
 ) -> Result<(Vec<Entry>, O), PeermergeError>
 where
@@ -352,9 +350,7 @@ where
     let result = cb(automerge_doc).unwrap();
     let entries: Vec<Entry> = automerge_doc
         .get_last_local_change()
-        .map(|change| {
-            split_change_into_entries(meta, change.clone(), DEFAULT_MAX_ENTRY_DATA_SIZE_BYTES)
-        })
+        .map(|change| split_change_into_entries(meta, change.clone(), max_entry_data_size_bytes))
         .unwrap_or_else(Vec::new);
     Ok((entries, result))
 }
@@ -377,7 +373,10 @@ mod tests {
     use super::*;
     use crate::{
         automerge::{init_automerge_doc_from_data, init_automerge_docs},
-        common::{entry::shrink_entries, keys::generate_keys},
+        common::{
+            constants::DEFAULT_MAX_ENTRY_DATA_SIZE_BYTES, entry::shrink_entries,
+            keys::generate_keys,
+        },
         uuid::Uuid,
     };
 
@@ -418,9 +417,13 @@ mod tests {
         let (_, doc_discovery_key) = generate_keys();
         let (_, peer_1_discovery_key) = generate_keys();
         let (_, peer_2_discovery_key) = generate_keys();
-        let (result, _, _) = init_automerge_docs(doc_discovery_key, peer_id, false, |tx| {
-            tx.put(ROOT, "version", 1)
-        })
+        let (result, _, _) = init_automerge_docs(
+            doc_discovery_key,
+            peer_id,
+            false,
+            DEFAULT_MAX_ENTRY_DATA_SIZE_BYTES,
+            |tx| tx.put(ROOT, "version", 1),
+        )
         .unwrap();
 
         let mut meta_doc = result.meta_automerge_doc;

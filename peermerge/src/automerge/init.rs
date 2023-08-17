@@ -10,10 +10,7 @@ use super::{
 };
 use crate::{
     common::entry::{Entry, EntryContent, ShrunkEntries},
-    common::{
-        constants::{DEFAULT_MAX_ENTRY_DATA_SIZE_BYTES, PEERMERGE_VERSION},
-        entry::split_datas_into_entries,
-    },
+    common::{constants::PEERMERGE_VERSION, entry::split_datas_into_entries},
     encode_base64_nopad,
     feed::FeedDiscoveryKey,
     DocumentId, NameDescription, PeerId, PeermergeError,
@@ -30,6 +27,7 @@ pub(crate) fn init_automerge_docs<F, O>(
     document_id: DocumentId,
     write_peer_id: &PeerId,
     child: bool,
+    max_entry_data_size_bytes: usize,
     init_cb: F,
 ) -> Result<(InitAutomergeDocsResult, O, Vec<Entry>), PeermergeError>
 where
@@ -54,7 +52,7 @@ where
         &meta_doc_data,
         &Some(user_doc_data.clone()),
         true,
-        DEFAULT_MAX_ENTRY_DATA_SIZE_BYTES,
+        max_entry_data_size_bytes,
     );
     Ok((
         InitAutomergeDocsResult {
@@ -74,6 +72,7 @@ pub(crate) fn init_first_peer(
     peer_header: &NameDescription,
     document_type: &str,
     document_header: &Option<NameDescription>,
+    max_entry_data_size_bytes: usize,
 ) -> Result<Vec<Entry>, PeermergeError> {
     save_first_peer(
         meta_automerge_doc,
@@ -84,12 +83,7 @@ pub(crate) fn init_first_peer(
     )?;
     let meta_doc_data = save_automerge_doc(meta_automerge_doc);
     meta_automerge_doc.update_diff_cursor();
-    let entries = split_datas_into_entries(
-        &meta_doc_data,
-        &None,
-        false,
-        DEFAULT_MAX_ENTRY_DATA_SIZE_BYTES,
-    );
+    let entries = split_datas_into_entries(&meta_doc_data, &None, false, max_entry_data_size_bytes);
     Ok(entries)
 }
 
@@ -98,6 +92,7 @@ pub(crate) fn init_peer(
     user_automerge_doc: Option<&mut AutomergeDoc>,
     peer_id: &PeerId,
     peer_header: &Option<NameDescription>,
+    max_entry_data_size_bytes: usize,
 ) -> Result<Vec<Entry>, PeermergeError> {
     let peers_id = meta_automerge_doc
         .get(ROOT, "p")
@@ -126,7 +121,7 @@ pub(crate) fn init_peer(
         &meta_doc_data,
         &user_doc_data,
         false,
-        DEFAULT_MAX_ENTRY_DATA_SIZE_BYTES,
+        max_entry_data_size_bytes,
     );
     Ok(entries)
 }

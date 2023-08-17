@@ -212,7 +212,13 @@ where
             let mut document_state = self.document_state.lock().await;
             let (entries, result, patches) =
                 if let Some(doc) = document_state.user_automerge_doc_mut() {
-                    let (entries, result) = transact_mut_autocommit(false, doc, cb).unwrap();
+                    let (entries, result) = transact_mut_autocommit(
+                        false,
+                        doc,
+                        self.settings.max_entry_data_size_bytes,
+                        cb,
+                    )
+                    .unwrap();
                     let patches = if !entries.is_empty() {
                         doc.diff_incremental()
                     } else {
@@ -711,6 +717,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
             document_type,
             &document_header,
             encrypted,
+            settings.max_entry_data_size_bytes,
             init_cb,
         )
         .await?;
@@ -918,6 +925,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
                 None,
                 &peer_id,
                 &Some(peer_header.clone()),
+                settings.max_entry_data_size_bytes,
             )?;
             let write_feed_init_data: Vec<Vec<u8>> = init_peer_entries
                 .into_iter()
@@ -1074,6 +1082,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
             document_type,
             &document_header,
             encrypted,
+            settings.max_entry_data_size_bytes,
             init_cb,
         )
         .await?;
@@ -1168,6 +1177,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
             None,
             &peer_id,
             &Some(peer_header.clone()),
+            settings.max_entry_data_size_bytes,
         )?;
         let write_feed_init_data: Vec<Vec<u8>> = init_peer_entries
             .into_iter()
@@ -1585,6 +1595,7 @@ async fn prepare_create<F, O>(
     document_type: &str,
     document_header: &Option<NameDescription>,
     encrypted: bool,
+    max_entry_data_size_bytes: usize,
     init_cb: F,
 ) -> Result<(PrepareCreateResult, O), PeermergeError>
 where
@@ -1600,8 +1611,14 @@ where
     let write_public_key = *write_key_pair.public.as_bytes();
 
     // Initialize the documents
-    let (mut create_result, init_result, doc_feed_init_entries) =
-        init_automerge_docs(document_id, peer_id, false, init_cb).unwrap();
+    let (mut create_result, init_result, doc_feed_init_entries) = init_automerge_docs(
+        document_id,
+        peer_id,
+        false,
+        max_entry_data_size_bytes,
+        init_cb,
+    )
+    .unwrap();
     let doc_feed_init_data: Vec<Vec<u8>> = doc_feed_init_entries
         .into_iter()
         .map(|entry| serialize_entry(&entry).unwrap())
@@ -1614,6 +1631,7 @@ where
         peer_header,
         document_type,
         document_header,
+        max_entry_data_size_bytes,
     )?;
     let write_feed_init_data: Vec<Vec<u8>> = write_feed_init_entries
         .into_iter()
