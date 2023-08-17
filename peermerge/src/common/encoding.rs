@@ -5,7 +5,7 @@ use std::convert::TryInto;
 pub(crate) use crate::common::entry::Entry;
 pub(crate) use crate::common::message::BroadcastMessage;
 pub(crate) use crate::common::state::{DocumentState, PeermergeState};
-use crate::document::DocumentWriteSettings;
+use crate::document::DocumentSettings;
 use crate::feed::FeedPublicKey;
 
 use super::cipher::DocUrlAppendix;
@@ -20,7 +20,7 @@ impl CompactEncoding<PeermergeState> for State {
         self.preencode_fixed_16()?; // peer_id
         self.preencode(&value.default_peer_header)?;
         self.preencode(&value.document_ids)?;
-        self.preencode(&value.document_writer_settings)
+        self.preencode(&value.document_settings)
     }
 
     fn encode(
@@ -32,7 +32,7 @@ impl CompactEncoding<PeermergeState> for State {
         self.encode_fixed_16(&value.peer_id, buffer)?;
         self.encode(&value.default_peer_header, buffer)?;
         self.encode(&value.document_ids, buffer)?;
-        self.encode(&value.document_writer_settings, buffer)
+        self.encode(&value.document_settings, buffer)
     }
 
     fn decode(&mut self, buffer: &[u8]) -> Result<PeermergeState, EncodingError> {
@@ -40,36 +40,40 @@ impl CompactEncoding<PeermergeState> for State {
         let peer_id: PeerId = self.decode_fixed_16(buffer)?.to_vec().try_into().unwrap();
         let peer_header: NameDescription = self.decode(buffer)?;
         let document_ids: Vec<[u8; 32]> = self.decode(buffer)?;
-        let document_writer_settings: DocumentWriteSettings = self.decode(buffer)?;
+        let document_settings: DocumentSettings = self.decode(buffer)?;
         Ok(PeermergeState::new_with_version(
             version,
             peer_id,
             peer_header,
             document_ids,
-            document_writer_settings,
+            document_settings,
         ))
     }
 }
 
-impl CompactEncoding<DocumentWriteSettings> for State {
-    fn preencode(&mut self, value: &DocumentWriteSettings) -> Result<usize, EncodingError> {
+impl CompactEncoding<DocumentSettings> for State {
+    fn preencode(&mut self, value: &DocumentSettings) -> Result<usize, EncodingError> {
+        self.preencode(&value.max_new_feeds_verified_batch_size)?;
         self.preencode(&value.max_entry_data_size_bytes)?;
         self.preencode(&value.max_write_feed_length)
     }
 
     fn encode(
         &mut self,
-        value: &DocumentWriteSettings,
+        value: &DocumentSettings,
         buffer: &mut [u8],
     ) -> Result<usize, EncodingError> {
+        self.encode(&value.max_new_feeds_verified_batch_size, buffer)?;
         self.encode(&value.max_entry_data_size_bytes, buffer)?;
         self.encode(&value.max_write_feed_length, buffer)
     }
 
-    fn decode(&mut self, buffer: &[u8]) -> Result<DocumentWriteSettings, EncodingError> {
+    fn decode(&mut self, buffer: &[u8]) -> Result<DocumentSettings, EncodingError> {
+        let max_new_feeds_verified_batch_size: usize = self.decode(buffer)?;
         let max_entry_data_size_bytes: usize = self.decode(buffer)?;
         let max_write_feed_length: u64 = self.decode(buffer)?;
-        Ok(DocumentWriteSettings {
+        Ok(DocumentSettings {
+            max_new_feeds_verified_batch_size,
             max_entry_data_size_bytes,
             max_write_feed_length,
         })

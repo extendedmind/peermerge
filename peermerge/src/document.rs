@@ -68,8 +68,8 @@ where
     doc_discovery_key: FeedDiscoveryKey,
     /// The document id, derived from doc_discovery_key.
     id: DocumentId,
-    /// Settings for writing. None for proxy.
-    write_settings: Option<DocumentWriteSettings>,
+    /// General settings for the document, stored in Peermerge.
+    settings: DocumentSettings,
     /// The write discovery key, if any
     write_discovery_key: Option<FeedDiscoveryKey>,
     /// Whether or not this document is encrypted.
@@ -82,10 +82,16 @@ where
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct DocumentWriteSettings {
-    /// Maximum entry data field size in bytes. None for proxy.
+pub(crate) struct DocumentSettings {
+    /// Maximum number of new feeds verified in a batch. Needed to prevent a malicious-turned
+    /// peer from overwhelming an unsuspecting peer with bogus feeds before we can verify that
+    /// one of them is not valid. This value multiplied by MAX_ENTRY_DATA_SIZE_BYTES roughly
+    /// tells the maximum size a malicious peer can upload to an unsuspecting peer before
+    /// the connection is cut and the malicious data deleted. TODO: Implementing this logic.
+    pub(crate) max_new_feeds_verified_batch_size: usize,
+    /// Maximum entry data field size in bytes. Not used for proxy or read-only peers.
     pub(crate) max_entry_data_size_bytes: usize,
-    /// Maximum write feed length. None for proxy.
+    /// Maximum write feed length. Not used for proxy or read-only peers.
     pub(crate) max_write_feed_length: u64,
 }
 
@@ -693,7 +699,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
         document_type: &str,
         document_header: Option<NameDescription>,
         encrypted: bool,
-        write_settings: DocumentWriteSettings,
+        settings: DocumentSettings,
         init_cb: F,
     ) -> Result<(Self, O), PeermergeError>
     where
@@ -735,7 +741,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
                 prepare_result.state,
                 encrypted,
                 doc_encryption_key,
-                Some(write_settings),
+                settings,
             )
             .await,
             init_result,
@@ -747,14 +753,14 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
         peer_header: &NameDescription,
         doc_url: &str,
         encryption_key: &Option<Vec<u8>>,
-        write_settings: DocumentWriteSettings,
+        settings: DocumentSettings,
     ) -> Result<Self, PeermergeError> {
         Self::do_attach_writer_memory(
             peer_id,
             peer_header,
             doc_url,
             encryption_key,
-            write_settings,
+            settings,
             None,
         )
         .await
@@ -766,20 +772,24 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
         peer_name: &str,
         doc_url: &str,
         encryption_key: &Option<Vec<u8>>,
-        write_settings: DocumentWriteSettings,
+        settings: DocumentSettings,
     ) -> Result<Self, PeermergeError> {
         Self::do_attach_writer_memory(
             peer_id,
             &NameDescription::new(peer_name),
             doc_url,
             encryption_key,
-            write_settings,
+            settings,
             Some(write_key_pair),
         )
         .await
     }
 
-    pub(crate) async fn attach_proxy_memory(peer_id: PeerId, doc_url: &str) -> Self {
+    pub(crate) async fn attach_proxy_memory(
+        peer_id: PeerId,
+        doc_url: &str,
+        settings: DocumentSettings,
+    ) -> Self {
         let proxy = true;
         let doc_url = encode_proxy_doc_url(doc_url);
         let encrypted = false;
@@ -812,7 +822,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
             state,
             encrypted,
             None,
-            None,
+            settings,
         )
         .await
     }
@@ -847,7 +857,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
         peer_header: &NameDescription,
         doc_url: &str,
         encryption_key: &Option<Vec<u8>>,
-        write_settings: DocumentWriteSettings,
+        settings: DocumentSettings,
         mut write_key_pair: Option<Keypair>,
     ) -> Result<Self, PeermergeError> {
         let proxy = false;
@@ -960,7 +970,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
             state,
             encrypted,
             encryption_key.clone(),
-            Some(write_settings),
+            settings,
         )
         .await)
     }
@@ -972,7 +982,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
         state: DocumentState,
         encrypted: bool,
         encryption_key: Option<Vec<u8>>,
-        write_settings: Option<DocumentWriteSettings>,
+        settings: DocumentSettings,
     ) -> Self {
         let id = state.document_id;
         let feeds: DashMap<[u8; 32], Arc<Mutex<Feed<FeedMemoryPersistence>>>> = DashMap::new();
@@ -1000,7 +1010,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
             encrypted,
             encryption_key,
             log_context,
-            write_settings,
+            settings,
         }
     }
 
@@ -1051,7 +1061,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
         document_type: &str,
         document_header: Option<NameDescription>,
         encrypted: bool,
-        write_settings: DocumentWriteSettings,
+        settings: DocumentSettings,
         init_cb: F,
         data_root_dir: &PathBuf,
     ) -> Result<(Self, O), PeermergeError>
@@ -1101,7 +1111,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
                 encrypted,
                 root_encryption_key,
                 &data_root_dir,
-                Some(write_settings),
+                settings,
             )
             .await,
             init_result,
@@ -1114,7 +1124,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
         doc_url: &str,
         encryption_key: &Option<Vec<u8>>,
         data_root_dir: &PathBuf,
-        write_settings: DocumentWriteSettings,
+        settings: DocumentSettings,
     ) -> Result<Self, PeermergeError> {
         let proxy = false;
 
@@ -1207,7 +1217,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
             encrypted,
             encryption_key.clone(),
             &data_root_dir,
-            Some(write_settings),
+            settings,
         )
         .await)
     }
@@ -1215,6 +1225,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
     pub(crate) async fn attach_proxy_disk(
         peer_id: PeerId,
         doc_url: &str,
+        settings: DocumentSettings,
         data_root_dir: &PathBuf,
     ) -> Self {
         let proxy = true;
@@ -1255,7 +1266,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
             encrypted,
             None,
             &data_root_dir,
-            None,
+            settings,
         )
         .await
     }
@@ -1276,7 +1287,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
         peer_id: PeerId,
         encryption_key: &Option<Vec<u8>>,
         data_root_dir: &PathBuf,
-        write_settings: DocumentWriteSettings,
+        settings: DocumentSettings,
     ) -> Result<Self, PeermergeError> {
         let mut document_state_wrapper = DocStateWrapper::open_disk(data_root_dir).await?;
         let state = document_state_wrapper.state();
@@ -1397,7 +1408,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
             encrypted,
             encryption_key: encryption_key.clone(),
             log_context,
-            write_settings: Some(write_settings),
+            settings,
         })
     }
 
@@ -1434,7 +1445,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
         encrypted: bool,
         encryption_key: Option<Vec<u8>>,
         data_root_dir: &PathBuf,
-        write_settings: Option<DocumentWriteSettings>,
+        settings: DocumentSettings,
     ) -> Self {
         let id = state.document_id;
         let feeds: DashMap<[u8; 32], Arc<Mutex<Feed<FeedDiskPersistence>>>> = DashMap::new();
@@ -1458,7 +1469,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
             proxy,
             doc_discovery_key,
             id,
-            write_settings,
+            settings,
             write_discovery_key,
             encrypted,
             encryption_key,

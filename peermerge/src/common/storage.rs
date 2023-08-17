@@ -9,7 +9,7 @@ use std::{fmt::Debug, path::PathBuf};
 use crate::{
     automerge::{AutomergeDoc, DocsChangeResult, UnappliedEntries},
     common::state::{DocumentState, PeermergeState},
-    document::DocumentWriteSettings,
+    document::DocumentSettings,
     feed::FeedDiscoveryKey,
     DocumentId, NameDescription, PeermergeError,
 };
@@ -44,7 +44,7 @@ where
 impl PeermergeStateWrapper<RandomAccessMemory> {
     pub(crate) async fn new_memory(
         peer_header: &NameDescription,
-        document_write_settings: DocumentWriteSettings,
+        document_write_settings: DocumentSettings,
     ) -> Self {
         let state = PeermergeState::new(peer_header, vec![], document_write_settings);
         let mut storage = RandomAccessMemory::default();
@@ -58,7 +58,7 @@ impl PeermergeStateWrapper<RandomAccessDisk> {
     pub(crate) async fn new_disk(
         peer_header: &NameDescription,
         data_root_dir: &PathBuf,
-        document_write_settings: DocumentWriteSettings,
+        document_write_settings: DocumentSettings,
     ) -> Self {
         let state = PeermergeState::new(peer_header, vec![], document_write_settings);
         let state_path = get_peermerge_state_path(data_root_dir);

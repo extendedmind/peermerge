@@ -5,7 +5,7 @@ use uuid::Uuid;
 use crate::{
     automerge::{save_automerge_doc, AutomergeDoc, DocsChangeResult, read_document_type_and_header, read_peer_header},
     feed::{FeedDiscoveryKey, FeedPublicKey},
-    DocUrlInfo, DocumentId, DocumentInfo, NameDescription, PeerId, document::DocumentWriteSettings,
+    DocUrlInfo, DocumentId, DocumentInfo, NameDescription, PeerId, document::DocumentSettings,
 };
 
 use super::{
@@ -21,13 +21,13 @@ pub(crate) struct PeermergeState {
     pub(crate) peer_id: PeerId,
     pub(crate) default_peer_header: NameDescription,
     pub(crate) document_ids: Vec<DocumentId>,
-    pub(crate) document_writer_settings: DocumentWriteSettings,
+    pub(crate) document_settings: DocumentSettings,
 }
 impl PeermergeState {
     pub(crate) fn new(
         default_peer_header: &NameDescription,
         document_ids: Vec<DocumentId>,
-        document_writer_settings: DocumentWriteSettings
+        document_settings: DocumentSettings
 
     ) -> Self {
         let peer_id: PeerId = *Uuid::new_v4().as_bytes();
@@ -36,7 +36,7 @@ impl PeermergeState {
             peer_id,
             default_peer_header.clone(),
             document_ids,
-            document_writer_settings
+            document_settings
         )
     }
 
@@ -45,14 +45,14 @@ impl PeermergeState {
         peer_id: PeerId,
         default_peer_header: NameDescription,
         document_ids: Vec<DocumentId>,
-        document_writer_settings: DocumentWriteSettings
+        document_settings: DocumentSettings
     ) -> Self {
         Self {
             version,
             peer_id,
             default_peer_header,
             document_ids,
-            document_writer_settings
+            document_settings
         }
     }
 }
