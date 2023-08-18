@@ -12,7 +12,7 @@ use super::HypercoreWrapper;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) async fn create_new_write_disk_hypercore(
     prefix: &PathBuf,
-    key_pair: SigningKey,
+    signing_key: SigningKey,
     discovery_key: &[u8; 32],
     init_data_batch: Vec<Vec<u8>>,
     encrypted: bool,
@@ -22,8 +22,8 @@ pub(crate) async fn create_new_write_disk_hypercore(
     let storage = Storage::new_disk(&hypercore_dir, true).await.unwrap();
     let hypercore = HypercoreBuilder::new(storage)
         .key_pair(PartialKeypair {
-            public: key_pair.verifying_key(),
-            secret: Some(key_pair.to_bytes()),
+            public: signing_key.verifying_key(),
+            secret: Some(signing_key),
         })
         .node_cache_options(CacheOptionsBuilder::new())
         .build()
@@ -84,15 +84,15 @@ pub(crate) async fn open_disk_hypercore(
 }
 
 pub(crate) async fn create_new_write_memory_hypercore(
-    key_pair: SigningKey,
+    signing_key: SigningKey,
     init_data_batch: Option<Vec<Vec<u8>>>,
     encrypted: bool,
     encryption_key: &Option<Vec<u8>>,
 ) -> (u64, HypercoreWrapper<RandomAccessMemory>, Option<Vec<u8>>) {
     create_new_memory_hypercore(
         PartialKeypair {
-            public: key_pair.verifying_key(),
-            secret: Some(key_pair.to_bytes()),
+            public: signing_key.verifying_key(),
+            secret: Some(signing_key),
         },
         init_data_batch,
         false,

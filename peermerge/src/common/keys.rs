@@ -20,7 +20,7 @@ pub(crate) fn document_id_from_discovery_key(discovery_key: &[u8; 32]) -> [u8; 3
 }
 
 pub(crate) fn partial_key_pair_to_bytes(key_pair: PartialKeypair) -> Vec<u8> {
-    let signing_key = SigningKey::from_bytes(&key_pair.secret.unwrap());
+    let signing_key = key_pair.secret.unwrap();
     signing_key.to_bytes().to_vec()
 }
 
