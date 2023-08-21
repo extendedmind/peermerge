@@ -1,6 +1,6 @@
 use hypercore_protocol::{
     discovery_key as derivate,
-    hypercore::{generate_signing_key, PartialKeypair, SECRET_KEY_LENGTH},
+    hypercore::{generate_signing_key, SECRET_KEY_LENGTH},
 };
 
 pub(crate) use hypercore_protocol::hypercore::SigningKey;
@@ -19,8 +19,7 @@ pub(crate) fn document_id_from_discovery_key(discovery_key: &[u8; 32]) -> [u8; 3
     derivate(discovery_key)
 }
 
-pub(crate) fn partial_key_pair_to_bytes(key_pair: PartialKeypair) -> Vec<u8> {
-    let signing_key = key_pair.secret.unwrap();
+pub(crate) fn signing_key_to_bytes(signing_key: &SigningKey) -> Vec<u8> {
     signing_key.to_bytes().to_vec()
 }
 

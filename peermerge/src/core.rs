@@ -26,10 +26,10 @@ use crate::{
     automerge::AutomergeDoc,
     common::{
         cipher::{
-            decode_encryption_key, decode_key_pair, encode_document_id, encode_encryption_key,
-            encode_key_pair,
+            decode_encryption_key, decode_reattach_secret, encode_document_id,
+            encode_encryption_key, encode_reattach_secret,
         },
-        keys::{partial_key_pair_to_bytes, signing_key_from_bytes},
+        keys::{signing_key_from_bytes, signing_key_to_bytes},
         storage::PeermergeStateWrapper,
         utils::Mutex,
         FeedEventContent,
@@ -238,10 +238,13 @@ where
     }
 
     #[instrument(skip(self), fields(peer_name = self.default_peer_header.name))]
-    pub async fn write_key_pair(&self, document_id: &DocumentId) -> String {
+    pub async fn reattach_secret(&self, document_id: &DocumentId) -> String {
         let document = get_document(&self.documents, document_id).await.unwrap();
-        let key_pair = document.write_key_pair().await;
-        encode_key_pair(&self.peer_id, &partial_key_pair_to_bytes(key_pair))
+        let write_feed_signing_key = document.write_feed_signing_key().await;
+        encode_reattach_secret(
+            &self.peer_id,
+            &signing_key_to_bytes(&write_feed_signing_key),
+        )
     }
 
     async fn add_document(&mut self, document: Document<T, U>) -> DocumentInfo {
@@ -327,13 +330,13 @@ impl Peermerge<RandomAccessMemory, FeedMemoryPersistence> {
         &mut self,
         doc_url: &str,
         encryption_key: &Option<String>,
-        write_key_pair: &str,
+        reattach_secret: &str,
     ) -> Result<DocumentInfo, PeermergeError> {
-        let (peer_id, write_key_pair_bytes) = decode_key_pair(write_key_pair);
-        let write_key_pair = signing_key_from_bytes(&write_key_pair_bytes);
+        let (peer_id, write_feed_key_pair_bytes) = decode_reattach_secret(reattach_secret);
+        let write_feed_signing_key = signing_key_from_bytes(&write_feed_key_pair_bytes);
         let document = Document::reattach_writer_memory(
             peer_id,
-            write_key_pair,
+            write_feed_signing_key,
             &self.default_peer_header.name,
             doc_url,
             &decode_encryption_key(encryption_key),

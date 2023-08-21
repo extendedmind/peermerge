@@ -379,15 +379,15 @@ where
     }
 
     #[instrument(skip_all, fields(ctx = self.log_context))]
-    pub(crate) async fn write_key_pair(&self) -> PartialKeypair {
+    pub(crate) async fn write_feed_signing_key(&self) -> SigningKey {
         if self.proxy {
-            panic!("A proxy does not have a write key pair");
+            panic!("A proxy does not have a write feed");
         }
         let document_state = self.document_state.lock().await;
         let write_discovery_key = document_state.write_discovery_key();
         let write_feed_wrapper = get_feed(&self.feeds, &write_discovery_key).await.unwrap();
         let write_feed = write_feed_wrapper.lock().await;
-        write_feed.key_pair().await
+        write_feed.key_pair().await.secret.unwrap()
     }
 
     #[instrument(level = "debug", skip_all, fields(ctx = self.log_context))]
@@ -775,7 +775,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
 
     pub(crate) async fn reattach_writer_memory(
         peer_id: PeerId,
-        write_key_pair: SigningKey,
+        write_feed_signing_key: SigningKey,
         peer_name: &str,
         doc_url: &str,
         encryption_key: &Option<Vec<u8>>,
@@ -787,7 +787,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
             doc_url,
             encryption_key,
             settings,
-            Some(write_key_pair),
+            Some(write_feed_signing_key),
         )
         .await
     }
@@ -865,7 +865,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
         doc_url: &str,
         encryption_key: &Option<Vec<u8>>,
         settings: DocumentSettings,
-        mut write_key_pair: Option<SigningKey>,
+        mut write_feed_signing_key: Option<SigningKey>,
     ) -> Result<Self, PeermergeError> {
         let proxy = false;
 
@@ -901,13 +901,18 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
             write_feed,
             write_feed_init_data_len,
             meta_automerge_doc,
-        ) = if let Some(write_key_pair) = write_key_pair.take() {
-            let write_verifying_key = write_key_pair.verifying_key();
+        ) = if let Some(write_feed_signing_key) = write_feed_signing_key.take() {
+            let write_verifying_key = write_feed_signing_key.verifying_key();
             let write_public_key = write_verifying_key.to_bytes();
             let write_discovery_key = discovery_key_from_public_key(&write_public_key);
             let meta_automerge_doc = init_automerge_doc_from_data(&peer_id, &meta_doc_data);
-            let (_, write_feed, _) =
-                create_new_write_memory_feed(write_key_pair, None, encrypted, encryption_key).await;
+            let (_, write_feed, _) = create_new_write_memory_feed(
+                write_feed_signing_key,
+                None,
+                encrypted,
+                encryption_key,
+            )
+            .await;
             (
                 write_public_key,
                 write_discovery_key,

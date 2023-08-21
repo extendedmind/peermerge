@@ -232,7 +232,7 @@ pub(crate) fn encode_encryption_key(encryption_key: &[u8]) -> String {
     data_encoding::BASE32_NOPAD.encode(encryption_key)
 }
 
-pub(crate) fn encode_key_pair(peer_id: &PeerId, key_pair: &[u8]) -> String {
+pub(crate) fn encode_reattach_secret(peer_id: &PeerId, key_pair: &[u8]) -> String {
     let mut data = peer_id.to_vec();
     data.extend(key_pair);
     data_encoding::BASE32_NOPAD.encode(&data)
@@ -242,8 +242,8 @@ pub(crate) fn decode_encryption_key(encryption_key: &Option<String>) -> Option<V
     encryption_key.as_ref().map(|key| decode_base32(key, 32))
 }
 
-pub(crate) fn decode_key_pair(key_pair: &str) -> (PeerId, Vec<u8>) {
-    let decoded = decode_base32(key_pair, 16 + 32);
+pub(crate) fn decode_reattach_secret(reattach_secret: &str) -> (PeerId, Vec<u8>) {
+    let decoded = decode_base32(reattach_secret, 16 + 32);
     (decoded[..16].try_into().unwrap(), decoded[16..].to_vec())
 }
 
