@@ -72,7 +72,10 @@ async fn disk_two_peers(encrypted: bool) -> anyhow::Result<()> {
     let encryption_key = peermerge_creator
         .encryption_key(&creator_doc_info.id())
         .await;
-    assert_eq!(get_doc_url_info(&doc_url).encrypted, Some(encrypted));
+    assert_eq!(
+        get_doc_url_info(&doc_url).unwrap().encrypted,
+        Some(encrypted)
+    );
     assert_eq!(encryption_key.is_some(), encrypted);
 
     let joiner_dir = Builder::new()

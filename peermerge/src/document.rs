@@ -3,7 +3,6 @@ use automerge::{AutomergeError, ObjId, Patch};
 use compact_encoding::EncodingError;
 use dashmap::DashMap;
 use futures::channel::mpsc::UnboundedSender;
-use hypercore_protocol::hypercore::PartialKeypair;
 #[cfg(not(target_arch = "wasm32"))]
 use random_access_disk::RandomAccessDisk;
 use random_access_memory::RandomAccessMemory;
@@ -62,17 +61,18 @@ where
     prefix: PathBuf,
     /// This peer's id.
     peer_id: PeerId,
-    /// If this document is a proxy
-    proxy: bool,
     /// The doc discovery key
     doc_discovery_key: FeedDiscoveryKey,
     /// The document id, derived from doc_discovery_key.
     id: DocumentId,
     /// General settings for the document, stored in Peermerge.
     settings: DocumentSettings,
+    /// If this document is a proxy
+    proxy: bool,
     /// The write discovery key, if any
     write_discovery_key: Option<FeedDiscoveryKey>,
-    /// Whether or not this document is encrypted.
+    /// Whether or not this document is encrypted. If proxy this copied value is set to false
+    /// for convenience, even though encryption status is not known.
     encrypted: bool,
     /// If encrypted is true and not a proxy, the encryption key to use to decrypt feed entries.
     encryption_key: Option<Vec<u8>>,
@@ -796,13 +796,13 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
         peer_id: PeerId,
         doc_url: &str,
         settings: DocumentSettings,
-    ) -> Self {
+    ) -> Result<Self, PeermergeError> {
         let proxy = true;
         let doc_url = encode_proxy_doc_url(doc_url);
         let encrypted = false;
 
         // Process keys from doc URL
-        let decoded_doc_url = decode_doc_url(&doc_url, &None);
+        let decoded_doc_url = decode_doc_url(&doc_url, &None)?;
         let doc_discovery_key = decoded_doc_url.doc_url_info.doc_discovery_key;
 
         // Create the doc feed
@@ -822,7 +822,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
             None,
         );
 
-        Self::new_memory(
+        Ok(Self::new_memory(
             peer_id,
             (doc_discovery_key, doc_feed),
             None,
@@ -831,7 +831,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
             None,
             settings,
         )
-        .await
+        .await)
     }
 
     #[instrument(level = "debug", skip_all, fields(ctx = self.log_context))]
@@ -870,7 +870,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
         let proxy = false;
 
         // Process keys from doc URL
-        let decoded_doc_url = decode_doc_url(doc_url, encryption_key);
+        let decoded_doc_url = decode_doc_url(doc_url, encryption_key)?;
         let doc_discovery_key = decoded_doc_url.doc_url_info.doc_discovery_key;
         let encrypted = if let Some(encrypted) = decoded_doc_url.doc_url_info.encrypted {
             if encrypted && encryption_key.is_none() {
@@ -1145,7 +1145,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
         let proxy = false;
 
         // Process keys from doc URL
-        let decoded_doc_url = decode_doc_url(doc_url, encryption_key);
+        let decoded_doc_url = decode_doc_url(doc_url, encryption_key)?;
         let doc_discovery_key = decoded_doc_url.doc_url_info.doc_discovery_key;
         let encrypted = if let Some(encrypted) = decoded_doc_url.doc_url_info.encrypted {
             if encrypted && encryption_key.is_none() {
@@ -1245,13 +1245,13 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
         doc_url: &str,
         settings: DocumentSettings,
         data_root_dir: &PathBuf,
-    ) -> Self {
+    ) -> Result<Self, PeermergeError> {
         let proxy = true;
         let doc_url = encode_proxy_doc_url(doc_url);
         let encrypted = false;
 
         // Process keys from doc URL
-        let decoded_doc_url = decode_doc_url(&doc_url, &None);
+        let decoded_doc_url = decode_doc_url(&doc_url, &None)?;
         let document_id = decoded_doc_url.doc_url_info.document_id;
         let doc_discovery_key = decoded_doc_url.doc_url_info.doc_discovery_key;
 
@@ -1276,7 +1276,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
             None,
         );
 
-        Self::new_disk(
+        Ok(Self::new_disk(
             peer_id,
             (doc_discovery_key, doc_feed),
             None,
@@ -1286,7 +1286,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
             &data_root_dir,
             settings,
         )
-        .await
+        .await)
     }
 
     pub(crate) async fn info_disk(data_root_dir: &PathBuf) -> Result<DocumentInfo, PeermergeError> {

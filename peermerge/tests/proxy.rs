@@ -58,7 +58,7 @@ async fn proxy_disk_encrypted() -> anyhow::Result<()> {
     let encryption_key = peermerge_creator
         .encryption_key(&creator_doc_info.id())
         .await;
-    let doc_url_info = get_doc_url_info(&doc_url);
+    let doc_url_info = get_doc_url_info(&doc_url)?;
     assert_eq!(doc_url_info.encrypted, Some(true));
     assert!(encryption_key.is_some());
     assert!(!sharing_info.proxy);
@@ -87,7 +87,7 @@ async fn proxy_disk_encrypted() -> anyhow::Result<()> {
     .await;
     let proxy_doc_info = peermerge_proxy
         .attach_proxy_document_disk(&proxy_doc_url)
-        .await;
+        .await?;
     let sharing_info = peermerge_proxy.sharing_info(&proxy_doc_info.id()).await?;
     assert!(sharing_info.proxy);
     assert!(sharing_info.doc_url.is_none());

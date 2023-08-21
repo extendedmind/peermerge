@@ -318,7 +318,7 @@ impl Peermerge<RandomAccessMemory, FeedMemoryPersistence> {
             self.peer_id,
             &self.default_peer_header,
             doc_url,
-            &decode_encryption_key(encryption_key),
+            &decode_encryption_key(encryption_key)?,
             self.document_settings.clone(),
         )
         .await?;
@@ -332,25 +332,28 @@ impl Peermerge<RandomAccessMemory, FeedMemoryPersistence> {
         encryption_key: &Option<String>,
         reattach_secret: &str,
     ) -> Result<DocumentInfo, PeermergeError> {
-        let (peer_id, write_feed_key_pair_bytes) = decode_reattach_secret(reattach_secret);
+        let (peer_id, write_feed_key_pair_bytes) = decode_reattach_secret(reattach_secret)?;
         let write_feed_signing_key = signing_key_from_bytes(&write_feed_key_pair_bytes);
         let document = Document::reattach_writer_memory(
             peer_id,
             write_feed_signing_key,
             &self.default_peer_header.name,
             doc_url,
-            &decode_encryption_key(encryption_key),
+            &decode_encryption_key(encryption_key)?,
             self.document_settings.clone(),
         )
         .await?;
         Ok(self.add_document(document).await)
     }
 
-    pub async fn attach_proxy_document_memory(&mut self, doc_url: &str) -> DocumentInfo {
+    pub async fn attach_proxy_document_memory(
+        &mut self,
+        doc_url: &str,
+    ) -> Result<DocumentInfo, PeermergeError> {
         let document =
             Document::attach_proxy_memory(self.peer_id, doc_url, self.document_settings.clone())
-                .await;
-        self.add_document(document).await
+                .await?;
+        Ok(self.add_document(document).await)
     }
 
     #[instrument(skip_all, fields(peer_name = self.default_peer_header.name))]
@@ -487,7 +490,7 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
             DashMap::new();
         for document_id in &state_wrapper.state.document_ids {
             let encryption_key: Option<Vec<u8>> =
-                decode_encryption_key(&encryption_keys.get(document_id).cloned());
+                decode_encryption_key(&encryption_keys.get(document_id).cloned())?;
             let postfix = encode_document_id(document_id);
             let document_data_root_dir = data_root_dir.join(postfix);
             let document = Document::open_disk(
@@ -550,7 +553,7 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
             self.peer_id,
             &self.default_peer_header,
             doc_url,
-            &decode_encryption_key(encryption_key),
+            &decode_encryption_key(encryption_key)?,
             &self.prefix,
             self.document_settings.clone(),
         )
@@ -558,15 +561,18 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
         Ok(self.add_document(document).await)
     }
 
-    pub async fn attach_proxy_document_disk(&mut self, doc_url: &str) -> DocumentInfo {
+    pub async fn attach_proxy_document_disk(
+        &mut self,
+        doc_url: &str,
+    ) -> Result<DocumentInfo, PeermergeError> {
         let document = Document::attach_proxy_disk(
             self.peer_id,
             doc_url,
             self.document_settings.clone(),
             &self.prefix,
         )
-        .await;
-        self.add_document(document).await
+        .await?;
+        Ok(self.add_document(document).await)
     }
 
     #[instrument(skip_all, fields(name = self.default_peer_header.name))]

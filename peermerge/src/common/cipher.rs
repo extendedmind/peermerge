@@ -26,25 +26,26 @@ pub fn new_uuid_v4() -> [u8; 16] {
     *Uuid::new_v4().as_bytes()
 }
 
-/// Encode with Base64 nopad. Convenience method to create short
+/// Encode with Base64 URL-compatible nopad. Convenience method to
+/// create short strings from byte arrays to use as automerge keys.
 /// strings from byte arrays to use as automerge keys.
 pub fn encode_base64_nopad(value: &[u8]) -> String {
-    data_encoding::BASE64_NOPAD.encode(value)
+    data_encoding::BASE64URL_NOPAD.encode(value)
 }
 
-/// Decode with Base64 nopad. Convenience method to create
-/// byte arrays from automerge keys.
+/// Decode with Base64 URL-compatible nopad. Convenience method to
+/// create byte arrays from automerge keys.
 pub fn decode_base64_nopad(value: &str) -> Result<Vec<u8>, PeermergeError> {
     let encoded_base64 = value.as_bytes();
     let mut decoded = vec![
         0;
-        data_encoding::BASE64_NOPAD
+        data_encoding::BASE64URL_NOPAD
             .decode_len(encoded_base64.len())
             .map_err(|err| PeermergeError::BadArgument {
                 context: format!("Could not Base64 decode length, {err:?}")
             })?
     ];
-    data_encoding::BASE32_NOPAD
+    data_encoding::BASE64URL_NOPAD
         .decode_mut(encoded_base64, &mut decoded)
         .map_err(|err| PeermergeError::BadArgument {
             context: format!("Could not Base64 decode content, {err:?}"),
@@ -53,18 +54,18 @@ pub fn decode_base64_nopad(value: &str) -> Result<Vec<u8>, PeermergeError> {
 }
 
 /// Get public information about a document URL.
-pub fn get_doc_url_info(doc_url: &str) -> DocUrlInfo {
-    get_doc_url_info_and_appendix_position(doc_url).0
+pub fn get_doc_url_info(doc_url: &str) -> Result<DocUrlInfo, PeermergeError> {
+    Ok(get_doc_url_info_and_appendix_position(doc_url)?.0)
 }
 
 pub(crate) fn get_doc_url_info_and_appendix_position(
     doc_url: &str,
-) -> (DocUrlInfo, Option<(usize, usize, bool)>) {
+) -> Result<(DocUrlInfo, Option<(usize, usize, bool)>), PeermergeError> {
     let (domain_end, appendix_position) = get_domain_end_and_appendix_start_end_encrypted(doc_url);
     let (version, child, feed_type, doc_public_key, doc_discovery_key, document_id) =
-        decode_domain(doc_url, domain_end);
+        decode_domain(doc_url, domain_end)?;
     if let Some((_, _, encrypted)) = &appendix_position {
-        (
+        Ok((
             DocUrlInfo::new(
                 version,
                 child,
@@ -75,9 +76,9 @@ pub(crate) fn get_doc_url_info_and_appendix_position(
                 *encrypted,
             ),
             appendix_position,
-        )
+        ))
     } else {
-        (
+        Ok((
             DocUrlInfo::new_proxy_only(
                 version,
                 child,
@@ -87,7 +88,7 @@ pub(crate) fn get_doc_url_info_and_appendix_position(
                 document_id,
             ),
             appendix_position,
-        )
+        ))
     }
 }
 
@@ -148,10 +149,10 @@ pub(crate) fn encode_doc_url(
             let nonce = generate_nonce(doc_public_key, 0);
             let cipher = XChaCha20Poly1305::new_from_slice(encryption_key).unwrap();
             let ciphertext = cipher.encrypt(&nonce, &*appendix_buffer).unwrap();
-            let encoded_ciphertext = data_encoding::BASE32_NOPAD.encode(&ciphertext);
+            let encoded_ciphertext = encode_base64_nopad(&ciphertext);
             format!("{CIPHERTEXT_PARAM}{encoded_ciphertext}")
         } else {
-            let encoded_plaintext = data_encoding::BASE32_NOPAD.encode(&appendix_buffer);
+            let encoded_plaintext = encode_base64_nopad(&appendix_buffer);
             format!("{PLAINTEXT_PARAM}{encoded_plaintext}")
         };
         format!("peermerge:/{encoded_domain}{postfix}")
@@ -178,22 +179,16 @@ pub(crate) struct DecodedDocUrl {
     pub(crate) doc_url_appendix: Option<DocUrlAppendix>,
 }
 
-pub(crate) fn decode_doc_url(doc_url: &str, encryption_key: &Option<Vec<u8>>) -> DecodedDocUrl {
+pub(crate) fn decode_doc_url(
+    doc_url: &str,
+    encryption_key: &Option<Vec<u8>>,
+) -> Result<DecodedDocUrl, PeermergeError> {
     assert_eq!(&doc_url[..DOC_URL_PREFIX.len()], DOC_URL_PREFIX);
 
-    let (doc_url_info, appendix_position) = get_doc_url_info_and_appendix_position(doc_url);
+    let (doc_url_info, appendix_position) = get_doc_url_info_and_appendix_position(doc_url)?;
     let doc_url_appendix: Option<DocUrlAppendix> =
         if let Some((appendix_start, appendix_end, encrypted)) = appendix_position {
-            let base32 = doc_url[appendix_start..appendix_end].as_bytes();
-            let mut buffer = vec![
-                0;
-                data_encoding::BASE32_NOPAD
-                    .decode_len(base32.len())
-                    .unwrap()
-            ];
-            data_encoding::BASE32_NOPAD
-                .decode_mut(base32, &mut buffer)
-                .unwrap();
+            let buffer = decode_base64_nopad(&doc_url[appendix_start..appendix_end])?;
             let appendix_buffer: Option<Vec<u8>> = if encrypted {
                 // The url indicates that its encrypted. If an encryption key is given, use it to unwrap the header
                 if let Some(encryption_key) = encryption_key {
@@ -218,48 +213,49 @@ pub(crate) fn decode_doc_url(doc_url: &str, encryption_key: &Option<Vec<u8>>) ->
         } else {
             None
         };
-    DecodedDocUrl {
+    Ok(DecodedDocUrl {
         doc_url_info,
         doc_url_appendix,
-    }
+    })
 }
 
 pub(crate) fn encode_document_id(document_id: &DocumentId) -> String {
-    data_encoding::BASE32_NOPAD.encode(document_id)
+    encode_base64_nopad(document_id)
 }
 
 pub(crate) fn encode_encryption_key(encryption_key: &[u8]) -> String {
-    data_encoding::BASE32_NOPAD.encode(encryption_key)
+    encode_base64_nopad(encryption_key)
 }
 
 pub(crate) fn encode_reattach_secret(peer_id: &PeerId, key_pair: &[u8]) -> String {
     let mut data = peer_id.to_vec();
     data.extend(key_pair);
-    data_encoding::BASE32_NOPAD.encode(&data)
+    encode_base64_nopad(&data)
 }
 
-pub(crate) fn decode_encryption_key(encryption_key: &Option<String>) -> Option<Vec<u8>> {
-    encryption_key.as_ref().map(|key| decode_base32(key, 32))
+pub(crate) fn decode_encryption_key(
+    encryption_key: &Option<String>,
+) -> Result<Option<Vec<u8>>, PeermergeError> {
+    encryption_key
+        .as_ref()
+        .map(|key| decode_base64_nopad(key))
+        .transpose()
 }
 
-pub(crate) fn decode_reattach_secret(reattach_secret: &str) -> (PeerId, Vec<u8>) {
-    let decoded = decode_base32(reattach_secret, 16 + 32);
-    (decoded[..16].try_into().unwrap(), decoded[16..].to_vec())
-}
-
-fn decode_base32(encoded: &str, expected_len: usize) -> Vec<u8> {
-    let encoded_base32 = encoded.as_bytes();
-    let mut decoded = vec![
-        0;
-        data_encoding::BASE32_NOPAD
-            .decode_len(encoded_base32.len())
-            .unwrap()
-    ];
-    let decoded_len = data_encoding::BASE32_NOPAD
-        .decode_mut(encoded_base32, &mut decoded)
-        .unwrap();
-    assert_eq!(decoded_len, expected_len);
-    decoded
+pub(crate) fn decode_reattach_secret(
+    reattach_secret: &str,
+) -> Result<(PeerId, Vec<u8>), PeermergeError> {
+    let decoded = decode_base64_nopad(reattach_secret)?;
+    if decoded.len() != 16 + 32 {
+        return Err(PeermergeError::BadArgument {
+            context: format!(
+                "Invalid reattach_secret byte length {}, expected {}",
+                decoded.len(),
+                16 + 32
+            ),
+        });
+    }
+    Ok((decoded[..16].try_into().unwrap(), decoded[16..].to_vec()))
 }
 
 fn encode_domain(doc_public_key: &[u8; 32], child: bool) -> String {
@@ -269,53 +265,66 @@ fn encode_domain(doc_public_key: &[u8; 32], child: bool) -> String {
     let header: u8 = if child { feed_type | 0x80 } else { feed_type };
     domain.push(header);
     domain.extend(doc_public_key);
-    data_encoding::BASE32_NOPAD.encode(&domain)
+    encode_base64_nopad(&domain)
 }
 
 fn decode_domain(
     doc_url: &str,
     domain_end: usize,
-) -> (
-    u8,
-    bool,
-    FeedType,
-    FeedPublicKey,
-    FeedDiscoveryKey,
-    DocumentId,
-) {
-    let domain_base32 = doc_url[DOC_URL_PREFIX.len()..domain_end].as_bytes();
-    let mut domain = vec![
-        0;
-        data_encoding::BASE32_NOPAD
-            .decode_len(domain_base32.len())
-            .unwrap()
-    ];
-    let decoded_len = data_encoding::BASE32_NOPAD
-        .decode_mut(domain_base32, &mut domain)
-        .unwrap();
-    assert_eq!(decoded_len, 32 + 2);
+) -> Result<
+    (
+        u8,
+        bool,
+        FeedType,
+        FeedPublicKey,
+        FeedDiscoveryKey,
+        DocumentId,
+    ),
+    PeermergeError,
+> {
+    let domain = decode_base64_nopad(&doc_url[DOC_URL_PREFIX.len()..domain_end])?;
+    if domain.len() != 32 + 2 {
+        return Err(PeermergeError::BadArgument {
+            context: format!(
+                "Invalid URL domain length {}, expected {}",
+                domain.len(),
+                32 + 2
+            ),
+        });
+    }
     let version = domain[0];
-    assert_eq!(domain[0], PEERMERGE_VERSION);
+    if domain[0] != PEERMERGE_VERSION {
+        return Err(PeermergeError::BadArgument {
+            context: format!(
+                "Invalid URL peermerge version {}, expected {}",
+                domain[0], PEERMERGE_VERSION
+            ),
+        });
+    }
     let header = domain[1];
     // The highest bit is the child bit, the rest feed type.
     // NB: Other info can be encoded later in between because
     // 7 bits for feed type is a lot, two bits should do.
     let child = header & 0x80 == 0x80;
     let feed_type: FeedType = (header & 0x7F).try_into().unwrap();
-    assert_eq!(feed_type, FeedType::Hypercore);
+    if feed_type != FeedType::Hypercore {
+        return Err(PeermergeError::BadArgument {
+            context: "Invalid URL feed type, only hypercore supported".to_string(),
+        });
+    }
     // URL contains the document's root public key, document id is
     // the discovery key
     let doc_public_key: FeedPublicKey = domain[2..].try_into().unwrap();
     let doc_discovery_key: FeedDiscoveryKey = discovery_key_from_public_key(&doc_public_key);
     let document_id: DocumentId = document_id_from_discovery_key(&doc_discovery_key);
-    (
+    Ok((
         version,
         child,
         feed_type,
         doc_public_key,
         doc_discovery_key,
         document_id,
-    )
+    ))
 }
 
 fn get_domain_end_and_appendix_start_end_encrypted(
