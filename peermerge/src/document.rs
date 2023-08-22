@@ -113,6 +113,10 @@ where
         self.doc_discovery_key
     }
 
+    pub(crate) fn doc_signature_verifying_key(&self) -> VerifyingKey {
+        self.doc_signature_key_pair.public.clone()
+    }
+
     pub(crate) async fn info(&self) -> DocumentInfo {
         let document_state_wrapper = self.document_state.lock().await;
         document_state_wrapper.state().info()
@@ -244,7 +248,12 @@ where
                         .into_iter()
                         .map(|entry| serialize_entry(&entry))
                         .collect::<Result<Vec<Vec<u8>>, PeermergeError>>()?;
-                    write_feed.append_batch(entry_data_batch).await?
+                    write_feed
+                        .append_batch(
+                            entry_data_batch,
+                            self.doc_signature_key_pair.secret.as_ref().unwrap(),
+                        )
+                        .await?
                 };
                 document_state
                     .set_cursor_and_save_data(
@@ -727,13 +736,15 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
         .await?;
 
         // Create the doc memory feed
-        let (_doc_feed_length, doc_feed, doc_encryption_key) = create_new_write_memory_feed(
-            prepare_result.doc_signing_key,
-            Some(prepare_result.doc_feed_init_data),
-            encrypted,
-            &None,
-        )
-        .await;
+        let (mut doc_feed, doc_encryption_key) =
+            create_new_write_memory_feed(prepare_result.doc_signing_key, encrypted, &None, false)
+                .await;
+        doc_feed
+            .append_batch(
+                prepare_result.doc_feed_init_data,
+                &prepare_result.doc_signature_signing_key,
+            )
+            .await?;
 
         // Make result read_only to make sure no one ever adds more entries to
         // the doc feed.
@@ -744,13 +755,19 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
         }
 
         // Create a write memory feed
-        let (_write_feed_length, write_feed, _) = create_new_write_memory_feed(
+        let (mut write_feed, _) = create_new_write_memory_feed(
             prepare_result.write_key_pair,
-            Some(prepare_result.write_feed_init_data),
             encrypted,
             &doc_encryption_key,
+            false,
         )
         .await;
+        write_feed
+            .append_batch(
+                prepare_result.write_feed_init_data,
+                &prepare_result.doc_signature_signing_key,
+            )
+            .await?;
 
         Ok((
             Self::new_memory(
@@ -826,7 +843,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
                 })?;
 
         // Create the doc feed
-        let (_, doc_feed) = create_new_read_memory_feed(
+        let doc_feed = create_new_read_memory_feed(
             &decoded_doc_url.doc_url_info.doc_public_key,
             proxy,
             encrypted,
@@ -930,7 +947,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
             .meta_doc_data;
 
         // Create the root feed
-        let (_, root_feed) = create_new_read_memory_feed(
+        let root_feed = create_new_read_memory_feed(
             &decoded_doc_url.doc_url_info.doc_public_key,
             proxy,
             encrypted,
@@ -950,11 +967,11 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
             let write_public_key = write_verifying_key.to_bytes();
             let write_discovery_key = discovery_key_from_public_key(&write_public_key);
             let meta_automerge_doc = init_automerge_doc_from_data(&peer_id, &meta_doc_data);
-            let (_, write_feed, _) = create_new_write_memory_feed(
+            let (write_feed, _) = create_new_write_memory_feed(
                 write_feed_signing_key,
-                None,
                 encrypted,
                 &encryption_key,
+                true,
             )
             .await;
             (
@@ -978,16 +995,15 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
                 &Some(peer_header.clone()),
                 settings.max_entry_data_size_bytes,
             )?;
-            let write_feed_init_data: Vec<Vec<u8>> =
-                serialize_init_entries(init_peer_entries, &doc_signature_signing_key)?;
-            let write_feed_init_data_len = write_feed_init_data.len();
-            let (_, write_feed, _) = create_new_write_memory_feed(
-                write_key_pair,
-                Some(write_feed_init_data),
-                encrypted,
-                &encryption_key,
-            )
-            .await;
+            let (mut write_feed, _) =
+                create_new_write_memory_feed(write_key_pair, encrypted, &encryption_key, false)
+                    .await;
+            let write_feed_init_data: Vec<Vec<u8>> = serialize_init_entries(init_peer_entries)?;
+            let write_feed_init_data_len: usize = write_feed
+                .append_batch(write_feed_init_data, &doc_signature_signing_key)
+                .await?
+                .try_into()
+                .unwrap();
             (
                 write_public_key,
                 write_discovery_key,
@@ -1094,7 +1110,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
                             debug!("Concurrent creating of feeds noticed, continuing.");
                         }
                         dashmap::mapref::entry::Entry::Vacant(vacant) => {
-                            let (_, feed) = create_new_read_memory_feed(
+                            let feed = create_new_read_memory_feed(
                                 &feed_info.public_key,
                                 self.proxy,
                                 self.encryption_key.is_some(),
@@ -1147,15 +1163,20 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
         let data_root_dir = data_root_dir.join(postfix);
 
         // Create the doc disk feed
-        let (_doc_feed_length, doc_feed, doc_encryption_key) = create_new_write_disk_feed(
+        let (mut doc_feed, doc_encryption_key) = create_new_write_disk_feed(
             &data_root_dir,
             prepare_result.doc_signing_key,
             &prepare_result.doc_discovery_key,
-            prepare_result.doc_feed_init_data,
             encrypted,
             &None,
         )
         .await;
+        doc_feed
+            .append_batch(
+                prepare_result.doc_feed_init_data,
+                &prepare_result.doc_signature_signing_key,
+            )
+            .await?;
 
         // Make result read_only to make sure no one ever adds more entries to
         // the doc feed.
@@ -1166,15 +1187,20 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
         }
 
         // Create a write disk feed
-        let (_write_feed_length, write_feed, _) = create_new_write_disk_feed(
+        let (mut write_feed, _) = create_new_write_disk_feed(
             &data_root_dir,
             prepare_result.write_key_pair,
             &prepare_result.write_discovery_key,
-            prepare_result.write_feed_init_data,
             encrypted,
             &doc_encryption_key,
         )
         .await;
+        write_feed
+            .append_batch(
+                prepare_result.write_feed_init_data,
+                &prepare_result.doc_signature_signing_key,
+            )
+            .await?;
 
         Ok((
             Self::new_disk(
@@ -1244,7 +1270,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
         // Create the root feed
         let postfix = encode_document_id(&decoded_doc_url.doc_url_info.document_id);
         let data_root_dir = data_root_dir.join(postfix);
-        let (_, root_feed) = create_new_read_disk_feed(
+        let doc_feed = create_new_read_disk_feed(
             &data_root_dir,
             &decoded_doc_url.doc_url_info.doc_public_key,
             &decoded_doc_url.doc_url_info.doc_discovery_key,
@@ -1268,20 +1294,21 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
             &Some(peer_header.clone()),
             settings.max_entry_data_size_bytes,
         )?;
-        let write_feed_init_data: Vec<Vec<u8>> =
-            serialize_init_entries(init_peer_entries, &doc_signature_signing_key)?;
+        let write_feed_init_data: Vec<Vec<u8>> = serialize_init_entries(init_peer_entries)?;
         let write_feed_init_data_len = write_feed_init_data.len();
 
         // Create the write feed
-        let (_, write_feed, _) = create_new_write_disk_feed(
+        let (mut write_feed, _) = create_new_write_disk_feed(
             &data_root_dir,
             write_key_pair,
             &write_discovery_key,
-            write_feed_init_data,
             encrypted,
             &encryption_key,
         )
         .await;
+        write_feed
+            .append_batch(write_feed_init_data, &doc_signature_signing_key)
+            .await?;
 
         // Initialize document state
         let content = DocumentContent::new(
@@ -1309,7 +1336,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
 
         Ok(Self::new_disk(
             peer_id,
-            (doc_discovery_key, root_feed),
+            (doc_discovery_key, doc_feed),
             PartialKeypair {
                 public: doc_signature_verifying_key,
                 secret: Some(doc_signature_signing_key),
@@ -1346,7 +1373,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
         // Create the doc feed
         let postfix = encode_document_id(&document_id);
         let data_root_dir = data_root_dir.join(postfix);
-        let (_, doc_feed) = create_new_read_disk_feed(
+        let doc_feed = create_new_read_disk_feed(
             &data_root_dir,
             &decoded_doc_url.doc_url_info.doc_public_key,
             &document_id,
@@ -1626,7 +1653,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
                             debug!("Concurrent creating of feeds noticed, continuing.");
                         }
                         dashmap::mapref::entry::Entry::Vacant(vacant) => {
-                            let (_, feed) = create_new_read_disk_feed(
+                            let feed = create_new_read_disk_feed(
                                 &self.prefix,
                                 &feed_info.public_key,
                                 &discovery_key,
@@ -1750,8 +1777,7 @@ where
         init_cb,
     )
     .unwrap();
-    let doc_feed_init_data: Vec<Vec<u8>> =
-        serialize_init_entries(doc_feed_init_entries, &doc_signature_signing_key)?;
+    let doc_feed_init_data: Vec<Vec<u8>> = serialize_init_entries(doc_feed_init_entries)?;
 
     // Initialize the first peer
     let write_feed_init_entries = init_first_peer(
@@ -1762,8 +1788,7 @@ where
         document_header,
         max_entry_data_size_bytes,
     )?;
-    let write_feed_init_data: Vec<Vec<u8>> =
-        serialize_init_entries(write_feed_init_entries, &doc_signature_signing_key)?;
+    let write_feed_init_data: Vec<Vec<u8>> = serialize_init_entries(write_feed_init_entries)?;
 
     // Initialize document state
     let content = DocumentContent::new(

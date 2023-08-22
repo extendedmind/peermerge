@@ -1,7 +1,7 @@
 use std::fmt::Debug;
 
 use hypercore_protocol::{
-    hypercore::{RequestBlock, RequestUpgrade},
+    hypercore::{RequestBlock, RequestUpgrade, VerifyingKey},
     schema::Request,
 };
 
@@ -16,6 +16,7 @@ pub(super) struct PeerState {
     /// Set only when is_doc is false
     pub(super) peer_id: Option<PeerId>,
     pub(super) doc_discovery_key: FeedDiscoveryKey,
+    pub(super) doc_signature_verifying_key: VerifyingKey,
     pub(super) can_upgrade: bool,
     pub(super) remote_fork: u64,
     pub(super) remote_length: u64,
@@ -47,12 +48,14 @@ impl PeerState {
     pub(crate) fn new(
         is_doc: bool,
         doc_discovery_key: FeedDiscoveryKey,
+        doc_signature_verifying_key: VerifyingKey,
         feeds_state: Option<DocumentFeedsState>,
         peer_id: Option<PeerId>,
     ) -> Self {
         PeerState {
             is_doc,
             doc_discovery_key,
+            doc_signature_verifying_key,
             feeds_state,
             peer_id,
             can_upgrade: true,

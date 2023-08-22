@@ -115,6 +115,7 @@ where
                                     Some(document.peer_id_from_discovery_key(discovery_key).await),
                                 )
                             };
+
                             let mut hypercore = hypercore.lock().await;
                             let channel_receiver = channel.take_receiver().unwrap();
                             let channel_sender = channel.local_sender();
@@ -123,6 +124,7 @@ where
                                 feeds_state,
                                 peer_id,
                                 document.doc_discovery_key(),
+                                document.doc_signature_verifying_key(),
                                 channel,
                                 channel_receiver,
                                 channel_sender,

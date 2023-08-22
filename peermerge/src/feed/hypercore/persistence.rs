@@ -14,10 +14,9 @@ pub(crate) async fn create_new_write_disk_hypercore(
     prefix: &PathBuf,
     signing_key: SigningKey,
     discovery_key: &[u8; 32],
-    init_data_batch: Vec<Vec<u8>>,
     encrypted: bool,
     encryption_key: &Option<Vec<u8>>,
-) -> (u64, HypercoreWrapper<RandomAccessDisk>, Option<Vec<u8>>) {
+) -> (HypercoreWrapper<RandomAccessDisk>, Option<Vec<u8>>) {
     let hypercore_dir = get_path_from_discovery_key(prefix, discovery_key);
     let storage = Storage::new_disk(&hypercore_dir, true).await.unwrap();
     let hypercore = HypercoreBuilder::new(storage)
@@ -29,10 +28,9 @@ pub(crate) async fn create_new_write_disk_hypercore(
         .build()
         .await
         .unwrap();
-    let (mut wrapper, encryption_key) =
+    let (wrapper, encryption_key) =
         HypercoreWrapper::from_disk_hypercore(hypercore, false, encrypted, encryption_key, true);
-    let len = wrapper.append_batch(init_data_batch).await.unwrap();
-    (len, wrapper, encryption_key)
+    (wrapper, encryption_key)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -43,7 +41,7 @@ pub(crate) async fn create_new_read_disk_hypercore(
     proxy: bool,
     encrypted: bool,
     encryption_key: &Option<Vec<u8>>,
-) -> (u64, HypercoreWrapper<RandomAccessDisk>) {
+) -> HypercoreWrapper<RandomAccessDisk> {
     let hypercore_dir = get_path_from_discovery_key(prefix, discovery_key);
     let storage = Storage::new_disk(&hypercore_dir, true).await.unwrap();
     let hypercore = HypercoreBuilder::new(storage)
@@ -55,10 +53,7 @@ pub(crate) async fn create_new_read_disk_hypercore(
         .build()
         .await
         .unwrap();
-    (
-        hypercore.info().length,
-        HypercoreWrapper::from_disk_hypercore(hypercore, proxy, encrypted, encryption_key, false).0,
-    )
+    HypercoreWrapper::from_disk_hypercore(hypercore, proxy, encrypted, encryption_key, false).0
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -85,19 +80,19 @@ pub(crate) async fn open_disk_hypercore(
 
 pub(crate) async fn create_new_write_memory_hypercore(
     signing_key: SigningKey,
-    init_data_batch: Option<Vec<Vec<u8>>>,
     encrypted: bool,
     encryption_key: &Option<Vec<u8>>,
-) -> (u64, HypercoreWrapper<RandomAccessMemory>, Option<Vec<u8>>) {
+    reattach: bool,
+) -> (HypercoreWrapper<RandomAccessMemory>, Option<Vec<u8>>) {
     create_new_memory_hypercore(
         PartialKeypair {
             public: signing_key.verifying_key(),
             secret: Some(signing_key),
         },
-        init_data_batch,
         false,
         encrypted,
         encryption_key,
+        reattach,
     )
     .await
 }
@@ -107,28 +102,28 @@ pub(crate) async fn create_new_read_memory_hypercore(
     proxy: bool,
     encrypted: bool,
     encryption_key: &Option<Vec<u8>>,
-) -> (u64, HypercoreWrapper<RandomAccessMemory>) {
+) -> HypercoreWrapper<RandomAccessMemory> {
     let result = create_new_memory_hypercore(
         PartialKeypair {
             public: VerifyingKey::from_bytes(public_key).unwrap(),
             secret: None,
         },
-        None,
         proxy,
         encrypted,
         encryption_key,
+        false,
     )
     .await;
-    (result.0, result.1)
+    result.0
 }
 
 async fn create_new_memory_hypercore(
     key_pair: PartialKeypair,
-    init_data_batch: Option<Vec<Vec<u8>>>,
     proxy: bool,
     encrypted: bool,
     encryption_key: &Option<Vec<u8>>,
-) -> (u64, HypercoreWrapper<RandomAccessMemory>, Option<Vec<u8>>) {
+    reattach: bool,
+) -> (HypercoreWrapper<RandomAccessMemory>, Option<Vec<u8>>) {
     let storage = Storage::new_memory().await.unwrap();
     let hypercore = HypercoreBuilder::new(storage)
         .key_pair(key_pair)
@@ -136,19 +131,14 @@ async fn create_new_memory_hypercore(
         .await
         .unwrap();
 
-    let (mut wrapper, encryption_key) = HypercoreWrapper::from_memory_hypercore(
+    let (wrapper, encryption_key) = HypercoreWrapper::from_memory_hypercore(
         hypercore,
         proxy,
         encrypted,
         encryption_key,
-        init_data_batch.is_some(),
+        !reattach,
     );
-    let len = if let Some(init_data_batch) = init_data_batch {
-        wrapper.append_batch(init_data_batch).await.unwrap()
-    } else {
-        0
-    };
-    (len, wrapper, encryption_key)
+    (wrapper, encryption_key)
 }
 
 #[cfg(not(target_arch = "wasm32"))]

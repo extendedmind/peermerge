@@ -9,7 +9,7 @@ pub(crate) use crate::common::state::{DocumentState, PeermergeState};
 use crate::document::DocumentSettings;
 use crate::feed::FeedPublicKey;
 
-use super::cipher::{add_signature, DocUrlAppendix, DocumentSecret};
+use super::cipher::{DocUrlAppendix, DocumentSecret};
 use super::constants::PEERMERGE_VERSION;
 use super::entry::EntryContent;
 use super::message::{FeedSyncedMessage, FeedsChangedMessage};
@@ -922,30 +922,20 @@ impl CompactEncoding<DocUrlAppendix> for State {
 
 pub(crate) fn serialize_init_entries(
     init_entries: Vec<Entry>,
-    doc_signature_signing_key: &SigningKey,
 ) -> Result<Vec<Vec<u8>>, PeermergeError> {
     init_entries
         .into_iter()
         .enumerate()
         .map(|(i, entry)| {
-            if i == 0 {
-                if !matches!(
+            if i == 0
+                && !matches!(
                     entry.content,
                     EntryContent::InitDoc { .. } | EntryContent::InitPeer { .. }
-                ) {
-                    Err(PeermergeError::InvalidOperation {
-                        context: "First init entry not InitDoc nor InitPeer".to_string(),
-                    })
-                } else {
-                    let serialized_entry = serialize_entry(&entry);
-                    match serialized_entry {
-                        Ok(mut serialized_entry) => {
-                            add_signature(&mut serialized_entry, doc_signature_signing_key);
-                            Ok(serialized_entry)
-                        }
-                        Err(err) => Err(err),
-                    }
-                }
+                )
+            {
+                Err(PeermergeError::InvalidOperation {
+                    context: "First init entry not InitDoc nor InitPeer".to_string(),
+                })
             } else {
                 // Only the first entry needs to be signed, the ones after that
                 // are guaranteed to be derived from the first entry's signature

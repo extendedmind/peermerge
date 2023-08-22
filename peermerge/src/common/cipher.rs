@@ -341,6 +341,29 @@ pub(crate) fn add_signature(data: &mut Vec<u8>, doc_signature_signing_key: &Sign
     data.extend(signature);
 }
 
+pub(crate) fn verify_data_signature(
+    data: &[u8],
+    doc_signature_verifying_key: &VerifyingKey,
+) -> Result<(), PeermergeError> {
+    if data.len() <= 64 {
+        return Err(PeermergeError::InvalidOperation {
+            context: "Signed entry is too short".to_string(),
+        });
+    }
+    let signature: [u8; 64] =
+        data[data.len() - 64..]
+            .try_into()
+            .map_err(|err| PeermergeError::BadArgument {
+                context: format!("Invalid signature in data, {err}"),
+            })?;
+    let signature = Signature::from_bytes(&signature);
+    Ok(verify(
+        doc_signature_verifying_key,
+        &data[..data.len() - 64],
+        Some(&signature),
+    )?)
+}
+
 fn encode_domain(
     doc_public_key: &FeedPublicKey,
     doc_signature_verifying_key: &VerifyingKey,

@@ -12,6 +12,7 @@ use tracing::{debug, instrument};
 use super::PeerState;
 use crate::{
     common::{
+        cipher::verify_data_signature,
         message::{BroadcastMessage, FeedSyncedMessage, FeedsChangedMessage},
         state::{DocumentFeedInfo, DocumentFeedsState},
         utils::Mutex,
@@ -170,7 +171,6 @@ where
             peer_state.remote_can_upgrade = message.can_upgrade;
             peer_state.remote_uploading = message.uploading;
             peer_state.remote_downloading = message.downloading;
-
             peer_state.length_acked = if same_fork { message.remote_length } else { 0 };
 
             let mut messages = vec![];
@@ -244,6 +244,12 @@ where
                 let applied = hypercore.verify_and_apply_proof(&proof).await?;
                 let new_info = hypercore.info();
                 peer_state.inflight.remove(message.request);
+                if new_info.contiguous_length == 1 {
+                    // Need to verify the signature of the feed immediately
+                    // to close connection early if the feed offered is bogus
+                    let first_entry = hypercore.get(0).await?.unwrap();
+                    verify_data_signature(&first_entry, &peer_state.doc_signature_verifying_key)?;
+                }
                 let request = next_request(&mut hypercore, peer_state).await?;
                 let peer_synced: Option<FeedEvent> =
                     if new_info.contiguous_length == new_info.length {

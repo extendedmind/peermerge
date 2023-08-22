@@ -1,7 +1,7 @@
 use compact_encoding::{CompactEncoding, State};
 use futures::channel::mpsc::UnboundedSender;
 use hypercore_protocol::{
-    hypercore::{Hypercore, PartialKeypair},
+    hypercore::{Hypercore, PartialKeypair, SigningKey, VerifyingKey},
     Channel, ChannelReceiver, ChannelSender, Message,
 };
 #[cfg(not(target_arch = "wasm32"))]
@@ -28,7 +28,7 @@ use super::{
 };
 use crate::{
     common::{
-        cipher::EntryCipher,
+        cipher::{add_signature, EntryCipher},
         entry::{shrink_entries, Entry, ShrunkEntries},
         state::{DocumentFeedInfo, DocumentFeedsState},
         utils::Mutex,
@@ -110,14 +110,16 @@ where
     pub(crate) async fn append_batch(
         &mut self,
         data_batch: Vec<Vec<u8>>,
+        doc_signature_signing_key: &SigningKey,
     ) -> Result<u64, PeermergeError> {
         if self.proxy {
             panic!("Can not append to a proxy");
         }
         let outcome = {
             let mut hypercore = self.hypercore.lock().await;
-            if let Some(entry_cipher) = &self.entry_cipher {
-                let original_length = hypercore.info().length;
+            let original_length = hypercore.info().length;
+            let mut final_data_batch: Vec<Vec<u8>> = if let Some(entry_cipher) = &self.entry_cipher
+            {
                 let mut encrypted_data_array: Vec<Vec<u8>> = Vec::with_capacity(data_batch.len());
                 for (i, data) in data_batch.iter().enumerate() {
                     encrypted_data_array.push(entry_cipher.encrypt(
@@ -126,10 +128,16 @@ where
                         data,
                     ))
                 }
-                hypercore.append_batch(&encrypted_data_array).await?
+                encrypted_data_array
             } else {
-                hypercore.append_batch(&data_batch).await?
+                data_batch
+            };
+            if original_length == 0 && !final_data_batch.is_empty() {
+                // Sign the first entry
+                let first_entry = final_data_batch.get_mut(0).unwrap();
+                add_signature(first_entry, doc_signature_signing_key);
             }
+            hypercore.append_batch(&final_data_batch).await?
         };
         if !self.channel_senders.is_empty() {
             let message = create_append_local_signal(outcome.length);
@@ -195,14 +203,26 @@ where
         let mut hypercore = self.hypercore.lock().await;
         let mut entries: Vec<Entry> = vec![];
         for i in index..len {
-            let data = if let Some(entry_cipher) = &self.entry_cipher {
-                let data = hypercore.get(i).await.unwrap().unwrap();
+            let mut feed_data = hypercore.get(i).await.unwrap().unwrap();
+            let data = if i == 0 {
+                // The first entry is signed, only decrypt part of the data
+                if feed_data.len() <= 64 {
+                    return Err(PeermergeError::InvalidOperation {
+                        context: "Feed contains too short first entry".to_string(),
+                    });
+                }
+                feed_data.drain(feed_data.len() - 64..feed_data.len());
+                feed_data
+            } else {
+                feed_data
+            };
+            let plain_data: Vec<u8> = if let Some(entry_cipher) = &self.entry_cipher {
                 entry_cipher.decrypt(&self.public_key, i, &data)
             } else {
-                hypercore.get(i).await.unwrap().unwrap()
+                data
             };
-            let mut dec_state = State::from_buffer(&data);
-            let entry: Entry = dec_state.decode(&data)?;
+            let mut dec_state = State::from_buffer(&plain_data);
+            let entry: Entry = dec_state.decode(&plain_data)?;
             entries.push(entry);
         }
         Ok(shrink_entries(entries))
@@ -229,6 +249,7 @@ where
         peers_state: Option<DocumentFeedsState>,
         peer_id: Option<PeerId>,
         doc_discovery_key: FeedDiscoveryKey,
+        doc_signature_verifying_key: VerifyingKey,
         channel: Channel,
         channel_receiver: ChannelReceiver<Message>,
         channel_sender: ChannelSender<Message>,
@@ -236,7 +257,13 @@ where
     ) {
         debug!("Processing channel id={}", channel.id(),);
         self.channel_senders.push(channel_sender);
-        let peer_state = PeerState::new(is_doc, doc_discovery_key, peers_state, peer_id);
+        let peer_state = PeerState::new(
+            is_doc,
+            doc_discovery_key,
+            doc_signature_verifying_key,
+            peers_state,
+            peer_id,
+        );
         let hypercore = self.hypercore.clone();
         let mut feed_event_sender_for_task = feed_event_sender.clone();
         let task_span = if is_doc {
