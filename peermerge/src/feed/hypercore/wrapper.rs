@@ -213,6 +213,11 @@ where
         hypercore.key_pair().clone()
     }
 
+    pub(crate) async fn make_read_only(&self) -> Result<bool, PeermergeError> {
+        let mut hypercore = self.hypercore.lock().await;
+        Ok(hypercore.make_read_only().await?)
+    }
+
     pub(super) fn public_key(&self) -> &[u8; 32] {
         &self.public_key
     }

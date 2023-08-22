@@ -1,8 +1,8 @@
 use automerge::transaction::Transaction;
 use automerge::{AutomergeError, ObjId, Patch};
-use compact_encoding::EncodingError;
 use dashmap::DashMap;
 use futures::channel::mpsc::UnboundedSender;
+use hypercore_protocol::hypercore::{generate_signing_key, PartialKeypair, VerifyingKey};
 #[cfg(not(target_arch = "wasm32"))]
 use random_access_disk::RandomAccessDisk;
 use random_access_memory::RandomAccessMemory;
@@ -18,8 +18,10 @@ use crate::automerge::{
     init_first_peer, init_peer, transact_autocommit, transact_mut_autocommit,
     ApplyEntriesFeedChange, AutomergeDoc, DocsChangeResult, UnappliedEntries,
 };
-use crate::common::cipher::{decode_doc_url, encode_document_id, encode_proxy_doc_url};
-use crate::common::encoding::serialize_entry;
+use crate::common::cipher::{
+    decode_doc_url, encode_document_id, proxy_doc_url_from_doc_url, DocumentSecret,
+};
+use crate::common::encoding::{serialize_entry, serialize_init_entries};
 use crate::common::entry::{EntryContent, ShrunkEntries};
 use crate::common::keys::{
     discovery_key_from_public_key, document_id_from_discovery_key, generate_keys, SigningKey,
@@ -63,6 +65,9 @@ where
     peer_id: PeerId,
     /// The doc discovery key
     doc_discovery_key: FeedDiscoveryKey,
+    /// Doc signature key pair. For proxy and read-only peers, the secret key
+    /// is None.
+    doc_signature_key_pair: PartialKeypair,
     /// The document id, derived from doc_discovery_key.
     id: DocumentId,
     /// General settings for the document, stored in Peermerge.
@@ -235,11 +240,10 @@ where
                 let length = {
                     let write_feed = get_feed(&self.feeds, &write_discovery_key).await.unwrap();
                     let mut write_feed = write_feed.lock().await;
-
                     let entry_data_batch: Vec<Vec<u8>> = entries
                         .into_iter()
                         .map(|entry| serialize_entry(&entry))
-                        .collect::<Result<Vec<Vec<u8>>, EncodingError>>()?;
+                        .collect::<Result<Vec<Vec<u8>>, PeermergeError>>()?;
                     write_feed.append_batch(entry_data_batch).await?
                 };
                 document_state
@@ -338,7 +342,7 @@ where
 
     #[instrument(skip_all, fields(ctx = self.log_context))]
     pub(crate) async fn sharing_info(&self) -> Result<DocumentSharingInfo, PeermergeError> {
-        if !self.proxy {
+        if let Some(doc_signature_signing_key) = &self.doc_signature_key_pair.secret {
             let doc_feed = get_feed(&self.feeds, &self.doc_discovery_key)
                 .await
                 .unwrap();
@@ -350,32 +354,32 @@ where
             };
 
             let document_state = self.document_state.lock().await;
-            let doc_url = document_state
-                .state()
-                .doc_url(meta_doc_data.to_vec(), &self.encryption_key);
+            let doc_url = document_state.state().doc_url(
+                meta_doc_data.to_vec(),
+                doc_signature_signing_key,
+                &self.encryption_key,
+            );
 
             Ok(DocumentSharingInfo {
                 proxy: false,
-                proxy_doc_url: encode_proxy_doc_url(&doc_url),
-                doc_url: Some(doc_url),
+                proxy_doc_url: proxy_doc_url_from_doc_url(&doc_url, doc_signature_signing_key),
+                doc_url,
             })
         } else {
-            let document_state = self.document_state.lock().await;
-            let proxy_doc_url = document_state.state().proxy_doc_url();
-            Ok(DocumentSharingInfo {
-                proxy: true,
-                proxy_doc_url,
-                doc_url: None,
-            })
+            Err(PeermergeError::NotWritable)
         }
     }
 
     #[instrument(skip_all, fields(ctx = self.log_context))]
-    pub(crate) fn encryption_key(&self) -> Option<Vec<u8>> {
+    pub(crate) fn document_secret(&self) -> Option<DocumentSecret> {
         if self.proxy {
-            panic!("A proxy does not store the encryption key");
+            None
+        } else {
+            Some(DocumentSecret::new(
+                self.encryption_key.clone(),
+                self.doc_signature_key_pair.secret.clone(),
+            ))
         }
-        self.encryption_key.clone()
     }
 
     #[instrument(skip_all, fields(ctx = self.log_context))]
@@ -724,12 +728,20 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
 
         // Create the doc memory feed
         let (_doc_feed_length, doc_feed, doc_encryption_key) = create_new_write_memory_feed(
-            prepare_result.doc_key_pair,
+            prepare_result.doc_signing_key,
             Some(prepare_result.doc_feed_init_data),
             encrypted,
             &None,
         )
         .await;
+
+        // Make result read_only to make sure no one ever adds more entries to
+        // the doc feed.
+        if !doc_feed.make_read_only().await? {
+            return Err(PeermergeError::InvalidOperation {
+                context: "Could not make doc feed read-only".to_string(),
+            });
+        }
 
         // Create a write memory feed
         let (_write_feed_length, write_feed, _) = create_new_write_memory_feed(
@@ -744,6 +756,10 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
             Self::new_memory(
                 peer_id,
                 (prepare_result.doc_discovery_key, doc_feed),
+                PartialKeypair {
+                    public: prepare_result.doc_signature_verifying_key,
+                    secret: Some(prepare_result.doc_signature_signing_key),
+                },
                 Some((prepare_result.write_discovery_key, write_feed)),
                 prepare_result.state,
                 encrypted,
@@ -759,14 +775,14 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
         peer_id: PeerId,
         peer_header: &NameDescription,
         doc_url: &str,
-        encryption_key: &Option<Vec<u8>>,
+        document_secret: DocumentSecret,
         settings: DocumentSettings,
     ) -> Result<Self, PeermergeError> {
         Self::do_attach_writer_memory(
             peer_id,
             peer_header,
             doc_url,
-            encryption_key,
+            document_secret,
             settings,
             None,
         )
@@ -778,14 +794,14 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
         write_feed_signing_key: SigningKey,
         peer_name: &str,
         doc_url: &str,
-        encryption_key: &Option<Vec<u8>>,
+        document_secret: DocumentSecret,
         settings: DocumentSettings,
     ) -> Result<Self, PeermergeError> {
         Self::do_attach_writer_memory(
             peer_id,
             &NameDescription::new(peer_name),
             doc_url,
-            encryption_key,
+            document_secret,
             settings,
             Some(write_feed_signing_key),
         )
@@ -798,12 +814,16 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
         settings: DocumentSettings,
     ) -> Result<Self, PeermergeError> {
         let proxy = true;
-        let doc_url = encode_proxy_doc_url(doc_url);
         let encrypted = false;
 
         // Process keys from doc URL
-        let decoded_doc_url = decode_doc_url(&doc_url, &None)?;
+        let decoded_doc_url = decode_doc_url(&doc_url, &DocumentSecret::empty())?;
         let doc_discovery_key = decoded_doc_url.doc_url_info.doc_discovery_key;
+        let doc_signature_verifying_key =
+            VerifyingKey::from_bytes(&decoded_doc_url.doc_url_info.doc_signature_verifying_key)
+                .map_err(|err| PeermergeError::BadArgument {
+                    context: format!("Invalid document url, {err}"),
+                })?;
 
         // Create the doc feed
         let (_, doc_feed) = create_new_read_memory_feed(
@@ -817,6 +837,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
         // Initialize document state
         let state = DocumentState::new(
             proxy,
+            doc_signature_verifying_key.to_bytes(),
             None,
             DocumentFeedsState::new(decoded_doc_url.doc_url_info.doc_public_key),
             None,
@@ -825,6 +846,10 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
         Ok(Self::new_memory(
             peer_id,
             (doc_discovery_key, doc_feed),
+            PartialKeypair {
+                public: doc_signature_verifying_key,
+                secret: None,
+            },
             None,
             state,
             encrypted,
@@ -863,23 +888,42 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
         peer_id: PeerId,
         peer_header: &NameDescription,
         doc_url: &str,
-        encryption_key: &Option<Vec<u8>>,
+        mut document_secret: DocumentSecret,
         settings: DocumentSettings,
         mut write_feed_signing_key: Option<SigningKey>,
     ) -> Result<Self, PeermergeError> {
         let proxy = false;
 
-        // Process keys from doc URL
-        let decoded_doc_url = decode_doc_url(doc_url, encryption_key)?;
+        // Process keys from doc URL and document secret
+        let decoded_doc_url = decode_doc_url(doc_url, &document_secret)?;
         let doc_discovery_key = decoded_doc_url.doc_url_info.doc_discovery_key;
+        let encryption_key = document_secret.encryption_key.take();
         let encrypted = if let Some(encrypted) = decoded_doc_url.doc_url_info.encrypted {
             if encrypted && encryption_key.is_none() {
-                panic!("Can not attach a peer to an encrypted document without an encryption key");
+                return Err(PeermergeError::BadArgument {
+                    context: "Invalid document secret, missing encryption key".to_string(),
+                });
             }
             encrypted
         } else {
-            panic!("Given doc url can only be used for proxying");
+            return Err(PeermergeError::BadArgument {
+                context: "Given doc URL is only usable for proxying".to_string(),
+            });
         };
+        let doc_signature_signing_key =
+            if let Some(key) = document_secret.doc_signature_signing_key.take() {
+                key
+            } else {
+                return Err(PeermergeError::BadArgument {
+                    context: "Invalid document secret, missing signing key".to_string(),
+                });
+            };
+        let doc_signature_verifying_key =
+            VerifyingKey::from_bytes(&decoded_doc_url.doc_url_info.doc_signature_verifying_key)
+                .map_err(|err| PeermergeError::BadArgument {
+                    context: format!("Invalid document url, {err}"),
+                })?;
+
         let meta_doc_data = decoded_doc_url
             .doc_url_appendix
             .expect("Writer needs to have an appendix")
@@ -890,7 +934,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
             &decoded_doc_url.doc_url_info.doc_public_key,
             proxy,
             encrypted,
-            encryption_key,
+            &encryption_key,
         )
         .await;
 
@@ -910,7 +954,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
                 write_feed_signing_key,
                 None,
                 encrypted,
-                encryption_key,
+                &encryption_key,
             )
             .await;
             (
@@ -934,16 +978,14 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
                 &Some(peer_header.clone()),
                 settings.max_entry_data_size_bytes,
             )?;
-            let write_feed_init_data: Vec<Vec<u8>> = init_peer_entries
-                .into_iter()
-                .map(|entry| serialize_entry(&entry).unwrap())
-                .collect();
+            let write_feed_init_data: Vec<Vec<u8>> =
+                serialize_init_entries(init_peer_entries, &doc_signature_signing_key)?;
             let write_feed_init_data_len = write_feed_init_data.len();
             let (_, write_feed, _) = create_new_write_memory_feed(
                 write_key_pair,
                 Some(write_feed_init_data),
                 encrypted,
-                encryption_key,
+                &encryption_key,
             )
             .await;
             (
@@ -969,6 +1011,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
         );
         let state = DocumentState::new(
             false,
+            doc_signature_verifying_key.to_bytes(),
             Some(encrypted),
             DocumentFeedsState::new_writer(
                 decoded_doc_url.doc_url_info.doc_public_key,
@@ -981,10 +1024,14 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
         Ok(Self::new_memory(
             peer_id,
             (doc_discovery_key, root_feed),
+            PartialKeypair {
+                public: doc_signature_verifying_key,
+                secret: Some(doc_signature_signing_key),
+            },
             Some((write_discovery_key, write_feed)),
             state,
             encrypted,
-            encryption_key.clone(),
+            encryption_key,
             settings,
         )
         .await)
@@ -993,6 +1040,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
     async fn new_memory(
         peer_id: PeerId,
         doc_feed: ([u8; 32], Feed<FeedMemoryPersistence>),
+        doc_signature_key_pair: PartialKeypair,
         write_feed: Option<([u8; 32], Feed<FeedMemoryPersistence>)>,
         state: DocumentState,
         encrypted: bool,
@@ -1013,6 +1061,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
         let proxy = state.proxy;
         let log_context = log_context(&state);
         let document_state = DocStateWrapper::new_memory(state).await;
+
         Self {
             feeds: Arc::new(feeds),
             document_state: Arc::new(Mutex::new(document_state)),
@@ -1020,6 +1069,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
             prefix: PathBuf::new(),
             proxy,
             doc_discovery_key,
+            doc_signature_key_pair,
             id,
             write_discovery_key,
             encrypted,
@@ -1096,16 +1146,24 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
         let postfix = encode_document_id(&prepare_result.document_id);
         let data_root_dir = data_root_dir.join(postfix);
 
-        // Create the root disk feed
-        let (_root_feed_length, root_feed, root_encryption_key) = create_new_write_disk_feed(
+        // Create the doc disk feed
+        let (_doc_feed_length, doc_feed, doc_encryption_key) = create_new_write_disk_feed(
             &data_root_dir,
-            prepare_result.doc_key_pair,
+            prepare_result.doc_signing_key,
             &prepare_result.doc_discovery_key,
             prepare_result.doc_feed_init_data,
             encrypted,
             &None,
         )
         .await;
+
+        // Make result read_only to make sure no one ever adds more entries to
+        // the doc feed.
+        if !doc_feed.make_read_only().await? {
+            return Err(PeermergeError::InvalidOperation {
+                context: "Could not make doc feed read-only".to_string(),
+            });
+        }
 
         // Create a write disk feed
         let (_write_feed_length, write_feed, _) = create_new_write_disk_feed(
@@ -1114,18 +1172,22 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
             &prepare_result.write_discovery_key,
             prepare_result.write_feed_init_data,
             encrypted,
-            &root_encryption_key,
+            &doc_encryption_key,
         )
         .await;
 
         Ok((
             Self::new_disk(
                 peer_id,
-                (prepare_result.doc_discovery_key, root_feed),
+                (prepare_result.doc_discovery_key, doc_feed),
+                PartialKeypair {
+                    public: prepare_result.doc_signature_verifying_key,
+                    secret: Some(prepare_result.doc_signature_signing_key),
+                },
                 Some((prepare_result.write_discovery_key, write_feed)),
                 prepare_result.state,
                 encrypted,
-                root_encryption_key,
+                doc_encryption_key,
                 &data_root_dir,
                 settings,
             )
@@ -1138,23 +1200,42 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
         peer_id: PeerId,
         peer_header: &NameDescription,
         doc_url: &str,
-        encryption_key: &Option<Vec<u8>>,
+        mut document_secret: DocumentSecret,
         data_root_dir: &PathBuf,
         settings: DocumentSettings,
     ) -> Result<Self, PeermergeError> {
         let proxy = false;
 
-        // Process keys from doc URL
-        let decoded_doc_url = decode_doc_url(doc_url, encryption_key)?;
+        // Process keys from doc URL and document secret
+        let decoded_doc_url = decode_doc_url(doc_url, &document_secret)?;
         let doc_discovery_key = decoded_doc_url.doc_url_info.doc_discovery_key;
+        let encryption_key = document_secret.encryption_key.take();
         let encrypted = if let Some(encrypted) = decoded_doc_url.doc_url_info.encrypted {
             if encrypted && encryption_key.is_none() {
-                panic!("Can not attach a peer to an encrypted document without an encryption key");
+                return Err(PeermergeError::BadArgument {
+                    context: "Invalid document secret, missing encryption key".to_string(),
+                });
             }
             encrypted
         } else {
-            panic!("Given doc url can only be used for proxying");
+            return Err(PeermergeError::BadArgument {
+                context: "Given doc URL is only usable for proxying".to_string(),
+            });
         };
+        let doc_signature_signing_key =
+            if let Some(key) = document_secret.doc_signature_signing_key.take() {
+                key
+            } else {
+                return Err(PeermergeError::BadArgument {
+                    context: "Invalid document secret, missing signing key".to_string(),
+                });
+            };
+        let doc_signature_verifying_key =
+            VerifyingKey::from_bytes(&decoded_doc_url.doc_url_info.doc_signature_verifying_key)
+                .map_err(|err| PeermergeError::BadArgument {
+                    context: format!("Invalid document url, {err}"),
+                })?;
+
         let meta_doc_data = decoded_doc_url
             .doc_url_appendix
             .expect("Writer needs to have an appendix")
@@ -1169,7 +1250,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
             &decoded_doc_url.doc_url_info.doc_discovery_key,
             proxy,
             encrypted,
-            encryption_key,
+            &encryption_key,
         )
         .await;
 
@@ -1187,10 +1268,8 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
             &Some(peer_header.clone()),
             settings.max_entry_data_size_bytes,
         )?;
-        let write_feed_init_data: Vec<Vec<u8>> = init_peer_entries
-            .into_iter()
-            .map(|entry| serialize_entry(&entry).unwrap())
-            .collect();
+        let write_feed_init_data: Vec<Vec<u8>> =
+            serialize_init_entries(init_peer_entries, &doc_signature_signing_key)?;
         let write_feed_init_data_len = write_feed_init_data.len();
 
         // Create the write feed
@@ -1200,7 +1279,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
             &write_discovery_key,
             write_feed_init_data,
             encrypted,
-            encryption_key,
+            &encryption_key,
         )
         .await;
 
@@ -1218,6 +1297,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
         );
         let state = DocumentState::new(
             proxy,
+            doc_signature_verifying_key.to_bytes(),
             Some(encrypted),
             DocumentFeedsState::new_writer(
                 decoded_doc_url.doc_url_info.doc_public_key,
@@ -1230,10 +1310,14 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
         Ok(Self::new_disk(
             peer_id,
             (doc_discovery_key, root_feed),
+            PartialKeypair {
+                public: doc_signature_verifying_key,
+                secret: Some(doc_signature_signing_key),
+            },
             Some((write_discovery_key, write_feed)),
             state,
             encrypted,
-            encryption_key.clone(),
+            encryption_key,
             &data_root_dir,
             settings,
         )
@@ -1247,13 +1331,17 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
         data_root_dir: &PathBuf,
     ) -> Result<Self, PeermergeError> {
         let proxy = true;
-        let doc_url = encode_proxy_doc_url(doc_url);
         let encrypted = false;
 
         // Process keys from doc URL
-        let decoded_doc_url = decode_doc_url(&doc_url, &None)?;
+        let decoded_doc_url = decode_doc_url(&doc_url, &DocumentSecret::empty())?;
         let document_id = decoded_doc_url.doc_url_info.document_id;
         let doc_discovery_key = decoded_doc_url.doc_url_info.doc_discovery_key;
+        let doc_signature_verifying_key =
+            VerifyingKey::from_bytes(&decoded_doc_url.doc_url_info.doc_signature_verifying_key)
+                .map_err(|err| PeermergeError::BadArgument {
+                    context: format!("Invalid document url, {err}"),
+                })?;
 
         // Create the doc feed
         let postfix = encode_document_id(&document_id);
@@ -1271,6 +1359,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
         // Initialize document state
         let state = DocumentState::new(
             proxy,
+            doc_signature_verifying_key.to_bytes(),
             None,
             DocumentFeedsState::new(decoded_doc_url.doc_url_info.doc_public_key),
             None,
@@ -1279,6 +1368,10 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
         Ok(Self::new_disk(
             peer_id,
             (doc_discovery_key, doc_feed),
+            PartialKeypair {
+                public: doc_signature_verifying_key,
+                secret: None,
+            },
             None,
             state,
             encrypted,
@@ -1303,7 +1396,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
 
     pub(crate) async fn open_disk(
         peer_id: PeerId,
-        encryption_key: &Option<Vec<u8>>,
+        document_secret: Option<DocumentSecret>,
         data_root_dir: &PathBuf,
         settings: DocumentSettings,
     ) -> Result<Self, PeermergeError> {
@@ -1311,9 +1404,25 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
         let state = document_state_wrapper.state();
         let id = state.document_id;
         let proxy = state.proxy;
+        let encryption_key = document_secret
+            .as_ref()
+            .and_then(|secret| secret.encryption_key.clone());
+        let doc_signature_signing_key = document_secret
+            .as_ref()
+            .and_then(|secret| secret.doc_signature_signing_key.clone());
+        let doc_signature_verifying_key =
+            VerifyingKey::from_bytes(&state.doc_signature_verifying_key).map_err(|err| {
+                PeermergeError::BadArgument {
+                    context: format!("Invalid document url, {err}"),
+                }
+            })?;
+
         let encrypted = if let Some(encrypted) = state.encrypted {
             if encrypted && encryption_key.is_none() {
-                panic!("Can not open and encrypted document without an encryption key");
+                return Err(PeermergeError::BadArgument {
+                    context: "Can not open and encrypted document without an encryption key"
+                        .to_string(),
+                });
             }
             encrypted
         } else {
@@ -1332,7 +1441,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
             &doc_discovery_key,
             proxy,
             encrypted,
-            encryption_key,
+            &encryption_key,
         )
         .await;
         feeds.insert(doc_discovery_key, Arc::new(Mutex::new(root_feed)));
@@ -1346,7 +1455,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
                     &discovery_key,
                     proxy,
                     encrypted,
-                    encryption_key,
+                    &encryption_key,
                 )
                 .await;
                 feeds.insert(discovery_key, Arc::new(Mutex::new(peer_feed)));
@@ -1367,7 +1476,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
                         &write_discovery_key,
                         proxy,
                         encrypted,
-                        encryption_key,
+                        &encryption_key,
                     )
                     .await;
                     feeds.insert(write_discovery_key, Arc::new(Mutex::new(write_feed)));
@@ -1417,6 +1526,10 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
         Ok(Self {
             feeds,
             document_state: Arc::new(Mutex::new(document_state_wrapper)),
+            doc_signature_key_pair: PartialKeypair {
+                public: doc_signature_verifying_key,
+                secret: doc_signature_signing_key,
+            },
             peer_id,
             prefix: data_root_dir.clone(),
             doc_discovery_key,
@@ -1457,7 +1570,8 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
 
     async fn new_disk(
         peer_id: PeerId,
-        root_feed: ([u8; 32], Feed<FeedDiskPersistence>),
+        doc_feed: ([u8; 32], Feed<FeedDiskPersistence>),
+        doc_signature_key_pair: PartialKeypair,
         write_feed: Option<([u8; 32], Feed<FeedDiskPersistence>)>,
         state: DocumentState,
         encrypted: bool,
@@ -1467,7 +1581,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
     ) -> Self {
         let id = state.document_id;
         let feeds: DashMap<[u8; 32], Arc<Mutex<Feed<FeedDiskPersistence>>>> = DashMap::new();
-        let (doc_discovery_key, doc_feed) = root_feed;
+        let (doc_discovery_key, doc_feed) = doc_feed;
         feeds.insert(doc_discovery_key, Arc::new(Mutex::new(doc_feed)));
         let write_discovery_key = if let Some((write_discovery_key, write_feed)) = write_feed {
             feeds.insert(write_discovery_key, Arc::new(Mutex::new(write_feed)));
@@ -1486,6 +1600,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
             prefix: data_root_dir.clone(),
             proxy,
             doc_discovery_key,
+            doc_signature_key_pair,
             id,
             settings,
             write_discovery_key,
@@ -1588,8 +1703,10 @@ where
 
 struct PrepareCreateResult {
     document_id: DocumentId,
-    doc_key_pair: SigningKey,
+    doc_signing_key: SigningKey,
     doc_discovery_key: FeedDiscoveryKey,
+    doc_signature_signing_key: SigningKey,
+    doc_signature_verifying_key: VerifyingKey,
     write_key_pair: SigningKey,
     write_discovery_key: [u8; 32],
     doc_feed_init_data: Vec<Vec<u8>>,
@@ -1609,11 +1726,15 @@ async fn prepare_create<F, O>(
 where
     F: FnOnce(&mut Transaction) -> Result<O, AutomergeError>,
 {
-    // Generate a doc feed key pair, its discovery key and the public key string
-    let (doc_key_pair, doc_discovery_key) = generate_keys();
-    let doc_verifying_key = doc_key_pair.verifying_key();
+    // Generate a doc feed signing pair, its discovery key and the public key string
+    let (doc_signing_key, doc_discovery_key) = generate_keys();
+    let doc_verifying_key = doc_signing_key.verifying_key();
     let doc_public_key = doc_verifying_key.to_bytes();
     let document_id = document_id_from_discovery_key(&doc_discovery_key);
+
+    // Generate the doc signature signing key
+    let doc_signature_signing_key = generate_signing_key();
+    let doc_signature_verifying_key = doc_signature_signing_key.verifying_key();
 
     // Generate a writeable feed key pair, its discovery key and the public key string
     let (write_key_pair, write_discovery_key) = generate_keys();
@@ -1629,10 +1750,8 @@ where
         init_cb,
     )
     .unwrap();
-    let doc_feed_init_data: Vec<Vec<u8>> = doc_feed_init_entries
-        .into_iter()
-        .map(|entry| serialize_entry(&entry).unwrap())
-        .collect();
+    let doc_feed_init_data: Vec<Vec<u8>> =
+        serialize_init_entries(doc_feed_init_entries, &doc_signature_signing_key)?;
 
     // Initialize the first peer
     let write_feed_init_entries = init_first_peer(
@@ -1643,10 +1762,8 @@ where
         document_header,
         max_entry_data_size_bytes,
     )?;
-    let write_feed_init_data: Vec<Vec<u8>> = write_feed_init_entries
-        .into_iter()
-        .map(|entry| serialize_entry(&entry).unwrap())
-        .collect();
+    let write_feed_init_data: Vec<Vec<u8>> =
+        serialize_init_entries(write_feed_init_entries, &doc_signature_signing_key)?;
 
     // Initialize document state
     let content = DocumentContent::new(
@@ -1662,6 +1779,7 @@ where
     );
     let state = DocumentState::new(
         false,
+        doc_signature_verifying_key.to_bytes(),
         Some(encrypted),
         DocumentFeedsState::new_writer(doc_public_key, peer_id, &write_public_key),
         Some(content),
@@ -1670,8 +1788,10 @@ where
     Ok((
         PrepareCreateResult {
             document_id,
-            doc_key_pair,
+            doc_signing_key,
             doc_discovery_key,
+            doc_signature_signing_key,
+            doc_signature_verifying_key,
             write_key_pair,
             write_discovery_key,
             doc_feed_init_data,

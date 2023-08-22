@@ -65,6 +65,10 @@ async fn memory_three_writers() -> anyhow::Result<()> {
             .len(),
         1
     );
+    let document_secret = peermerge_creator
+        .document_secret(&creator_doc_info.id())
+        .await
+        .unwrap();
 
     // Insert a map with a text field to the document
     let texts_id = peermerge_creator
@@ -111,9 +115,8 @@ async fn memory_three_writers() -> anyhow::Result<()> {
             &peermerge_creator
                 .sharing_info(&creator_doc_info.id())
                 .await?
-                .doc_url
-                .unwrap(),
-            &None,
+                .doc_url,
+            &document_secret,
         )
         .await?;
     peermerge_joiner
@@ -461,6 +464,8 @@ async fn process_creator_state_events(
                                 assert!(merge_result.merge_equals());
                             }
                         }
+                        let document_secret = peermerge.document_secret(&doc_id).await.unwrap();
+
                         // Now let's join in a latecomer peer to the creator peer
                         latecomer_attached = true;
                         let (proto_responder, proto_initiator) = create_pair_memory().await;
@@ -478,8 +483,8 @@ async fn process_creator_state_events(
                         .await;
                         let latecomer_doc_info = peermerge_latecomer
                             .attach_writer_document_memory(
-                                &peermerge.sharing_info(&doc_id).await?.doc_url.unwrap(),
-                                &None,
+                                &peermerge.sharing_info(&doc_id).await?.doc_url,
+                                &document_secret,
                             )
                             .await?;
                         peermerge_latecomer.watch(&doc_id, Some(vec![])).await;

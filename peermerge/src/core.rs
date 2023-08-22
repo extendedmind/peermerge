@@ -26,8 +26,8 @@ use crate::{
     automerge::AutomergeDoc,
     common::{
         cipher::{
-            decode_encryption_key, decode_reattach_secret, encode_document_id,
-            encode_encryption_key, encode_reattach_secret,
+            decode_document_secret, decode_reattach_secret, encode_document_id,
+            encode_document_secret, encode_reattach_secret, DocumentSecret,
         },
         keys::{signing_key_from_bytes, signing_key_to_bytes},
         storage::PeermergeStateWrapper,
@@ -230,11 +230,12 @@ where
     }
 
     #[instrument(skip(self), fields(peer_name = self.default_peer_header.name))]
-    pub async fn encryption_key(&self, document_id: &DocumentId) -> Option<String> {
+    pub async fn document_secret(&self, document_id: &DocumentId) -> Option<String> {
         let document = get_document(&self.documents, document_id).await.unwrap();
-        document
-            .encryption_key()
-            .map(|encryption_key| encode_encryption_key(&encryption_key))
+        let document_secret = document.document_secret();
+        document_secret
+            .as_ref()
+            .map(|document_secret| encode_document_secret(document_secret))
     }
 
     #[instrument(skip(self), fields(peer_name = self.default_peer_header.name))]
@@ -312,13 +313,13 @@ impl Peermerge<RandomAccessMemory, FeedMemoryPersistence> {
     pub async fn attach_writer_document_memory(
         &mut self,
         doc_url: &str,
-        encryption_key: &Option<String>,
+        document_secret: &str,
     ) -> Result<DocumentInfo, PeermergeError> {
         let document = Document::attach_writer_memory(
             self.peer_id,
             &self.default_peer_header,
             doc_url,
-            &decode_encryption_key(encryption_key)?,
+            decode_document_secret(document_secret)?,
             self.document_settings.clone(),
         )
         .await?;
@@ -329,7 +330,7 @@ impl Peermerge<RandomAccessMemory, FeedMemoryPersistence> {
     pub async fn reattach_writer_document_memory(
         &mut self,
         doc_url: &str,
-        encryption_key: &Option<String>,
+        document_secret: &str,
         reattach_secret: &str,
     ) -> Result<DocumentInfo, PeermergeError> {
         let (peer_id, write_feed_key_pair_bytes) = decode_reattach_secret(reattach_secret)?;
@@ -339,7 +340,7 @@ impl Peermerge<RandomAccessMemory, FeedMemoryPersistence> {
             write_feed_signing_key,
             &self.default_peer_header.name,
             doc_url,
-            &decode_encryption_key(encryption_key)?,
+            decode_document_secret(document_secret)?,
             self.document_settings.clone(),
         )
         .await?;
@@ -475,7 +476,7 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
     }
 
     pub async fn open_disk(
-        encryption_keys: HashMap<DocumentId, String>,
+        document_secrets: HashMap<DocumentId, String>,
         data_root_dir: &PathBuf,
         mut state_event_sender: Option<UnboundedSender<StateEvent>>,
     ) -> Result<Self, PeermergeError> {
@@ -489,13 +490,17 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
         let documents: DashMap<DocumentId, Document<RandomAccessDisk, FeedDiskPersistence>> =
             DashMap::new();
         for document_id in &state_wrapper.state.document_ids {
-            let encryption_key: Option<Vec<u8>> =
-                decode_encryption_key(&encryption_keys.get(document_id).cloned())?;
+            let document_secret: Option<DocumentSecret> =
+                if let Some(document_secret) = &document_secrets.get(document_id).cloned() {
+                    Some(decode_document_secret(document_secret)?)
+                } else {
+                    None
+                };
             let postfix = encode_document_id(document_id);
             let document_data_root_dir = data_root_dir.join(postfix);
             let document = Document::open_disk(
                 peer_id,
-                &encryption_key,
+                document_secret,
                 &document_data_root_dir,
                 document_settings.clone(),
             )
@@ -547,13 +552,13 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
     pub async fn attach_writer_document_disk(
         &mut self,
         doc_url: &str,
-        encryption_key: &Option<String>,
+        document_secret: &str,
     ) -> Result<DocumentInfo, PeermergeError> {
         let document = Document::attach_writer_disk(
             self.peer_id,
             &self.default_peer_header,
             doc_url,
-            &decode_encryption_key(encryption_key)?,
+            decode_document_secret(document_secret)?,
             &self.prefix,
             self.document_settings.clone(),
         )

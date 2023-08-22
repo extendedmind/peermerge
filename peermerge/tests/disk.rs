@@ -67,16 +67,15 @@ async fn disk_two_peers(encrypted: bool) -> anyhow::Result<()> {
     let doc_url = peermerge_creator
         .sharing_info(&creator_doc_info.id())
         .await?
-        .doc_url
+        .doc_url;
+    let document_secret = peermerge_creator
+        .document_secret(&creator_doc_info.id())
+        .await
         .unwrap();
-    let encryption_key = peermerge_creator
-        .encryption_key(&creator_doc_info.id())
-        .await;
     assert_eq!(
         get_doc_url_info(&doc_url).unwrap().encrypted,
         Some(encrypted)
     );
-    assert_eq!(encryption_key.is_some(), encrypted);
 
     let joiner_dir = Builder::new()
         .prefix(&format!(
@@ -99,7 +98,7 @@ async fn disk_two_peers(encrypted: bool) -> anyhow::Result<()> {
     )
     .await;
     let joiner_doc_info = peermerge_joiner
-        .attach_writer_document_disk(&doc_url, &encryption_key)
+        .attach_writer_document_disk(&doc_url, &document_secret)
         .await?;
 
     run_disk_two_peers(
@@ -129,12 +128,10 @@ async fn disk_two_peers(encrypted: bool) -> anyhow::Result<()> {
     );
     assert_eq!(creator_document_infos[0].id(), creator_doc_info.id());
 
-    let mut creator_encryption_keys = HashMap::new();
-    if let Some(encryption_key) = encryption_key.as_ref() {
-        creator_encryption_keys.insert(creator_doc_info.id(), encryption_key.clone());
-    }
+    let mut creator_document_secrets = HashMap::new();
+    creator_document_secrets.insert(creator_doc_info.id(), document_secret.clone());
     let mut peermerge_creator =
-        Peermerge::open_disk(creator_encryption_keys, &creator_dir, None).await?;
+        Peermerge::open_disk(creator_document_secrets, &creator_dir, None).await?;
     let values = peermerge_creator
         .transact_mut(
             &creator_doc_info.id(),
@@ -166,11 +163,9 @@ async fn disk_two_peers(encrypted: bool) -> anyhow::Result<()> {
     );
     assert_eq!(joiner_document_infos[0].id(), joiner_doc_info.id());
 
-    let mut joiner_encryption_keys = HashMap::new();
-    if let Some(encryption_key) = encryption_key.as_ref() {
-        joiner_encryption_keys.insert(joiner_doc_info.id(), encryption_key.clone());
-    }
-    let peermerge_joiner = Peermerge::open_disk(joiner_encryption_keys, &joiner_dir, None).await?;
+    let mut joiner_document_secrets = HashMap::new();
+    joiner_document_secrets.insert(joiner_doc_info.id(), document_secret);
+    let peermerge_joiner = Peermerge::open_disk(joiner_document_secrets, &joiner_dir, None).await?;
 
     run_disk_two_peers(
         peermerge_creator,

@@ -53,14 +53,14 @@ async fn proxy_disk_encrypted() -> anyhow::Result<()> {
     let sharing_info = peermerge_creator
         .sharing_info(&creator_doc_info.id())
         .await?;
-    let doc_url = sharing_info.doc_url.unwrap();
+    let doc_url = sharing_info.doc_url;
     let proxy_doc_url = sharing_info.proxy_doc_url;
-    let encryption_key = peermerge_creator
-        .encryption_key(&creator_doc_info.id())
-        .await;
+    let document_secret = peermerge_creator
+        .document_secret(&creator_doc_info.id())
+        .await
+        .unwrap();
     let doc_url_info = get_doc_url_info(&doc_url)?;
     assert_eq!(doc_url_info.encrypted, Some(true));
-    assert!(encryption_key.is_some());
     assert!(!sharing_info.proxy);
 
     let mut peermerge_creator_for_task = peermerge_creator.clone();
@@ -85,12 +85,9 @@ async fn proxy_disk_encrypted() -> anyhow::Result<()> {
             .build()?,
     )
     .await;
-    let proxy_doc_info = peermerge_proxy
+    peermerge_proxy
         .attach_proxy_document_disk(&proxy_doc_url)
         .await?;
-    let sharing_info = peermerge_proxy.sharing_info(&proxy_doc_info.id()).await?;
-    assert!(sharing_info.proxy);
-    assert!(sharing_info.doc_url.is_none());
 
     let mut peermerge_proxy_for_task = peermerge_proxy.clone();
     let proxy_connect = task::spawn(async move {
@@ -138,7 +135,7 @@ async fn proxy_disk_encrypted() -> anyhow::Result<()> {
         .set_state_event_sender(Some(proxy_state_event_sender))
         .await;
     let joiner_doc_info = peermerge_joiner
-        .attach_writer_document_memory(&doc_url, &encryption_key)
+        .attach_writer_document_memory(&doc_url, &document_secret)
         .await?;
     let reattach_secret: String = peermerge_joiner
         .reattach_secret(&joiner_doc_info.id())
@@ -198,7 +195,7 @@ async fn proxy_disk_encrypted() -> anyhow::Result<()> {
         .set_state_event_sender(Some(proxy_state_event_sender))
         .await;
     let _joiner_doc_info = peermerge_joiner
-        .reattach_writer_document_memory(&doc_url, &encryption_key, &reattach_secret)
+        .reattach_writer_document_memory(&doc_url, &document_secret, &reattach_secret)
         .await?;
     let mut peermerge_joiner_for_task = peermerge_joiner.clone();
     let joiner_connect = task::spawn(async move {

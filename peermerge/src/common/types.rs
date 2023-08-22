@@ -27,6 +27,7 @@ pub struct DocUrlInfo {
     pub doc_public_key: [u8; 32],
     pub doc_discovery_key: [u8; 32],
     pub document_id: DocumentId,
+    pub doc_signature_verifying_key: [u8; 32],
     pub proxy_only: bool,
     pub encrypted: Option<bool>,
 }
@@ -39,6 +40,7 @@ impl DocUrlInfo {
         doc_public_key: [u8; 32],
         doc_discovery_key: [u8; 32],
         document_id: DocumentId,
+        doc_signature_verifying_key: [u8; 32],
         encrypted: bool,
     ) -> Self {
         Self {
@@ -48,6 +50,7 @@ impl DocUrlInfo {
             doc_public_key,
             doc_discovery_key,
             document_id,
+            doc_signature_verifying_key,
             proxy_only: false,
             encrypted: Some(encrypted),
         }
@@ -60,6 +63,7 @@ impl DocUrlInfo {
         doc_public_key: [u8; 32],
         doc_discovery_key: [u8; 32],
         document_id: DocumentId,
+        doc_signature_verifying_key: [u8; 32],
     ) -> Self {
         Self {
             version,
@@ -68,6 +72,7 @@ impl DocUrlInfo {
             doc_public_key,
             doc_discovery_key,
             document_id,
+            doc_signature_verifying_key,
             proxy_only: true,
             encrypted: None,
         }
@@ -95,7 +100,7 @@ impl DocumentInfo {
 pub struct DocumentSharingInfo {
     pub proxy: bool,
     pub proxy_doc_url: String,
-    pub doc_url: Option<String>,
+    pub doc_url: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]

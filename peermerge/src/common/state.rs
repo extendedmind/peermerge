@@ -1,5 +1,6 @@
 use std::fmt::Debug;
 
+use hypercore_protocol::hypercore::SigningKey;
 use uuid::Uuid;
 
 use crate::{
@@ -63,6 +64,8 @@ pub(crate) struct DocumentState {
     pub(crate) version: u8,
     /// Document id. Derived from doc_discovery_key.
     pub(crate) document_id: DocumentId,
+    /// Document siganture verifying key in bytes.
+    pub(crate) doc_signature_verifying_key: [u8; 32],
     /// Is the document encrypted. If None it is unknown and proxy must be true.
     pub(crate) encrypted: Option<bool>,
     /// Is this a proxy document.
@@ -75,6 +78,7 @@ pub(crate) struct DocumentState {
 impl DocumentState {
     pub(crate) fn new(
         proxy: bool,
+        doc_signature_verifying_key: [u8; 32],
         encrypted: Option<bool>,
         feeds_state: DocumentFeedsState,
         content: Option<DocumentContent>,
@@ -82,6 +86,7 @@ impl DocumentState {
         Self::new_with_version(
             PEERMERGE_VERSION,
             proxy,
+            doc_signature_verifying_key,
             encrypted,
             feeds_state,
             content,
@@ -91,6 +96,7 @@ impl DocumentState {
     pub(crate) fn new_with_version(
         version: u8,
         proxy: bool,
+        doc_signature_verifying_key: [u8; 32],
         encrypted: Option<bool>,
         feeds_state: DocumentFeedsState,
         content: Option<DocumentContent>,
@@ -98,9 +104,10 @@ impl DocumentState {
         let document_id = document_id_from_discovery_key(&feeds_state.doc_discovery_key);
         Self {
             version,
+            proxy,
+            doc_signature_verifying_key,
             document_id,
             encrypted,
-            proxy,
             feeds_state,
             content,
         }
@@ -125,21 +132,16 @@ impl DocumentState {
         }
     }
 
-    pub(crate) fn proxy_doc_url(&self) -> String {
-        encode_doc_url(&self.feeds_state.doc_public_key, false, &None, &None)
-    }
-
     pub(crate) fn doc_url(
         &self,
         initial_meta_doc_data: Vec<u8>,
+        doc_signature_signing_key: &SigningKey,
         encryption_key: &Option<Vec<u8>>,
     ) -> String {
-        if self.proxy {
-            panic!("Can't encode doc url for proxy");
-        }
         if let Some((document_type, document_header)) = self.document_type_and_header() {
             encode_doc_url(
                 &self.feeds_state.doc_public_key,
+                doc_signature_signing_key,
                 false,
                 &Some(DocUrlAppendix {
                     meta_doc_data: initial_meta_doc_data,
@@ -162,6 +164,7 @@ impl DocumentState {
                 self.feeds_state.doc_public_key,
                 self.feeds_state.doc_discovery_key,
                 self.document_id,
+                self.doc_signature_verifying_key
             )
         } else {
             DocUrlInfo::new(
@@ -171,6 +174,7 @@ impl DocumentState {
                 self.feeds_state.doc_public_key,
                 self.feeds_state.doc_discovery_key,
                 self.document_id,
+                self.doc_signature_verifying_key,
                 self.encrypted.unwrap(),
             )
         }

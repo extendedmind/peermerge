@@ -1,5 +1,6 @@
 //! Binary encoding of needed peermerge persistent data
 use compact_encoding::{CompactEncoding, EncodingError, State};
+use hypercore_protocol::hypercore::SigningKey;
 use std::convert::TryInto;
 
 pub(crate) use crate::common::entry::Entry;
@@ -8,11 +9,12 @@ pub(crate) use crate::common::state::{DocumentState, PeermergeState};
 use crate::document::DocumentSettings;
 use crate::feed::FeedPublicKey;
 
-use super::cipher::DocUrlAppendix;
+use super::cipher::{add_signature, DocUrlAppendix, DocumentSecret};
+use super::constants::PEERMERGE_VERSION;
 use super::entry::EntryContent;
 use super::message::{FeedSyncedMessage, FeedsChangedMessage};
 use super::state::{DocumentContent, DocumentCursor, DocumentFeedInfo, DocumentFeedsState};
-use crate::{NameDescription, PeerId};
+use crate::{NameDescription, PeerId, PeermergeError};
 
 impl CompactEncoding<PeermergeState> for State {
     fn preencode(&mut self, value: &PeermergeState) -> Result<usize, EncodingError> {
@@ -83,6 +85,7 @@ impl CompactEncoding<DocumentSettings> for State {
 impl CompactEncoding<DocumentState> for State {
     fn preencode(&mut self, value: &DocumentState) -> Result<usize, EncodingError> {
         self.preencode(&value.version)?;
+        self.preencode_fixed_32()?; // doc_signature_verifying_key
         self.add_end(1)?; // flags
         self.preencode(&value.feeds_state)?; // flags
         if let Some(content) = &value.content {
@@ -93,6 +96,7 @@ impl CompactEncoding<DocumentState> for State {
 
     fn encode(&mut self, value: &DocumentState, buffer: &mut [u8]) -> Result<usize, EncodingError> {
         self.encode(&value.version, buffer)?;
+        self.encode_fixed_32(&value.doc_signature_verifying_key, buffer)?;
         let flags_index = self.start();
         let mut flags: u8 = 0;
         self.add_start(1)?;
@@ -114,6 +118,8 @@ impl CompactEncoding<DocumentState> for State {
 
     fn decode(&mut self, buffer: &[u8]) -> Result<DocumentState, EncodingError> {
         let version: u8 = self.decode(buffer)?;
+        let doc_signature_verifying_key: [u8; 32] =
+            self.decode_fixed_32(buffer)?.to_vec().try_into().unwrap();
         let flags: u8 = self.decode(buffer)?;
         let proxy = flags & 1 != 0;
         let encrypted: Option<bool> = if !proxy { Some(flags & 2 != 0) } else { None };
@@ -126,6 +132,7 @@ impl CompactEncoding<DocumentState> for State {
         Ok(DocumentState::new_with_version(
             version,
             proxy,
+            doc_signature_verifying_key,
             encrypted,
             feeds_state,
             content,
@@ -795,6 +802,64 @@ impl CompactEncoding<NameDescription> for State {
     }
 }
 
+impl CompactEncoding<DocumentSecret> for State {
+    fn preencode(&mut self, value: &DocumentSecret) -> Result<usize, EncodingError> {
+        self.add_end(2)?; // version and flags
+        if let Some(key) = &value.encryption_key {
+            self.preencode(key)?;
+        }
+        if value.doc_signature_signing_key.is_some() {
+            self.preencode_fixed_32()?;
+        }
+        Ok(self.end())
+    }
+
+    fn encode(
+        &mut self,
+        value: &DocumentSecret,
+        buffer: &mut [u8],
+    ) -> Result<usize, EncodingError> {
+        self.encode(&PEERMERGE_VERSION, buffer)?;
+        let flags_index = self.start();
+        let mut flags: u8 = 0;
+        self.add_start(1)?;
+        if let Some(encryption_key) = &value.encryption_key {
+            flags |= 1;
+            self.encode(encryption_key, buffer)?;
+        }
+        if let Some(doc_signature_signing_key) = &value.doc_signature_signing_key {
+            flags |= 2;
+            self.encode_fixed_32(&doc_signature_signing_key.to_bytes(), buffer)?;
+        }
+
+        buffer[flags_index] = flags;
+        Ok(self.start())
+    }
+
+    fn decode(&mut self, buffer: &[u8]) -> Result<DocumentSecret, EncodingError> {
+        let version: u8 = self.decode(buffer)?;
+        let flags: u8 = self.decode(buffer)?;
+        let encryption_key: Option<Vec<u8>> = if flags & 1 != 0 {
+            let key: Vec<u8> = self.decode(buffer)?;
+            Some(key)
+        } else {
+            None
+        };
+        let doc_signature_signing_key: Option<SigningKey> = if flags & 2 != 0 {
+            let key: [u8; 32] = self.decode_fixed_32(buffer)?.to_vec().try_into().unwrap();
+            Some(SigningKey::from_bytes(&key))
+        } else {
+            None
+        };
+
+        Ok(DocumentSecret {
+            version,
+            encryption_key,
+            doc_signature_signing_key,
+        })
+    }
+}
+
 impl CompactEncoding<DocUrlAppendix> for State {
     fn preencode(&mut self, value: &DocUrlAppendix) -> Result<usize, EncodingError> {
         self.add_end(1)?; // flags
@@ -855,7 +920,43 @@ impl CompactEncoding<DocUrlAppendix> for State {
     }
 }
 
-pub(crate) fn serialize_entry(entry: &Entry) -> Result<Vec<u8>, EncodingError> {
+pub(crate) fn serialize_init_entries(
+    init_entries: Vec<Entry>,
+    doc_signature_signing_key: &SigningKey,
+) -> Result<Vec<Vec<u8>>, PeermergeError> {
+    init_entries
+        .into_iter()
+        .enumerate()
+        .map(|(i, entry)| {
+            if i == 0 {
+                if !matches!(
+                    entry.content,
+                    EntryContent::InitDoc { .. } | EntryContent::InitPeer { .. }
+                ) {
+                    Err(PeermergeError::InvalidOperation {
+                        context: "First init entry not InitDoc nor InitPeer".to_string(),
+                    })
+                } else {
+                    let serialized_entry = serialize_entry(&entry);
+                    match serialized_entry {
+                        Ok(mut serialized_entry) => {
+                            add_signature(&mut serialized_entry, doc_signature_signing_key);
+                            Ok(serialized_entry)
+                        }
+                        Err(err) => Err(err),
+                    }
+                }
+            } else {
+                // Only the first entry needs to be signed, the ones after that
+                // are guaranteed to be derived from the first entry's signature
+                // via Hypercore's merkle tree.
+                serialize_entry(&entry)
+            }
+        })
+        .collect()
+}
+
+pub(crate) fn serialize_entry(entry: &Entry) -> Result<Vec<u8>, PeermergeError> {
     let mut enc_state = State::new();
     enc_state.preencode(entry)?;
     let mut buffer = enc_state.create_buffer();

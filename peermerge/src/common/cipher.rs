@@ -3,6 +3,7 @@ use chacha20poly1305::{
     XChaCha20Poly1305, XNonce,
 };
 use compact_encoding::{CompactEncoding, State};
+use hypercore_protocol::hypercore::{sign, verify, Signature, SigningKey, VerifyingKey};
 use std::convert::TryInto;
 use std::fmt::Debug;
 use uuid::Uuid;
@@ -18,6 +19,7 @@ use super::constants::PEERMERGE_VERSION;
 const DOC_URL_PREFIX: &str = "peermerge:/";
 const PLAINTEXT_PARAM: &str = "?pt=";
 const CIPHERTEXT_PARAM: &str = "?ct=";
+const SIGNATURE_PARAM: &str = "s=";
 
 /// Generate new v4 UUID. Convenience method to generate UUIDs using
 /// just peermerge without importing the uuid crate and configuring
@@ -62,17 +64,17 @@ pub(crate) fn get_doc_url_info_and_appendix_position(
     doc_url: &str,
 ) -> Result<(DocUrlInfo, Option<(usize, usize, bool)>), PeermergeError> {
     let (domain_end, appendix_position) = get_domain_end_and_appendix_start_end_encrypted(doc_url);
-    let (version, child, feed_type, doc_public_key, doc_discovery_key, document_id) =
-        decode_domain(doc_url, domain_end)?;
+    let domain = decode_domain(doc_url, domain_end, appendix_position)?;
     if let Some((_, _, encrypted)) = &appendix_position {
         Ok((
             DocUrlInfo::new(
-                version,
-                child,
-                feed_type,
-                doc_public_key,
-                doc_discovery_key,
-                document_id,
+                domain.version,
+                domain.child,
+                domain.feed_type,
+                domain.doc_public_key,
+                domain.doc_discovery_key,
+                domain.document_id,
+                domain.doc_signature_verifying_key.to_bytes(),
                 *encrypted,
             ),
             appendix_position,
@@ -80,12 +82,13 @@ pub(crate) fn get_doc_url_info_and_appendix_position(
     } else {
         Ok((
             DocUrlInfo::new_proxy_only(
-                version,
-                child,
-                feed_type,
-                doc_public_key,
-                doc_discovery_key,
-                document_id,
+                domain.version,
+                domain.child,
+                domain.feed_type,
+                domain.doc_public_key,
+                domain.doc_discovery_key,
+                domain.document_id,
+                domain.doc_signature_verifying_key.to_bytes(),
             ),
             appendix_position,
         ))
@@ -130,12 +133,17 @@ impl EntryCipher {
 
 pub(crate) fn encode_doc_url(
     doc_public_key: &FeedPublicKey,
+    doc_signature_signing_key: &SigningKey,
     child: bool,
     doc_url_appendix: &Option<DocUrlAppendix>,
     encryption_key: &Option<Vec<u8>>,
 ) -> String {
-    let encoded_domain = encode_domain(doc_public_key, child);
-    if let Some(doc_url_appendix) = doc_url_appendix {
+    let encoded_domain = encode_domain(
+        doc_public_key,
+        &doc_signature_signing_key.verifying_key(),
+        child,
+    );
+    let mut url = if let Some(doc_url_appendix) = doc_url_appendix {
         let mut enc_state = State::new();
         enc_state
             .preencode(doc_url_appendix)
@@ -155,15 +163,26 @@ pub(crate) fn encode_doc_url(
             let encoded_plaintext = encode_base64_nopad(&appendix_buffer);
             format!("{PLAINTEXT_PARAM}{encoded_plaintext}")
         };
-        format!("peermerge:/{encoded_domain}{postfix}")
+        format!("peermerge:/{encoded_domain}{postfix}&{SIGNATURE_PARAM}")
     } else {
-        format!("peermerge:/{encoded_domain}")
-    }
+        format!("peermerge:/{encoded_domain}?{SIGNATURE_PARAM}")
+    };
+
+    // Lastly sign the entire string url and append signature to the end
+    sign_url(&mut url, doc_signature_signing_key);
+    url
 }
 
-pub(crate) fn encode_proxy_doc_url(doc_url: &str) -> String {
+pub(crate) fn proxy_doc_url_from_doc_url(
+    doc_url: &str,
+    doc_signature_signing_key: &SigningKey,
+) -> String {
     let (domain_end, _) = get_domain_end_and_appendix_start_end_encrypted(doc_url);
-    doc_url[..domain_end].to_string()
+    let mut url = format!("{}?{}", &doc_url[..domain_end], SIGNATURE_PARAM);
+
+    // Lastly sign the entire string URL and append signature to the end
+    sign_url(&mut url, doc_signature_signing_key);
+    url
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -181,17 +200,32 @@ pub(crate) struct DecodedDocUrl {
 
 pub(crate) fn decode_doc_url(
     doc_url: &str,
-    encryption_key: &Option<Vec<u8>>,
+    document_secret: &DocumentSecret,
 ) -> Result<DecodedDocUrl, PeermergeError> {
-    assert_eq!(&doc_url[..DOC_URL_PREFIX.len()], DOC_URL_PREFIX);
+    if &doc_url[..DOC_URL_PREFIX.len()] != DOC_URL_PREFIX {
+        return Err(PeermergeError::BadArgument {
+            context: format!("Given doc URL did not start with {DOC_URL_PREFIX}"),
+        });
+    }
 
     let (doc_url_info, appendix_position) = get_doc_url_info_and_appendix_position(doc_url)?;
+    if let Some(doc_signature_signing_key) = &document_secret.doc_signature_signing_key {
+        if doc_url_info.doc_signature_verifying_key
+            != doc_signature_signing_key.verifying_key().to_bytes()
+        {
+            return Err(PeermergeError::BadArgument {
+                context: "Verifying key in doc URL does not match that given as document secret"
+                    .to_string(),
+            });
+        }
+    }
+
     let doc_url_appendix: Option<DocUrlAppendix> =
         if let Some((appendix_start, appendix_end, encrypted)) = appendix_position {
             let buffer = decode_base64_nopad(&doc_url[appendix_start..appendix_end])?;
             let appendix_buffer: Option<Vec<u8>> = if encrypted {
                 // The url indicates that its encrypted. If an encryption key is given, use it to unwrap the header
-                if let Some(encryption_key) = encryption_key {
+                if let Some(encryption_key) = &document_secret.encryption_key {
                     let nonce = generate_nonce(&doc_url_info.doc_public_key, 0);
                     let cipher = XChaCha20Poly1305::new_from_slice(encryption_key).unwrap();
                     Some(cipher.decrypt(&nonce, &*buffer).unwrap())
@@ -223,8 +257,16 @@ pub(crate) fn encode_document_id(document_id: &DocumentId) -> String {
     encode_base64_nopad(document_id)
 }
 
-pub(crate) fn encode_encryption_key(encryption_key: &[u8]) -> String {
-    encode_base64_nopad(encryption_key)
+pub(crate) fn encode_document_secret(document_secret: &DocumentSecret) -> String {
+    let mut enc_state = State::new();
+    enc_state
+        .preencode(document_secret)
+        .expect("Pre-encoding document secret should not fail");
+    let mut buffer = enc_state.create_buffer();
+    enc_state
+        .encode(document_secret, &mut buffer)
+        .expect("Encoding document secret should not fail");
+    encode_base64_nopad(&buffer)
 }
 
 pub(crate) fn encode_reattach_secret(peer_id: &PeerId, key_pair: &[u8]) -> String {
@@ -233,13 +275,49 @@ pub(crate) fn encode_reattach_secret(peer_id: &PeerId, key_pair: &[u8]) -> Strin
     encode_base64_nopad(&data)
 }
 
-pub(crate) fn decode_encryption_key(
-    encryption_key: &Option<String>,
-) -> Result<Option<Vec<u8>>, PeermergeError> {
-    encryption_key
-        .as_ref()
-        .map(|key| decode_base64_nopad(key))
-        .transpose()
+#[derive(Debug, Clone)]
+pub(crate) struct DocumentSecret {
+    pub(crate) version: u8,
+    pub(crate) encryption_key: Option<Vec<u8>>,
+    pub(crate) doc_signature_signing_key: Option<SigningKey>,
+}
+
+impl DocumentSecret {
+    pub(crate) fn new(
+        encryption_key: Option<Vec<u8>>,
+        doc_signature_signing_key: Option<SigningKey>,
+    ) -> Self {
+        Self {
+            version: PEERMERGE_VERSION,
+            encryption_key,
+            doc_signature_signing_key,
+        }
+    }
+
+    pub(crate) fn empty() -> Self {
+        Self {
+            version: PEERMERGE_VERSION,
+            encryption_key: None,
+            doc_signature_signing_key: None,
+        }
+    }
+}
+
+pub(crate) fn decode_document_secret(
+    document_secret: &str,
+) -> Result<DocumentSecret, PeermergeError> {
+    let document_secret = decode_base64_nopad(document_secret)?;
+    let mut dec_state = State::from_buffer(&document_secret);
+    let document_secret: DocumentSecret = dec_state.decode(&document_secret)?;
+    if document_secret.version != PEERMERGE_VERSION {
+        return Err(PeermergeError::BadArgument {
+            context: format!(
+                "Invalid document secret version, expected {PEERMERGE_VERSION}, got {}",
+                document_secret.version
+            ),
+        });
+    }
+    Ok(document_secret)
 }
 
 pub(crate) fn decode_reattach_secret(
@@ -258,37 +336,49 @@ pub(crate) fn decode_reattach_secret(
     Ok((decoded[..16].try_into().unwrap(), decoded[16..].to_vec()))
 }
 
-fn encode_domain(doc_public_key: &[u8; 32], child: bool) -> String {
+pub(crate) fn add_signature(data: &mut Vec<u8>, doc_signature_signing_key: &SigningKey) {
+    let signature: [u8; 64] = sign(doc_signature_signing_key, data).to_bytes();
+    data.extend(signature);
+}
+
+fn encode_domain(
+    doc_public_key: &FeedPublicKey,
+    doc_signature_verifying_key: &VerifyingKey,
+    child: bool,
+) -> String {
     let mut domain: Vec<u8> = Vec::with_capacity(32 + 2);
     domain.push(PEERMERGE_VERSION);
     let feed_type = FeedType::Hypercore as u8;
     let header: u8 = if child { feed_type | 0x80 } else { feed_type };
     domain.push(header);
     domain.extend(doc_public_key);
+    domain.extend(doc_signature_verifying_key.to_bytes());
     encode_base64_nopad(&domain)
+}
+
+#[derive(Debug, Clone)]
+struct DocUrlDomain {
+    version: u8,
+    child: bool,
+    feed_type: FeedType,
+    doc_public_key: FeedPublicKey,
+    doc_discovery_key: FeedDiscoveryKey,
+    document_id: DocumentId,
+    doc_signature_verifying_key: VerifyingKey,
 }
 
 fn decode_domain(
     doc_url: &str,
     domain_end: usize,
-) -> Result<
-    (
-        u8,
-        bool,
-        FeedType,
-        FeedPublicKey,
-        FeedDiscoveryKey,
-        DocumentId,
-    ),
-    PeermergeError,
-> {
+    appendix_position: Option<(usize, usize, bool)>,
+) -> Result<DocUrlDomain, PeermergeError> {
     let domain = decode_base64_nopad(&doc_url[DOC_URL_PREFIX.len()..domain_end])?;
-    if domain.len() != 32 + 2 {
+    if domain.len() != 64 + 2 {
         return Err(PeermergeError::BadArgument {
             context: format!(
                 "Invalid URL domain length {}, expected {}",
                 domain.len(),
-                32 + 2
+                64 + 2
             ),
         });
     }
@@ -312,19 +402,52 @@ fn decode_domain(
             context: "Invalid URL feed type, only hypercore supported".to_string(),
         });
     }
-    // URL contains the document's root public key, document id is
-    // the discovery key
-    let doc_public_key: FeedPublicKey = domain[2..].try_into().unwrap();
+    // URL contains the document's doc public key, from which
+    // the discovery key and document id are derived
+    let doc_public_key: FeedPublicKey = domain[2..2 + 32].try_into().unwrap();
     let doc_discovery_key: FeedDiscoveryKey = discovery_key_from_public_key(&doc_public_key);
     let document_id: DocumentId = document_id_from_discovery_key(&doc_discovery_key);
-    Ok((
+
+    // URL ends with the document's signature verifying key, which
+    // is used to verify the signature in the end.
+    let doc_signature_verifying_key: [u8; 32] = domain[2 + 32..].try_into().unwrap();
+    let doc_signature_verifying_key = VerifyingKey::from_bytes(&doc_signature_verifying_key)
+        .map_err(|err| PeermergeError::BadArgument {
+            context: format!("Could not parse valid signature verifying key from doc URL, {err}"),
+        })?;
+
+    let (signature_position, expected_signature_param) =
+        if let Some((_, appendix_end, _)) = appendix_position {
+            (appendix_end, format!("&{SIGNATURE_PARAM}"))
+        } else {
+            (domain_end, format!("?{SIGNATURE_PARAM}"))
+        };
+
+    // Verify the signature at the end of the doc URL
+    let (unsigned_url, signature_base64) = if doc_url[signature_position..].len() < 4
+        || doc_url[signature_position..signature_position + 3] != expected_signature_param
+    {
+        return Err(PeermergeError::BadArgument {
+            context: "Invalid URL, missing signature".to_string(),
+        });
+    } else {
+        (
+            &doc_url[..signature_position + 3],
+            &doc_url[signature_position + 3..],
+        )
+    };
+    let signature = decode_base64_nopad(signature_base64)?;
+    verify_url_signature(unsigned_url, &signature, &doc_signature_verifying_key)?;
+
+    Ok(DocUrlDomain {
         version,
         child,
         feed_type,
         doc_public_key,
         doc_discovery_key,
         document_id,
-    ))
+        doc_signature_verifying_key,
+    })
 }
 
 fn get_domain_end_and_appendix_start_end_encrypted(
@@ -365,4 +488,28 @@ fn generate_nonce(public_key: &[u8; 32], index: u64) -> XNonce {
     let mut nonce = public_key[..16].to_vec();
     nonce.extend(index.to_le_bytes());
     XNonce::clone_from_slice(&nonce)
+}
+
+fn sign_url(unsigned_url: &mut String, doc_signature_signing_key: &SigningKey) {
+    let url_bytes = unsigned_url.as_bytes();
+    let signature = sign(doc_signature_signing_key, url_bytes).to_bytes();
+    unsigned_url.push_str(&encode_base64_nopad(&signature));
+}
+
+fn verify_url_signature(
+    unsigned_url: &str,
+    signature: &[u8],
+    doc_signature_verifying_key: &VerifyingKey,
+) -> Result<(), PeermergeError> {
+    let signature: [u8; 64] = signature
+        .try_into()
+        .map_err(|err| PeermergeError::BadArgument {
+            context: format!("Invalid signature in doc URL, {err}"),
+        })?;
+    let signature = Signature::from_bytes(&signature);
+    Ok(verify(
+        doc_signature_verifying_key,
+        unsigned_url.as_bytes(),
+        Some(&signature),
+    )?)
 }

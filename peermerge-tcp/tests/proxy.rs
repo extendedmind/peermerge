@@ -59,16 +59,15 @@ async fn tcp_proxy_disk_encrypted() -> anyhow::Result<()> {
     let doc_url = peermerge_creator
         .sharing_info(&creator_doc_info.id())
         .await?
-        .doc_url
-        .unwrap();
-    let encryption_key = peermerge_creator
-        .encryption_key(&creator_doc_info.id())
+        .doc_url;
+    let document_secret = peermerge_creator
+        .document_secret(&creator_doc_info.id())
         .await;
     assert_eq!(get_doc_url_info(&doc_url)?.encrypted, Some(true));
-    assert!(encryption_key.is_some());
+    assert!(document_secret.is_some());
 
     let proxy_dir = Builder::new()
-        .prefix("proxy_disk_encrypted")
+        .prefix("tcp_proxy_disk_encrypted")
         .tempdir()
         .unwrap()
         .into_path();
@@ -90,12 +89,12 @@ async fn tcp_proxy_disk_encrypted() -> anyhow::Result<()> {
 
     // Reopen peermerge_creator
     drop(peermerge_creator);
-    let mut creator_encryption_keys = HashMap::new();
-    if let Some(encryption_key) = encryption_key.as_ref() {
-        creator_encryption_keys.insert(creator_doc_info.id(), encryption_key.clone());
+    let mut creator_document_secrets = HashMap::new();
+    if let Some(document_secret) = document_secret.as_ref() {
+        creator_document_secrets.insert(creator_doc_info.id(), document_secret.clone());
     }
     let peermerge_creator =
-        Peermerge::open_disk(creator_encryption_keys, &creator_dir, None).await?;
+        Peermerge::open_disk(creator_document_secrets, &creator_dir, None).await?;
 
     // Delay attaching proxy document until after server above has been started.
     let _proxy_doc_id = peermerge_proxy.attach_proxy_document_disk(&doc_url).await?;

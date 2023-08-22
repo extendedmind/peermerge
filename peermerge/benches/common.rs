@@ -47,7 +47,10 @@ pub async fn setup_peermerge_mesh_memory(
         )
         .await
         .unwrap();
-    let encryption_key = peermerge_creator.encryption_key(&doc_info.id()).await;
+    let document_secret = peermerge_creator
+        .document_secret(&doc_info.id())
+        .await
+        .unwrap();
     peermerge_creator
         .watch(&doc_info.id(), Some(vec![ROOT]))
         .await;
@@ -57,8 +60,7 @@ pub async fn setup_peermerge_mesh_memory(
         .sharing_info(&doc_info.id())
         .await
         .unwrap()
-        .doc_url
-        .unwrap();
+        .doc_url;
 
     for i in 1..peers {
         let (proto_responder, proto_initiator) = create_pair_memory().await;
@@ -77,7 +79,7 @@ pub async fn setup_peermerge_mesh_memory(
         )
         .await;
         let _doc_info = peermerge_peer
-            .attach_writer_document_memory(&doc_url, &encryption_key)
+            .attach_writer_document_memory(&doc_url, &document_secret)
             .await
             .unwrap();
         peermerge_peer.watch(&doc_info.id(), Some(vec![ROOT])).await;
@@ -144,7 +146,10 @@ pub async fn setup_peermerge_mesh_disk(
         )
         .await
         .unwrap();
-    let encryption_key = peermerge_creator.encryption_key(&doc_info.id()).await;
+    let document_secret = peermerge_creator
+        .document_secret(&doc_info.id())
+        .await
+        .unwrap();
     peermerge_creator
         .watch(&doc_info.id(), Some(vec![ROOT]))
         .await;
@@ -154,8 +159,7 @@ pub async fn setup_peermerge_mesh_disk(
         .sharing_info(&doc_info.id())
         .await
         .unwrap()
-        .doc_url
-        .unwrap();
+        .doc_url;
 
     for i in 1..peers {
         let (proto_responder, proto_initiator) = create_pair_memory().await;
@@ -184,7 +188,7 @@ pub async fn setup_peermerge_mesh_disk(
         )
         .await;
         let doc_info = peermerge_peer
-            .attach_writer_document_disk(&doc_url, &encryption_key)
+            .attach_writer_document_disk(&doc_url, &document_secret)
             .await
             .unwrap();
         peermerge_peer.watch(&doc_info.id(), Some(vec![ROOT])).await;
