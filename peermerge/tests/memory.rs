@@ -181,6 +181,10 @@ async fn process_joiner_state_event(
             event,
             document_changes.len()
         );
+        assert_eq!(
+            event.document_id, doc_id,
+            "Event {event:?} has the wrong document id"
+        );
 
         match event.content {
             PeerSynced {
@@ -351,6 +355,10 @@ async fn process_creator_state_events(
             "Received event {:?}, document_changes={}",
             event,
             document_changes.len()
+        );
+        assert_eq!(
+            event.document_id, doc_id,
+            "Event {event:?} has the wrong document id"
         );
 
         let text_id = text_id.clone();
@@ -559,6 +567,10 @@ async fn process_latecomer_state_event(
             "Received event {:?}, document_changes={}",
             event,
             document_changes.len()
+        );
+        assert_eq!(
+            event.document_id, doc_id,
+            "Event {event:?} has the wrong document id"
         );
         match event.content {
             PeerSynced {

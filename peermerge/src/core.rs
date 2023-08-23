@@ -110,19 +110,19 @@ where
                 if sender.is_closed() {
                     *state_event_sender = None;
                 } else {
-                    let mut document_patches: Vec<([u8; 32], Vec<Patch>)> = vec![];
+                    let mut document_patches: Vec<(DocumentId, Vec<Patch>)> = vec![];
                     for document_id in get_document_ids(&self.documents).await {
                         let mut document =
                             get_document(&self.documents, &document_id).await.unwrap();
                         let new_patches = document.take_patches().await;
                         if !new_patches.is_empty() {
-                            document_patches.push((document.id(), new_patches))
+                            document_patches.push((document_id, new_patches))
                         }
                     }
-                    for (doc_discovery_key, patches) in document_patches {
+                    for (document_id, patches) in document_patches {
                         sender
                             .unbounded_send(StateEvent::new(
-                                doc_discovery_key,
+                                document_id,
                                 StateEventContent::DocumentChanged {
                                     change_id: None,
                                     patches,

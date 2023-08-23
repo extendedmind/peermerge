@@ -265,6 +265,10 @@ async fn process_joiner_state_event(
             "Received event {:?}, document_changes {:?}",
             event, document_changes
         );
+        assert_eq!(
+            event.document_id, doc_id,
+            "Event {event:?} has the wrong document id"
+        );
         match event.content {
             PeerSynced {
                 peer_id,
@@ -317,6 +321,10 @@ async fn process_creator_state_events(
     let mut document_changes: Vec<Vec<Patch>> = vec![];
     while let Some(event) = creator_state_event_receiver.next().await {
         info!("Received event {:?}", event);
+        assert_eq!(
+            event.document_id, doc_id,
+            "Event {event:?} has the wrong document id"
+        );
         match event.content {
             PeerSynced {
                 peer_id,

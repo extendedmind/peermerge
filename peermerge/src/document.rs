@@ -273,7 +273,7 @@ where
             if let Some(sender) = state_event_sender.as_mut() {
                 sender
                     .unbounded_send(StateEvent::new(
-                        self.doc_discovery_key,
+                        self.id(),
                         DocumentChanged { change_id, patches },
                     ))
                     .unwrap();
