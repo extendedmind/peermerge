@@ -1,7 +1,7 @@
 use compact_encoding::{CompactEncoding, State};
 use futures::channel::mpsc::UnboundedSender;
 use hypercore_protocol::{
-    hypercore::{Hypercore, PartialKeypair, SigningKey, VerifyingKey},
+    hypercore::{Hypercore, Info, PartialKeypair, SigningKey, VerifyingKey},
     Channel, ChannelReceiver, ChannelSender, Message,
 };
 #[cfg(not(target_arch = "wasm32"))]
@@ -22,13 +22,13 @@ use wasm_bindgen_futures::spawn_local;
 use super::{
     messaging::{
         create_append_local_signal, create_closed_local_signal, create_feed_synced_local_signal,
-        create_feeds_changed_local_signal,
+        create_feed_verification_local_signal, create_feeds_changed_local_signal,
     },
     on_doc_feed, on_feed, PeerState,
 };
 use crate::{
     common::{
-        cipher::{add_signature, EntryCipher},
+        cipher::{add_signature, verify_data_signature, EntryCipher},
         entry::{shrink_entries, Entry, ShrunkEntries},
         state::{DocumentFeedInfo, DocumentFeedsState},
         utils::Mutex,
@@ -146,9 +146,19 @@ where
         Ok(outcome.length)
     }
 
-    pub(crate) async fn contiguous_length(&self) -> u64 {
+    pub(crate) async fn info(&self) -> Info {
         let hypercore = self.hypercore.lock().await;
-        hypercore.info().contiguous_length
+        hypercore.info()
+    }
+
+    pub(crate) async fn verify_first_entry(
+        &self,
+        doc_signature_verifying_key: &VerifyingKey,
+    ) -> Result<(), PeermergeError> {
+        let mut hypercore = self.hypercore.lock().await;
+        let first_entry = hypercore.get(0).await?.unwrap();
+        verify_data_signature(&first_entry, doc_signature_verifying_key)?;
+        Ok(())
     }
 
     pub(crate) async fn notify_feed_synced(
@@ -173,6 +183,25 @@ where
                 doc_discovery_key,
                 replaced_feeds,
                 feeds_to_create,
+            );
+            self.notify_listeners(&message).await?;
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn notify_feed_verification(
+        &mut self,
+        doc_discovery_key: &FeedDiscoveryKey,
+        feed_discovery_key: &FeedDiscoveryKey,
+        verified: bool,
+        peer_id: &Option<PeerId>,
+    ) -> Result<(), PeermergeError> {
+        if !self.channel_senders.is_empty() {
+            let message = create_feed_verification_local_signal(
+                *doc_discovery_key,
+                *feed_discovery_key,
+                verified,
+                *peer_id,
             );
             self.notify_listeners(&message).await?;
         }

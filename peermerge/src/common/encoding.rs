@@ -12,7 +12,7 @@ use crate::feed::FeedPublicKey;
 use super::cipher::{DocUrlAppendix, DocumentSecret};
 use super::constants::PEERMERGE_VERSION;
 use super::entry::EntryContent;
-use super::message::{FeedSyncedMessage, FeedsChangedMessage};
+use super::message::{FeedSyncedMessage, FeedVerificationMessage, FeedsChangedMessage};
 use super::state::{DocumentContent, DocumentCursor, DocumentFeedInfo, DocumentFeedsState};
 use crate::{NameDescription, PeerId, PeermergeError};
 
@@ -141,10 +141,14 @@ impl CompactEncoding<DocumentState> for State {
 }
 
 impl CompactEncoding<DocumentFeedInfo> for State {
-    fn preencode(&mut self, _value: &DocumentFeedInfo) -> Result<usize, EncodingError> {
+    fn preencode(&mut self, value: &DocumentFeedInfo) -> Result<usize, EncodingError> {
         self.preencode_fixed_16()?; // peer_id
         self.preencode_fixed_32()?; // public_key
-        self.add_end(1) // flags
+        self.add_end(1)?; // flags
+        if value.replaced_public_key.is_some() {
+            self.preencode_fixed_32()?;
+        }
+        Ok(self.end())
     }
 
     fn encode(
@@ -157,41 +161,57 @@ impl CompactEncoding<DocumentFeedInfo> for State {
         let flags_index = self.start();
         let mut flags: u8 = 0;
         self.add_start(1)?;
-        if let Some(replaced_by_public_key) = &value.replaced_by_public_key {
+        if let Some(replaced_public_key) = &value.replaced_public_key {
             flags |= 1;
-            self.encode_fixed_32(replaced_by_public_key, buffer)?;
+            self.encode_fixed_32(replaced_public_key, buffer)?;
+        }
+        if value.verified {
+            flags |= 2;
+        }
+        if value.removed {
+            flags |= 4;
         }
         buffer[flags_index] = flags;
         Ok(self.start())
     }
 
     fn decode(&mut self, buffer: &[u8]) -> Result<DocumentFeedInfo, EncodingError> {
-        let id: PeerId = self.decode_fixed_16(buffer)?.to_vec().try_into().unwrap();
+        let peer_id: PeerId = self.decode_fixed_16(buffer)?.to_vec().try_into().unwrap();
         let public_key: FeedPublicKey = self.decode_fixed_32(buffer)?.to_vec().try_into().unwrap();
-
         let flags: u8 = self.decode(buffer)?;
-        let replaced_by_public_key: Option<FeedPublicKey> = if flags & 1 != 0 {
+        let replaced_public_key: Option<FeedPublicKey> = if flags & 1 != 0 {
             Some(self.decode_fixed_32(buffer)?.to_vec().try_into().unwrap())
         } else {
             None
         };
-        Ok(DocumentFeedInfo::new(
-            id,
+        let verified = flags & 2 != 0;
+        let removed = flags & 4 != 0;
+        Ok(DocumentFeedInfo {
+            peer_id,
             public_key,
-            replaced_by_public_key,
-        ))
+            replaced_public_key,
+            verified,
+            removed,
+            discovery_key: None,
+        })
     }
 }
 
 impl CompactEncoding<DocumentFeedsState> for State {
     fn preencode(&mut self, value: &DocumentFeedsState) -> Result<usize, EncodingError> {
+        self.preencode_fixed_16()?; // peer_id
         self.preencode_fixed_32()?; // doc_public_key
         self.add_end(1)?; // flags
-        let len = value.other_feeds.len();
+        let len = value
+            .other_feeds
+            .values()
+            .fold(0, |acc, feeds| acc + feeds.len());
         if len > 0 {
             self.preencode(&len)?;
-            for feed in &value.other_feeds {
-                self.preencode(feed)?;
+            for feeds in value.other_feeds.values() {
+                for feed in feeds {
+                    self.preencode(feed)?;
+                }
             }
         }
         if let Some(write_feed) = &value.write_feed {
@@ -205,20 +225,29 @@ impl CompactEncoding<DocumentFeedsState> for State {
         value: &DocumentFeedsState,
         buffer: &mut [u8],
     ) -> Result<usize, EncodingError> {
+        self.encode_fixed_16(&value.peer_id, buffer)?;
         self.encode_fixed_32(&value.doc_public_key, buffer)?;
         let flags_index = self.start();
         let mut flags: u8 = 0;
         self.add_start(1)?;
-        let len = value.other_feeds.len();
-        if len > 0 {
+        if value.doc_feed_verified {
             flags |= 1;
+        }
+        let len = value
+            .other_feeds
+            .values()
+            .fold(0, |acc, feeds| acc + feeds.len());
+        if len > 0 {
+            flags |= 2;
             self.encode(&len, buffer)?;
-            for feed in &value.other_feeds {
-                self.encode(feed, buffer)?;
+            for feeds in value.other_feeds.values() {
+                for feed in feeds {
+                    self.encode(feed, buffer)?;
+                }
             }
         }
         if let Some(write_feed) = &value.write_feed {
-            flags |= 2;
+            flags |= 4;
             self.encode(write_feed, buffer)?;
         }
 
@@ -227,10 +256,12 @@ impl CompactEncoding<DocumentFeedsState> for State {
     }
 
     fn decode(&mut self, buffer: &[u8]) -> Result<DocumentFeedsState, EncodingError> {
+        let peer_id: PeerId = self.decode_fixed_16(buffer)?.to_vec().try_into().unwrap();
         let doc_public_key: FeedPublicKey =
             self.decode_fixed_32(buffer)?.to_vec().try_into().unwrap();
         let flags: u8 = self.decode(buffer)?;
-        let other_feeds: Vec<DocumentFeedInfo> = if flags & 1 != 0 {
+        let doc_feed_verified = flags & 4 != 0;
+        let other_feeds: Vec<DocumentFeedInfo> = if flags & 2 != 0 {
             let len: usize = self.decode(buffer)?;
             let mut feeds: Vec<DocumentFeedInfo> = Vec::with_capacity(len);
             for _ in 0..len {
@@ -241,14 +272,16 @@ impl CompactEncoding<DocumentFeedsState> for State {
         } else {
             vec![]
         };
-        let write_feed: Option<DocumentFeedInfo> = if flags & 2 != 0 {
+        let write_feed: Option<DocumentFeedInfo> = if flags & 4 != 0 {
             Some(self.decode(buffer)?)
         } else {
             None
         };
 
         Ok(DocumentFeedsState::new_from_data(
+            peer_id,
             doc_public_key,
+            doc_feed_verified,
             write_feed,
             other_feeds,
         ))
@@ -362,10 +395,17 @@ impl CompactEncoding<BroadcastMessage> for State {
         if let Some(write_feed) = &value.write_feed {
             self.preencode(write_feed)?;
         }
-        let len = value.other_feeds.len();
+        let len = value.active_feeds.len();
         if len > 0 {
             self.preencode(&len)?;
-            for feed in &value.other_feeds {
+            for feed in &value.active_feeds {
+                self.preencode(feed)?;
+            }
+        }
+        if let Some(inactive_feeds) = &value.inactive_feeds {
+            let len = inactive_feeds.len();
+            self.preencode(&len)?;
+            for feed in inactive_feeds {
                 self.preencode(feed)?;
             }
         }
@@ -384,11 +424,19 @@ impl CompactEncoding<BroadcastMessage> for State {
             flags |= 1;
             self.encode(write_feed, buffer)?;
         }
-        let len = value.other_feeds.len();
+        let len = value.active_feeds.len();
         if len > 0 {
             flags |= 2;
             self.encode(&len, buffer)?;
-            for feed in &value.other_feeds {
+            for feed in &value.active_feeds {
+                self.encode(feed, buffer)?;
+            }
+        }
+        if let Some(inactive_feeds) = &value.inactive_feeds {
+            flags |= 4;
+            let len = inactive_feeds.len();
+            self.encode(&len, buffer)?;
+            for feed in inactive_feeds {
                 self.encode(feed, buffer)?;
             }
         }
@@ -403,7 +451,7 @@ impl CompactEncoding<BroadcastMessage> for State {
         } else {
             None
         };
-        let feeds: Vec<DocumentFeedInfo> = if flags & 2 != 0 {
+        let active_feeds: Vec<DocumentFeedInfo> = if flags & 2 != 0 {
             let len: usize = self.decode(buffer)?;
             let mut feeds: Vec<DocumentFeedInfo> = Vec::with_capacity(len);
             for _ in 0..len {
@@ -414,7 +462,22 @@ impl CompactEncoding<BroadcastMessage> for State {
         } else {
             vec![]
         };
-        Ok(BroadcastMessage::new(write_feed, feeds))
+        let inactive_feeds: Option<Vec<DocumentFeedInfo>> = if flags & 4 != 0 {
+            let len: usize = self.decode(buffer)?;
+            let mut feeds: Vec<DocumentFeedInfo> = Vec::with_capacity(len);
+            for _ in 0..len {
+                let feed: DocumentFeedInfo = self.decode(buffer)?;
+                feeds.push(feed);
+            }
+            Some(feeds)
+        } else {
+            None
+        };
+        Ok(BroadcastMessage::new(
+            write_feed,
+            active_feeds,
+            inactive_feeds,
+        ))
     }
 }
 
@@ -500,6 +563,61 @@ impl CompactEncoding<FeedsChangedMessage> for State {
             replaced_feeds,
             feeds_to_create,
         ))
+    }
+}
+
+impl CompactEncoding<FeedVerificationMessage> for State {
+    fn preencode(&mut self, value: &FeedVerificationMessage) -> Result<usize, EncodingError> {
+        self.preencode_fixed_32()?;
+        self.preencode_fixed_32()?;
+        self.add_end(1)?;
+        if value.peer_id.is_some() {
+            self.preencode_fixed_16()?;
+        }
+        Ok(self.end())
+    }
+
+    fn encode(
+        &mut self,
+        value: &FeedVerificationMessage,
+        buffer: &mut [u8],
+    ) -> Result<usize, EncodingError> {
+        self.encode_fixed_32(&value.doc_discovery_key, buffer)?;
+        self.encode_fixed_32(&value.feed_discovery_key, buffer)?;
+        let flags_index = self.start();
+        let mut flags: u8 = 0;
+        self.add_start(1)?;
+        if value.verified {
+            flags |= 1;
+        }
+        if let Some(peer_id) = &value.peer_id {
+            flags |= 2;
+            self.encode_fixed_16(peer_id, buffer)?;
+        }
+        buffer[flags_index] = flags;
+        Ok(self.start())
+    }
+
+    fn decode(&mut self, buffer: &[u8]) -> Result<FeedVerificationMessage, EncodingError> {
+        let doc_discovery_key: [u8; 32] =
+            self.decode_fixed_32(buffer)?.to_vec().try_into().unwrap();
+        let feed_discovery_key: [u8; 32] =
+            self.decode_fixed_32(buffer)?.to_vec().try_into().unwrap();
+        let flags: u8 = self.decode(buffer)?;
+        let verified: bool = flags & 1 != 0;
+
+        let peer_id: Option<PeerId> = if flags & 2 != 0 {
+            Some(self.decode_fixed_16(buffer)?.to_vec().try_into().unwrap())
+        } else {
+            None
+        };
+
+        Ok(FeedVerificationMessage {
+            doc_discovery_key,
+            feed_discovery_key,
+            verified,
+            peer_id,
+        })
     }
 }
 

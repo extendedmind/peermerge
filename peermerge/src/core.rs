@@ -223,6 +223,13 @@ where
         document.sharing_info().await
     }
 
+    /// Get my peer id
+    #[instrument(skip(self), fields(peer_name = self.default_peer_header.name))]
+    pub async fn peer_id(&self) -> PeerId {
+        self.peer_id
+    }
+
+    /// Get all known peer ids in a document
     #[instrument(skip(self), fields(peer_name = self.default_peer_header.name))]
     pub async fn peer_ids(&self, document_id: &DocumentId) -> Vec<PeerId> {
         let document = get_document(&self.documents, document_id).await.unwrap();
@@ -233,9 +240,7 @@ where
     pub async fn document_secret(&self, document_id: &DocumentId) -> Option<String> {
         let document = get_document(&self.documents, document_id).await.unwrap();
         let document_secret = document.document_secret();
-        document_secret
-            .as_ref()
-            .map(|document_secret| encode_document_secret(document_secret))
+        document_secret.as_ref().map(encode_document_secret)
     }
 
     #[instrument(skip(self), fields(peer_name = self.default_peer_header.name))]
@@ -678,6 +683,20 @@ async fn process_feed_event<T, U>(
         }
         FeedEventContent::FeedDisconnected { .. } => {
             // This is an FYI message, just continue for now
+        }
+        FeedEventContent::FeedVerified {
+            peer_id,
+            discovery_key,
+            verified,
+        } => {
+            let document = get_document_by_discovery_key(documents, &event.doc_discovery_key)
+                .await
+                .unwrap();
+            if verified {
+                document.set_feed_verified(&discovery_key, &peer_id).await;
+            } else {
+                unimplemented!("TODO: Invalid feed deletion");
+            }
         }
         FeedEventContent::RemoteFeedSynced {
             peer_id,

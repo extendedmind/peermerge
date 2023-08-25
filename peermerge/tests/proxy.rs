@@ -169,7 +169,6 @@ async fn proxy_disk_encrypted() -> anyhow::Result<()> {
         joiner_state_event_receiver,
     )
     .await?;
-
     // Close the other side and wait for protocol handles to exit
     peermerge_joiner.close().await.unwrap();
     join_all(vec![joiner_connect, proxy_connect, proxy_process]).await;
@@ -532,8 +531,8 @@ async fn process_joiner_state_events_reopen(
                         .await?;
                 }
             }
-            Reattached { peer_header } => {
-                assert_eq!(peer_header, NameDescription::new("joiner"))
+            PeerChanged { .. } => {
+                // Ignore
             }
             RemotePeerSynced {
                 contiguous_length, ..

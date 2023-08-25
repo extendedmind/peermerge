@@ -36,6 +36,12 @@ pub enum PeermergeError {
         /// Context for the error
         context: String,
     },
+    /// Security issue
+    #[error("Security issue. {context}")]
+    SecurityIssue {
+        /// Context for the error
+        context: String,
+    },
     /// Unexpected IO error occured
     #[error("Unrecoverable input/output error occured.{}",
           .context.as_ref().map_or_else(String::new, |ctx| format!(" {ctx}.")))]

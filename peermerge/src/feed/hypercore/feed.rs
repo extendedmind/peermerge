@@ -61,7 +61,7 @@ where
     T: RandomAccess + Debug + Send + 'static,
 {
     // Immediately broadcast hypercores to the other end on the doc peer
-    let message = create_broadcast_message(peer_state.feeds_state.as_ref().unwrap());
+    let message = create_broadcast_message(peer_state.feeds_state.as_ref().unwrap(), None);
     channel.send(message).await?;
 
     // Start listening on incoming messages or internal messages
@@ -94,13 +94,17 @@ async fn process_message<T>(
 where
     T: RandomAccess + Debug + Send + 'static,
 {
-    let event = on_message(hypercore, peer_state, channel, message).await?;
-    if let Some(event) = event {
-        feed_event_sender.unbounded_send(event.clone())?;
+    let events = on_message(hypercore, peer_state, channel, message).await?;
+    let mut disconnect_channel_id = None;
+    for event in events {
         if let FeedEventContent::FeedDisconnected { channel } = event.content {
-            debug!("Disconnected channel {channel}");
-            return Ok(true);
+            disconnect_channel_id = Some(channel);
         }
+        feed_event_sender.unbounded_send(event)?;
+    }
+    if let Some(id) = disconnect_channel_id {
+        debug!("Disconnected channel {id}");
+        return Ok(true);
     }
     Ok(false)
 }

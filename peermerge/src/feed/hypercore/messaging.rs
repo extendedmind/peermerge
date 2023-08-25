@@ -7,20 +7,22 @@ use hypercore_protocol::{
 use random_access_storage::RandomAccess;
 use std::fmt::Debug;
 use std::sync::Arc;
-use tracing::{debug, instrument};
+use tracing::{debug, instrument, warn};
 
 use super::PeerState;
 use crate::{
     common::{
         cipher::verify_data_signature,
-        message::{BroadcastMessage, FeedSyncedMessage, FeedsChangedMessage},
+        message::{
+            BroadcastMessage, FeedSyncedMessage, FeedVerificationMessage, FeedsChangedMessage,
+        },
         state::{DocumentFeedInfo, DocumentFeedsState},
         utils::Mutex,
         FeedEvent,
         FeedEventContent::*,
     },
     feed::FeedDiscoveryKey,
-    PeermergeError,
+    PeerId, PeermergeError,
 };
 
 // Messages sent over-the-wire
@@ -30,12 +32,21 @@ const PEERMERGE_BROADCAST_MSG: &str = "peermerge/v1/broadcast";
 const APPEND_LOCAL_SIGNAL_NAME: &str = "append";
 const FEED_SYNCED_LOCAL_SIGNAL_NAME: &str = "feed_synced";
 pub(super) const FEEDS_CHANGED_LOCAL_SIGNAL_NAME: &str = "feeds_changed";
+pub(super) const FEED_VERIFICATION_LOCAL_SIGNAL_NAME: &str = "feed_verification";
 const CLOSED_LOCAL_SIGNAL_NAME: &str = "closed";
 
-pub(super) fn create_broadcast_message(feeds_state: &DocumentFeedsState) -> Message {
+pub(super) fn create_broadcast_message(
+    feeds_state: &DocumentFeedsState,
+    inactive_feeds: Option<Vec<DocumentFeedInfo>>,
+) -> Message {
     let broadcast_message: BroadcastMessage = BroadcastMessage {
         write_feed: feeds_state.write_feed.clone(),
-        other_feeds: feeds_state.other_feeds.clone(),
+        active_feeds: feeds_state
+            .active_peer_feeds(false)
+            .into_iter()
+            .map(|(_, feed)| feed)
+            .collect(),
+        inactive_feeds,
     };
     let mut enc_state = State::new();
     enc_state
@@ -97,6 +108,32 @@ pub(super) fn create_feeds_changed_local_signal(
     Message::LocalSignal((FEEDS_CHANGED_LOCAL_SIGNAL_NAME.to_string(), buffer.to_vec()))
 }
 
+pub(super) fn create_feed_verification_local_signal(
+    doc_discovery_key: FeedDiscoveryKey,
+    feed_discovery_key: FeedDiscoveryKey,
+    verified: bool,
+    peer_id: Option<PeerId>,
+) -> Message {
+    let message = FeedVerificationMessage {
+        doc_discovery_key,
+        feed_discovery_key,
+        verified,
+        peer_id,
+    };
+    let mut enc_state = State::new();
+    enc_state
+        .preencode(&message)
+        .expect("Pre-encoding feed verification local signal should not fail");
+    let mut buffer = enc_state.create_buffer();
+    enc_state
+        .encode(&message, &mut buffer)
+        .expect("Encoding feed verification local signal should not fail");
+    Message::LocalSignal((
+        FEED_VERIFICATION_LOCAL_SIGNAL_NAME.to_string(),
+        buffer.to_vec(),
+    ))
+}
+
 pub(super) fn create_closed_local_signal() -> Message {
     Message::LocalSignal((CLOSED_LOCAL_SIGNAL_NAME.to_string(), vec![]))
 }
@@ -152,11 +189,12 @@ pub(super) async fn on_message<T>(
     peer_state: &mut PeerState,
     channel: &mut Channel,
     message: Message,
-) -> Result<Option<FeedEvent>, PeermergeError>
+) -> Result<Vec<FeedEvent>, PeermergeError>
 where
     T: RandomAccess + Debug + Send,
 {
     debug!("Message on channel={}", channel.id(),);
+
     match message {
         Message::Synchronize(message) => {
             let length_changed = message.length != peer_state.remote_length;
@@ -212,7 +250,6 @@ where
             }
 
             channel.send_batch(&messages).await?;
-            return Ok(None);
         }
         Message::Request(message) => {
             let (info, proof) = {
@@ -237,36 +274,79 @@ where
             }
         }
         Message::Data(message) => {
-            let (old_info, applied, new_info, request, peer_synced) = {
+            let mut events: Vec<FeedEvent> = vec![];
+            let (old_info, applied, new_info, request) = {
                 let mut hypercore = hypercore.lock().await;
                 let old_info = hypercore.info();
                 let proof = message.clone().into_proof();
                 let applied = hypercore.verify_and_apply_proof(&proof).await?;
                 let new_info = hypercore.info();
                 peer_state.inflight.remove(message.request);
-                if new_info.contiguous_length == 1 {
+                let is_fully_synced_doc_feed =
+                    peer_state.is_doc && new_info.contiguous_length == new_info.length;
+                if new_info.contiguous_length == 1 || is_fully_synced_doc_feed {
                     // Need to verify the signature of the feed immediately
-                    // to close connection early if the feed offered is bogus
+                    // to close connection early if the feed offered is bogus.
+                    // Also re-verify when doc feed is fully synced as only then
+                    // is the successful verification sent to make sure everyone
+                    // has the full doc feed before continuing with other feeds.
                     let first_entry = hypercore.get(0).await?.unwrap();
-                    verify_data_signature(&first_entry, &peer_state.doc_signature_verifying_key)?;
+                    let discovery_key = *channel.discovery_key();
+                    match verify_data_signature(
+                        &first_entry,
+                        &peer_state.doc_signature_verifying_key,
+                    ) {
+                        Ok(()) => {
+                            if !peer_state.is_doc || is_fully_synced_doc_feed {
+                                events.push(FeedEvent::new(
+                                    peer_state.doc_discovery_key,
+                                    FeedVerified {
+                                        discovery_key,
+                                        verified: true,
+                                        peer_id: peer_state.peer_id,
+                                    },
+                                ));
+                            }
+                        }
+                        Err(err) => {
+                            warn!("Remote feed verification failed, {err}");
+                            events.push(FeedEvent::new(
+                                peer_state.doc_discovery_key,
+                                FeedVerified {
+                                    discovery_key,
+                                    verified: true,
+                                    peer_id: peer_state.peer_id,
+                                },
+                            ));
+                            let channel_id = channel.id();
+                            events.push(FeedEvent::new(
+                                peer_state.doc_discovery_key,
+                                FeedDisconnected {
+                                    channel: channel_id as u64,
+                                },
+                            ));
+                            // Return and disallow all other messages from coming
+                            // through with disconnect without close.
+                            return Ok(events);
+                        }
+                    }
                 }
+
                 let request = next_request(&mut hypercore, peer_state).await?;
-                let peer_synced: Option<FeedEvent> =
-                    if new_info.contiguous_length == new_info.length {
-                        peer_state.synced_contiguous_length = new_info.contiguous_length;
-                        Some(FeedEvent::new(
-                            peer_state.doc_discovery_key,
-                            FeedSynced {
-                                peer_id: peer_state.peer_id,
-                                discovery_key: *channel.discovery_key(),
-                                contiguous_length: new_info.contiguous_length,
-                            },
-                        ))
-                    } else {
-                        None
-                    };
-                (old_info, applied, new_info, request, peer_synced)
+                if new_info.contiguous_length == new_info.length {
+                    peer_state.synced_contiguous_length = new_info.contiguous_length;
+                    events.push(FeedEvent::new(
+                        peer_state.doc_discovery_key,
+                        FeedSynced {
+                            peer_id: peer_state.peer_id,
+                            discovery_key: *channel.discovery_key(),
+                            contiguous_length: new_info.contiguous_length,
+                        },
+                    ));
+                }
+                (old_info, applied, new_info, request)
             };
+
             assert!(applied, "Could not apply proof");
 
             let mut messages: Vec<Message> = vec![];
@@ -305,57 +385,57 @@ where
             if let Some(request) = request {
                 messages.push(Message::Request(request));
             }
-            channel.send_batch(&messages).await?;
-            return Ok(peer_synced);
+            if !channel.closed() {
+                channel.send_batch(&messages).await?;
+            } else {
+                events.push(FeedEvent::new(
+                    peer_state.doc_discovery_key,
+                    FeedDisconnected {
+                        channel: channel.id() as u64,
+                    },
+                ));
+            }
+            return Ok(events);
         }
         Message::Range(message) => {
-            let event = {
-                let mut hypercore = hypercore.lock().await;
-                let info = hypercore.info();
-                let event: Option<FeedEvent> = if message.start == 0 {
-                    peer_state.remote_contiguous_length = message.length;
-                    if message.length > peer_state.remote_length {
-                        peer_state.remote_length = message.length;
+            let mut hypercore = hypercore.lock().await;
+            let info = hypercore.info();
+            if message.start == 0 {
+                peer_state.remote_contiguous_length = message.length;
+                if message.length > peer_state.remote_length {
+                    peer_state.remote_length = message.length;
+                }
+                if info.contiguous_length == peer_state.remote_contiguous_length {
+                    if peer_state.notified_remote_synced_contiguous_length
+                        < peer_state.remote_contiguous_length
+                    {
+                        // The peer has advertised that they now have what we have
+                        let event = FeedEvent::new(
+                            peer_state.doc_discovery_key,
+                            RemoteFeedSynced {
+                                peer_id: peer_state.peer_id,
+                                discovery_key: *channel.discovery_key(),
+                                contiguous_length: peer_state.remote_contiguous_length,
+                            },
+                        );
+                        peer_state.notified_remote_synced_contiguous_length =
+                            peer_state.remote_contiguous_length;
+                        return Ok(vec![event]);
                     }
-                    if info.contiguous_length == peer_state.remote_contiguous_length {
-                        if peer_state.notified_remote_synced_contiguous_length
-                            < peer_state.remote_contiguous_length
-                        {
-                            // The peer has advertised that they now have what we have
-                            let event = Some(FeedEvent::new(
-                                peer_state.doc_discovery_key,
-                                RemoteFeedSynced {
-                                    peer_id: peer_state.peer_id,
-                                    discovery_key: *channel.discovery_key(),
-                                    contiguous_length: peer_state.remote_contiguous_length,
-                                },
-                            ));
-                            peer_state.notified_remote_synced_contiguous_length =
-                                peer_state.remote_contiguous_length;
-                            event
-                        } else {
-                            None
-                        }
-                    } else if info.contiguous_length < peer_state.remote_contiguous_length {
-                        // If the other side advertises more than we have, we need to request the rest
-                        // of the blocks.
-                        if let Some(request) = next_request(&mut hypercore, peer_state).await? {
-                            channel.send(Message::Request(request)).await?;
-                        }
-                        None
-                    } else {
-                        // We have more than the peer, just ignore
-                        None
+                } else if info.contiguous_length < peer_state.remote_contiguous_length {
+                    // If the other side advertises more than we have, we need to request the rest
+                    // of the blocks.
+                    if let Some(request) = next_request(&mut hypercore, peer_state).await? {
+                        channel.send(Message::Request(request)).await?;
                     }
                 } else {
-                    // TODO: For now, let's just ignore messages that don't indicate
-                    // a contiguous length. When we add support for deleting entries
-                    // from the hypercore, this needs proper bitfield support.
-                    None
-                };
-                event
-            };
-            return Ok(event);
+                    // We have more than the peer, just ignore
+                }
+            } else {
+                // TODO: For now, let's just ignore messages that don't indicate
+                // a contiguous length. When we add support for deleting entries
+                // from the hypercore, this needs proper bitfield support.
+            }
         }
         Message::Extension(message) => match message.name.as_str() {
             PEERMERGE_BROADCAST_MSG => {
@@ -366,24 +446,39 @@ where
                 let feeds_state = peer_state.feeds_state.as_mut().unwrap();
                 let mut dec_state = State::from_buffer(&message.message);
                 let broadcast_message: BroadcastMessage = dec_state.decode(&message.message)?;
-                let (stored_feeds_found, new_feeds) = feeds_state.compare_broadcasted_feeds(
+                let compare_result = feeds_state.compare_broadcasted_feeds(
                     broadcast_message.write_feed,
-                    broadcast_message.other_feeds,
-                );
+                    broadcast_message.active_feeds,
+                    broadcast_message.inactive_feeds,
+                )?;
 
-                if stored_feeds_found && new_feeds.is_empty() {
+                // Immedeately rebroadcast for the other end to get all the info
+                if !compare_result.inactive_feeds_to_rebroadcast.is_empty() {
+                    let message = create_broadcast_message(
+                        feeds_state,
+                        Some(compare_result.inactive_feeds_to_rebroadcast),
+                    );
+                    channel.send(message).await?;
+                }
+
+                if !compare_result.wait_for_rebroadcast
+                    && compare_result.stored_active_feeds_found
+                    && compare_result.new_feeds.is_empty()
+                {
                     // Don't re-initialize if this has already been synced, meaning this is a
                     // broadcast that notifies a new third party feed after the initial handshake.
                     if !peer_state.sync_sent {
                         let messages = create_initial_synchronize(hypercore, peer_state).await;
                         channel.send_batch(&messages).await?;
                     }
-                } else if !new_feeds.is_empty() {
+                } else if !compare_result.new_feeds.is_empty() {
                     // New remote feeds found, return a feed event
-                    return Ok(Some(FeedEvent::new(
+                    return Ok(vec![FeedEvent::new(
                         peer_state.doc_discovery_key,
-                        NewFeedsBroadcasted { new_feeds },
-                    )));
+                        NewFeedsBroadcasted {
+                            new_feeds: compare_result.new_feeds,
+                        },
+                    )]);
                 }
             }
             _ => {
@@ -454,7 +549,7 @@ where
                     .await?;
 
                 // Create new broadcast message
-                let mut messages = vec![create_broadcast_message(feeds_state)];
+                let mut messages = vec![create_broadcast_message(feeds_state, None)];
 
                 // If sync has not been started, start it now
                 if !peer_state.sync_sent {
@@ -462,7 +557,30 @@ where
                 }
                 channel.send_batch(&messages).await?;
             }
-
+            FEED_VERIFICATION_LOCAL_SIGNAL_NAME => {
+                assert!(
+                    peer_state.is_doc,
+                    "Only doc feed should ever get feed verification messages"
+                );
+                let feeds_state = peer_state.feeds_state.as_mut().unwrap();
+                let mut dec_state = State::from_buffer(&data);
+                let message: FeedVerificationMessage = dec_state.decode(&data)?;
+                if feeds_state.verify_feed(&message.feed_discovery_key, &message.peer_id)
+                    && !channel.closed()
+                {
+                    if message.peer_id.is_none() || !message.verified {
+                        // Transmit doc peer verification and failures forward to the protocol
+                        channel
+                            .signal_local_protocol(FEED_VERIFICATION_LOCAL_SIGNAL_NAME, data)
+                            .await?;
+                    }
+                    if message.peer_id.is_some() {
+                        // Verification changed for one of the peer feeds, need to re-broadcast
+                        let message = create_broadcast_message(feeds_state, None);
+                        channel.send(message).await?;
+                    }
+                }
+            }
             CLOSED_LOCAL_SIGNAL_NAME => {
                 assert!(
                     peer_state.is_doc,
@@ -475,18 +593,18 @@ where
             }
         },
         Message::Close(message) => {
-            return Ok(Some(FeedEvent::new(
+            return Ok(vec![FeedEvent::new(
                 peer_state.doc_discovery_key,
                 FeedDisconnected {
                     channel: message.channel,
                 },
-            )));
+            )]);
         }
         _ => {
             panic!("Received unexpected message: {message:?}");
         }
     };
-    Ok(None)
+    Ok(vec![])
 }
 
 /// Return the next request that should be sent based on peer state.

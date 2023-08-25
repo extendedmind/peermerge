@@ -1,27 +1,31 @@
-use crate::feed::FeedDiscoveryKey;
+use crate::{feed::FeedDiscoveryKey, PeerId};
 
 use super::state::DocumentFeedInfo;
 
-/// An BroadcastMessage transmits all of the active public keys the peer knows to the other peer
+/// An BroadcastMessage transmits info of all of the feeds the peer knows
+/// to the other peer.
 #[derive(Debug)]
 pub(crate) struct BroadcastMessage {
     pub(crate) write_feed: Option<DocumentFeedInfo>,
-    pub(crate) other_feeds: Vec<DocumentFeedInfo>,
+    pub(crate) active_feeds: Vec<DocumentFeedInfo>,
+    pub(crate) inactive_feeds: Option<Vec<DocumentFeedInfo>>,
 }
 impl BroadcastMessage {
     pub(crate) fn new(
         write_feed: Option<DocumentFeedInfo>,
-        other_feeds: Vec<DocumentFeedInfo>,
+        active_feeds: Vec<DocumentFeedInfo>,
+        inactive_feeds: Option<Vec<DocumentFeedInfo>>,
     ) -> Self {
         Self {
             write_feed,
-            other_feeds,
+            active_feeds,
+            inactive_feeds,
         }
     }
 }
 
-/// An NewPeersCreatedMessage is an internal message that contains all of the
-/// ids and public keys of created and changed peer hypercores.
+/// An FeedsChangedMessage is an internal message that contains all of the
+/// ids and public keys of created and replaced peer hypercores.
 #[derive(Debug)]
 pub(crate) struct FeedsChangedMessage {
     pub(crate) doc_discovery_key: FeedDiscoveryKey,
@@ -40,6 +44,16 @@ impl FeedsChangedMessage {
             feeds_to_create,
         }
     }
+}
+
+/// A FeedVerificationMessage is an internal message that contains
+/// the verification status of a feed.
+#[derive(Debug)]
+pub(crate) struct FeedVerificationMessage {
+    pub(crate) doc_discovery_key: FeedDiscoveryKey,
+    pub(crate) feed_discovery_key: FeedDiscoveryKey,
+    pub(crate) verified: bool,
+    pub(crate) peer_id: Option<PeerId>,
 }
 
 /// An FeedSyncedMessage is an internal message that contains new length

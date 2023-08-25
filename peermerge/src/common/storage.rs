@@ -11,12 +11,14 @@ use crate::{
     common::state::{DocumentState, PeermergeState},
     document::DocumentSettings,
     feed::FeedDiscoveryKey,
-    DocumentId, NameDescription, PeermergeError,
+    DocumentId, NameDescription, PeerId, PeermergeError,
 };
 
 use super::{
     keys::discovery_key_from_public_key,
-    state::{DocumentContent, DocumentFeedInfo, DocumentFeedsState},
+    state::{
+        ChangeDocumentFeedsStateResult, DocumentContent, DocumentFeedInfo, DocumentFeedsState,
+    },
 };
 #[derive(Debug)]
 pub(crate) struct PeermergeStateWrapper<T>
@@ -107,13 +109,12 @@ where
     pub(crate) async fn merge_new_remote_feeds(
         &mut self,
         new_remote_feeds: &[DocumentFeedInfo],
-    ) -> (bool, Vec<DocumentFeedInfo>, Vec<DocumentFeedInfo>) {
-        let (changed, replaced_feeds, feeds_to_create) =
-            self.state.feeds_state.merge_new_feeds(new_remote_feeds);
-        if changed {
+    ) -> Result<ChangeDocumentFeedsStateResult, PeermergeError> {
+        let result = self.state.feeds_state.merge_new_feeds(new_remote_feeds)?;
+        if result.changed {
             write_document_state(&self.state, &mut self.storage).await;
         }
-        (changed, replaced_feeds, feeds_to_create)
+        Ok(result)
     }
 
     pub(crate) fn content_feeds_state_and_unapplied_entries_mut(
@@ -132,6 +133,18 @@ where
         } else {
             None
         }
+    }
+
+    pub(crate) async fn set_verified(
+        &mut self,
+        discovery_key: &FeedDiscoveryKey,
+        peer_id: &Option<PeerId>,
+    ) -> bool {
+        let changed = self.state.feeds_state.verify_feed(discovery_key, peer_id);
+        if changed {
+            write_document_state(&self.state, &mut self.storage).await;
+        }
+        changed
     }
 
     pub(crate) fn filter_watched_patches(&self, patches: &mut Vec<Patch>) {

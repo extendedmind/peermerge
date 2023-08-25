@@ -294,8 +294,8 @@ where
                 //     i, sync_remaining, remote_sync_remaining, document_initialized_remaining
                 // );
             }
-            Reattached { .. } => {
-                panic!("Should not get reattached");
+            PeerChanged { .. } => {
+                // Ignore
             }
         }
 

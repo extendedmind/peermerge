@@ -133,7 +133,12 @@ where
             .unwrap()
     }
 
-    pub(crate) async fn peer_feeds(&self) -> Vec<Arc<Mutex<Feed<U>>>> {
+    pub(crate) async fn doc_feed_verified(&self) -> bool {
+        let document_state_wrapper = self.document_state.lock().await;
+        document_state_wrapper.state().feeds_state.doc_feed_verified
+    }
+
+    pub(crate) async fn active_feeds(&self) -> Vec<Arc<Mutex<Feed<U>>>> {
         let mut leaf_feeds = vec![];
         for feed_discovery_key in get_feed_discovery_keys(&self.feeds).await {
             if feed_discovery_key != self.doc_discovery_key {
@@ -143,7 +148,7 @@ where
         leaf_feeds
     }
 
-    pub(crate) async fn peer_feed(
+    pub(crate) async fn active_feed(
         &self,
         discovery_key: &FeedDiscoveryKey,
     ) -> Option<Arc<Mutex<Feed<U>>>> {
@@ -151,6 +156,25 @@ where
             return None;
         }
         get_feed(&self.feeds, discovery_key).await
+    }
+
+    pub(crate) async fn active_feeds_discovery_keys(&self) -> Vec<FeedDiscoveryKey> {
+        let document_state_wrapper = self.document_state.lock().await;
+        let mut keys = vec![];
+        if let Some(write_discovery_key) = self.write_discovery_key {
+            keys.push(write_discovery_key);
+        }
+        keys.extend(
+            document_state_wrapper
+                .state()
+                .feeds_state
+                // Need to tolerate unverified because they are still active
+                .active_peer_feeds(true)
+                .iter()
+                .map(|(_, feed)| feed.discovery_key.unwrap())
+                .collect::<Vec<FeedDiscoveryKey>>(),
+        );
+        keys
     }
 
     pub(crate) async fn peer_ids(&self) -> Vec<PeerId> {
@@ -162,6 +186,26 @@ where
         let state = self.document_state.lock().await;
         let state = state.state();
         state.feeds_state.clone()
+    }
+
+    pub(crate) async fn set_feed_verified(
+        &self,
+        discovery_key: &FeedDiscoveryKey,
+        peer_id: &Option<PeerId>,
+    ) -> bool {
+        let mut state = self.document_state.lock().await;
+        let changed = state.set_verified(discovery_key, peer_id).await;
+        if changed {
+            let doc_feed = get_feed(&self.feeds, &self.doc_discovery_key)
+                .await
+                .unwrap();
+            let mut doc_feed = doc_feed.lock().await;
+            doc_feed
+                .notify_feed_verification(&self.doc_discovery_key, discovery_key, true, peer_id)
+                .await
+                .unwrap();
+        }
+        changed
     }
 
     pub(crate) async fn peer_id_from_discovery_key(
@@ -856,7 +900,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
             proxy,
             doc_signature_verifying_key.to_bytes(),
             None,
-            DocumentFeedsState::new(decoded_doc_url.doc_url_info.doc_public_key),
+            DocumentFeedsState::new(peer_id, decoded_doc_url.doc_url_info.doc_public_key, false),
             None,
         );
 
@@ -881,24 +925,25 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
         &mut self,
         new_remote_feeds: Vec<DocumentFeedInfo>,
     ) -> bool {
-        let (changed, replaced_feeds, feeds_to_create) = {
+        let result = {
             let mut document_state = self.document_state.lock().await;
             document_state
                 .merge_new_remote_feeds(&new_remote_feeds)
                 .await
+                .expect("Merge should not fail")
         };
-        if changed {
+        if result.changed {
             {
                 // Create and insert all new feeds
-                self.create_and_insert_read_memory_feeds(feeds_to_create.clone())
+                self.create_and_insert_read_memory_feeds(result.feeds_to_create.clone())
                     .await;
             }
             {
-                self.notify_feeds_changed(replaced_feeds, feeds_to_create)
+                self.notify_feeds_changed(result.replaced_feeds, result.feeds_to_create)
                     .await;
             }
         }
-        changed
+        result.changed
     }
 
     async fn do_attach_writer_memory(
@@ -1030,8 +1075,9 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
             doc_signature_verifying_key.to_bytes(),
             Some(encrypted),
             DocumentFeedsState::new_writer(
+                peer_id,
                 decoded_doc_url.doc_url_info.doc_public_key,
-                &peer_id,
+                false,
                 &write_public_key,
             ),
             Some(content),
@@ -1327,8 +1373,9 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
             doc_signature_verifying_key.to_bytes(),
             Some(encrypted),
             DocumentFeedsState::new_writer(
+                peer_id,
                 decoded_doc_url.doc_url_info.doc_public_key,
-                &peer_id,
+                false,
                 &write_public_key,
             ),
             Some(content),
@@ -1388,7 +1435,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
             proxy,
             doc_signature_verifying_key.to_bytes(),
             None,
-            DocumentFeedsState::new(decoded_doc_url.doc_url_info.doc_public_key),
+            DocumentFeedsState::new(peer_id, decoded_doc_url.doc_url_info.doc_public_key, false),
             None,
         );
 
@@ -1428,42 +1475,89 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
         settings: DocumentSettings,
     ) -> Result<Self, PeermergeError> {
         let mut document_state_wrapper = DocStateWrapper::open_disk(data_root_dir).await?;
-        let state = document_state_wrapper.state();
-        let id = state.document_id;
-        let proxy = state.proxy;
-        let encryption_key = document_secret
-            .as_ref()
-            .and_then(|secret| secret.encryption_key.clone());
-        let doc_signature_signing_key = document_secret
-            .as_ref()
-            .and_then(|secret| secret.doc_signature_signing_key.clone());
-        let doc_signature_verifying_key =
-            VerifyingKey::from_bytes(&state.doc_signature_verifying_key).map_err(|err| {
-                PeermergeError::BadArgument {
-                    context: format!("Invalid document url, {err}"),
+
+        // First gather all needed data from state to be able to mutate it later
+        let (
+            id,
+            proxy,
+            encryption_key,
+            doc_signature_signing_key,
+            doc_signature_verifying_key,
+            encrypted,
+            doc_public_key,
+            doc_discovery_key,
+            doc_feed_verified,
+            removable_feeds,
+            active_peer_feeds,
+            write_feed,
+            log_context,
+        ) = {
+            let state = document_state_wrapper.state();
+            let id = state.document_id;
+            let proxy = state.proxy;
+            let encryption_key = document_secret
+                .as_ref()
+                .and_then(|secret| secret.encryption_key.clone());
+            let doc_signature_signing_key = document_secret
+                .as_ref()
+                .and_then(|secret| secret.doc_signature_signing_key.clone());
+            let doc_signature_verifying_key =
+                VerifyingKey::from_bytes(&state.doc_signature_verifying_key).map_err(|err| {
+                    PeermergeError::BadArgument {
+                        context: format!("Invalid document url, {err}"),
+                    }
+                })?;
+
+            let encrypted = if let Some(encrypted) = state.encrypted {
+                if encrypted && encryption_key.is_none() {
+                    return Err(PeermergeError::BadArgument {
+                        context: "Can not open and encrypted document without an encryption key"
+                            .to_string(),
+                    });
                 }
-            })?;
-
-        let encrypted = if let Some(encrypted) = state.encrypted {
-            if encrypted && encryption_key.is_none() {
-                return Err(PeermergeError::BadArgument {
-                    context: "Can not open and encrypted document without an encryption key"
-                        .to_string(),
-                });
-            }
-            encrypted
-        } else {
-            if !proxy {
-                panic!("Stored document is not a proxy but encryption status is not known");
-            }
-            false
+                encrypted
+            } else {
+                if !proxy {
+                    panic!("Stored document is not a proxy but encryption status is not known");
+                }
+                false
+            };
+            let doc_public_key = state.feeds_state.doc_public_key;
+            let doc_discovery_key = state.feeds_state.doc_discovery_key;
+            let doc_feed_verified = state.feeds_state.doc_feed_verified;
+            let removable_feeds = state.feeds_state.removable_feeds();
+            let active_peer_feeds = state.feeds_state.active_peer_feeds(false);
+            let write_feed = state.feeds_state.write_feed.clone();
+            let log_context = log_context(state);
+            (
+                id,
+                proxy,
+                encryption_key,
+                doc_signature_signing_key,
+                doc_signature_verifying_key,
+                encrypted,
+                doc_public_key,
+                doc_discovery_key,
+                doc_feed_verified,
+                removable_feeds,
+                active_peer_feeds,
+                write_feed,
+                log_context,
+            )
         };
-        let doc_discovery_key = state.feeds_state.doc_discovery_key;
-        let log_context = log_context(state);
 
-        // Open root feed
+        // First, clean up possibly left-over removable feeds, both peer and
+        // previous own feeds.
+        if !removable_feeds.is_empty() {
+            // TODO: Remove from disk, then notify state to store the changes
+            for _removable_feed in removable_feeds {
+                unimplemented!("Delete feeds from disk, then set removed");
+            }
+        }
+
+        // Open doc feed
         let feeds: DashMap<[u8; 32], Arc<Mutex<Feed<FeedDiskPersistence>>>> = DashMap::new();
-        let (_, root_feed) = open_disk_feed(
+        let (_, doc_feed) = open_disk_feed(
             data_root_dir,
             &doc_discovery_key,
             proxy,
@@ -1471,83 +1565,94 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
             &encryption_key,
         )
         .await;
-        feeds.insert(doc_discovery_key, Arc::new(Mutex::new(root_feed)));
+        if !doc_feed_verified {
+            // Document feed is not verified, need to try to see if it could be verified now.
+            // This in case verification crashed just at the time the data was inserted to
+            // the feed, but FeedVerificationMessage did not reach the state.
+            let doc_feed_info = doc_feed.info().await;
+            if doc_feed_info.contiguous_length == doc_feed_info.length && doc_feed_info.length > 0 {
+                doc_feed
+                    .verify_first_entry(&doc_signature_verifying_key)
+                    .await?;
+                document_state_wrapper
+                    .set_verified(&doc_discovery_key, &None)
+                    .await;
+            }
+        }
+        feeds.insert(doc_discovery_key, Arc::new(Mutex::new(doc_feed)));
 
-        // Open all peer feeds
-        for peer in &state.feeds_state.other_feeds {
-            if peer.replaced_by_public_key.is_none() {
-                let discovery_key = discovery_key_from_public_key(&peer.public_key);
-                let (_, peer_feed) = open_disk_feed(
+        // Open all active, verified peer feeds
+        for (_, peer_feed) in &active_peer_feeds {
+            let discovery_key = discovery_key_from_public_key(&peer_feed.public_key);
+            let (_, peer_feed) = open_disk_feed(
+                data_root_dir,
+                &discovery_key,
+                proxy,
+                encrypted,
+                &encryption_key,
+            )
+            .await;
+            feeds.insert(discovery_key, Arc::new(Mutex::new(peer_feed)));
+        }
+
+        // Open write feed, if any
+        let (feeds, write_discovery_key) = if let Some(write_peer) = write_feed {
+            let write_discovery_key = discovery_key_from_public_key(&write_peer.public_key);
+            debug!(
+                "open_disk: peers={}, writable, proxy={proxy}, encrypted={encrypted}",
+                feeds.len() - 1
+            );
+            if write_peer.public_key != doc_public_key {
+                let (_, write_feed) = open_disk_feed(
                     data_root_dir,
-                    &discovery_key,
+                    &write_discovery_key,
                     proxy,
                     encrypted,
                     &encryption_key,
                 )
                 .await;
-                feeds.insert(discovery_key, Arc::new(Mutex::new(peer_feed)));
+                feeds.insert(write_discovery_key, Arc::new(Mutex::new(write_feed)));
             }
-        }
 
-        // Open write feed, if any
-        let (feeds, write_discovery_key) =
-            if let Some(write_peer) = state.feeds_state.write_feed.clone() {
-                let write_discovery_key = discovery_key_from_public_key(&write_peer.public_key);
-                debug!(
-                    "open_disk: peers={}, writable, proxy={proxy}, encrypted={encrypted}",
-                    feeds.len() - 1
-                );
-                if write_peer.public_key != state.feeds_state.doc_public_key {
-                    let (_, write_feed) = open_disk_feed(
-                        data_root_dir,
-                        &write_discovery_key,
-                        proxy,
-                        encrypted,
-                        &encryption_key,
-                    )
-                    .await;
-                    feeds.insert(write_discovery_key, Arc::new(Mutex::new(write_feed)));
+            let feeds = Arc::new(feeds);
+
+            // Initialize doc, fill unapplied changes and possibly save state if it had been left
+            // unsaved
+            if let Some((content, feeds_state, unapplied_entries)) =
+                document_state_wrapper.content_feeds_state_and_unapplied_entries_mut()
+            {
+                let meta_automerge_doc =
+                    init_automerge_doc_from_data(&write_peer.peer_id, &content.meta_doc_data);
+                content.meta_automerge_doc = Some(meta_automerge_doc);
+                if let Some(user_doc_data) = &content.user_doc_data {
+                    let user_automerge_doc =
+                        init_automerge_doc_from_data(&write_peer.peer_id, user_doc_data);
+                    content.user_automerge_doc = Some(user_automerge_doc);
                 }
-
-                let feeds = Arc::new(feeds);
-
-                // Initialize doc, fill unapplied changes and possibly save state if it had been left
-                // unsaved
-                if let Some((content, feeds_state, unapplied_entries)) =
-                    document_state_wrapper.content_feeds_state_and_unapplied_entries_mut()
-                {
-                    let meta_automerge_doc =
-                        init_automerge_doc_from_data(&write_peer.peer_id, &content.meta_doc_data);
-                    content.meta_automerge_doc = Some(meta_automerge_doc);
-                    if let Some(user_doc_data) = &content.user_doc_data {
-                        let user_automerge_doc =
-                            init_automerge_doc_from_data(&write_peer.peer_id, user_doc_data);
-                        content.user_automerge_doc = Some(user_automerge_doc);
-                    }
-                    let changed = update_content(
-                        content,
-                        feeds_state,
-                        &doc_discovery_key,
-                        &feeds,
-                        unapplied_entries,
-                    )
-                    .await
-                    .unwrap();
-                    debug!("open_disk: initialized document from data, changed={changed}");
-                    if changed {
-                        document_state_wrapper.persist_content().await;
-                    }
-                } else {
-                    debug!("open_disk: document not created yet",);
+                let changed = update_content(
+                    content,
+                    feeds_state,
+                    &doc_discovery_key,
+                    &feeds,
+                    unapplied_entries,
+                )
+                .await
+                .unwrap();
+                debug!("open_disk: initialized document from data, changed={changed}");
+                if changed {
+                    document_state_wrapper.persist_content().await;
                 }
-                (feeds, Some(write_discovery_key))
             } else {
-                debug!(
-                    "open_disk: peers={}, not writable, proxy={proxy}, encrypted={encrypted}",
-                    feeds.len() - 1
-                );
-                (Arc::new(feeds), None)
-            };
+                debug!("open_disk: document not created yet",);
+            }
+            (feeds, Some(write_discovery_key))
+        } else {
+            debug!(
+                "open_disk: peers={}, not writable, proxy={proxy}, encrypted={encrypted}",
+                feeds.len() - 1
+            );
+            (Arc::new(feeds), None)
+        };
 
         // Create Document
         Ok(Self {
@@ -1575,24 +1680,25 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
         &mut self,
         new_remote_feeds: Vec<DocumentFeedInfo>,
     ) -> bool {
-        let (changed, replaced_feeds, feeds_to_create) = {
+        let result = {
             let mut document_state = self.document_state.lock().await;
             document_state
                 .merge_new_remote_feeds(&new_remote_feeds)
                 .await
+                .expect("Merge should not fail")
         };
-        if changed {
+        if result.changed {
             {
                 // Create and insert all new feeds
-                self.create_and_insert_read_disk_feeds(feeds_to_create.clone())
+                self.create_and_insert_read_disk_feeds(result.feeds_to_create.clone())
                     .await;
             }
             {
-                self.notify_feeds_changed(replaced_feeds, feeds_to_create)
+                self.notify_feeds_changed(result.replaced_feeds, result.feeds_to_create)
                     .await;
             }
         }
-        changed
+        result.changed
     }
 
     async fn new_disk(
@@ -1806,7 +1912,7 @@ where
         false,
         doc_signature_verifying_key.to_bytes(),
         Some(encrypted),
-        DocumentFeedsState::new_writer(doc_public_key, peer_id, &write_public_key),
+        DocumentFeedsState::new_writer(*peer_id, doc_public_key, true, &write_public_key),
         Some(content),
     );
 
@@ -1874,7 +1980,7 @@ where
     let contiguous_length = if let Some(known_contiguous_length) = known_contiguous_length {
         known_contiguous_length
     } else {
-        feed.contiguous_length().await
+        feed.info().await.contiguous_length
     };
     let shrunk_entries = feed
         .entries(content.cursor_length(discovery_key), contiguous_length)

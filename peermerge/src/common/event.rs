@@ -1,6 +1,6 @@
 use automerge::Patch;
 
-use crate::{feed::FeedDiscoveryKey, DocumentId, NameDescription, PeerId};
+use crate::{feed::FeedDiscoveryKey, DocumentId, PeerId};
 
 use super::state::DocumentFeedInfo;
 
@@ -31,8 +31,10 @@ pub enum StateEventContent {
         discovery_key: FeedDiscoveryKey,
         contiguous_length: u64,
     },
-    Reattached {
-        peer_header: NameDescription,
+    PeerChanged {
+        peer_id: PeerId,
+        discovery_key: FeedDiscoveryKey,
+        replaced_discovery_key: Option<FeedDiscoveryKey>,
     },
     DocumentInitialized {
         new_document: bool,
@@ -46,12 +48,12 @@ pub enum StateEventContent {
 
 #[derive(Clone, Debug)]
 pub(crate) struct FeedEvent {
-    pub doc_discovery_key: [u8; 32],
+    pub doc_discovery_key: FeedDiscoveryKey,
     pub content: FeedEventContent,
 }
 
 impl FeedEvent {
-    pub fn new(doc_discovery_key: [u8; 32], content: FeedEventContent) -> Self {
+    pub fn new(doc_discovery_key: FeedDiscoveryKey, content: FeedEventContent) -> Self {
         Self {
             doc_discovery_key,
             content,
@@ -68,6 +70,11 @@ pub(crate) enum FeedEventContent {
         peer_id: Option<PeerId>,
         discovery_key: FeedDiscoveryKey,
         contiguous_length: u64,
+    },
+    FeedVerified {
+        peer_id: Option<PeerId>,
+        discovery_key: FeedDiscoveryKey,
+        verified: bool,
     },
     FeedDisconnected {
         channel: u64,
