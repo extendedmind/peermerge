@@ -37,14 +37,6 @@ impl UnappliedEntries {
         }
     }
 
-    pub(crate) fn current_length(&self, discovery_key: &[u8; 32]) -> u64 {
-        if let Some(value) = self.data.get(discovery_key) {
-            value.0
-        } else {
-            0
-        }
-    }
-
     pub(crate) fn add(
         &mut self,
         discovery_key: &FeedDiscoveryKey,

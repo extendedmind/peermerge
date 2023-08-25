@@ -531,9 +531,11 @@ where
                         (None, patches, peer_syncs)
                     } else {
                         debug!("Bootstrapping document content from entries");
+                        if discovery_key != self.doc_discovery_key {
+                            panic!("Did not receive sync for doc feed first");
+                        }
                         if let Some(peer_syncs) = self
                             .bootstrap_content(
-                                &discovery_key,
                                 synced_contiguous_length,
                                 content,
                                 feeds_state,
@@ -603,83 +605,66 @@ where
 
     async fn bootstrap_content(
         &self,
-        synced_discovery_key: &[u8; 32],
         synced_contiguous_length: u64,
         content: &mut DocumentContent,
         feeds_state: &mut DocumentFeedsState,
         unapplied_entries: &mut UnappliedEntries,
     ) -> Result<Option<Vec<(PeerId, FeedDiscoveryKey, u64)>>, PeermergeError> {
         // The document starts from the doc feed, so get that first
-        if synced_discovery_key == &self.doc_discovery_key {
-            let entries = {
-                let doc_feed = get_feed(&self.feeds, &self.doc_discovery_key)
-                    .await
-                    .unwrap();
-                let mut doc_feed = doc_feed.lock().await;
-                doc_feed.entries(0, synced_contiguous_length).await?
-            };
+        let entries = {
+            let doc_feed = get_feed(&self.feeds, &self.doc_discovery_key)
+                .await
+                .unwrap();
+            let mut doc_feed = doc_feed.lock().await;
+            doc_feed.entries(0, synced_contiguous_length).await?
+        };
 
-            // Bootstrap user document from the feed
-            let (mut bootstrap_result, feed_change_result) = {
-                let meta_automerge_doc = content.meta_automerge_doc_mut().unwrap();
-                let result = bootstrap_automerge_user_doc_from_entries(
-                    meta_automerge_doc,
-                    &self.peer_id,
-                    synced_discovery_key,
-                    synced_contiguous_length,
-                    entries,
-                    unapplied_entries,
-                )?;
-                // Empty meta patches
-                meta_automerge_doc.update_diff_cursor();
-                result
-            };
+        // Bootstrap user document from the feed
+        let (mut bootstrap_result, feed_change_result) = {
+            let meta_automerge_doc = content.meta_automerge_doc_mut().unwrap();
+            let result = bootstrap_automerge_user_doc_from_entries(
+                meta_automerge_doc,
+                &self.peer_id,
+                &self.doc_discovery_key,
+                synced_contiguous_length,
+                entries,
+                unapplied_entries,
+            )?;
+            // Empty meta patches
+            meta_automerge_doc.update_diff_cursor();
+            result
+        };
 
-            let cursor_changes: Vec<(FeedDiscoveryKey, u64)> = feed_change_result
-                .iter()
-                .map(|(discovery_key, feed_change)| (*discovery_key, feed_change.length))
-                .collect();
-            content.set_cursors_and_save_data(
-                cursor_changes,
-                DocsChangeResult {
-                    meta_changed: false,
-                    user_changed: false,
-                },
-            );
+        let cursor_changes: Vec<(FeedDiscoveryKey, u64)> = feed_change_result
+            .iter()
+            .map(|(discovery_key, feed_change)| (*discovery_key, feed_change.length))
+            .collect();
+        content.set_cursors_and_save_data(
+            cursor_changes,
+            DocsChangeResult {
+                meta_changed: false,
+                user_changed: false,
+            },
+        );
 
-            // Empty patches queue, documents were just initialized, so they can be safely ignored.
-            bootstrap_result.user_automerge_doc.update_diff_cursor();
+        // Empty patches queue, documents were just initialized, so they can be safely ignored.
+        bootstrap_result.user_automerge_doc.update_diff_cursor();
 
-            // Set values to content
-            content.meta_doc_data = bootstrap_result.meta_doc_data;
-            content.user_doc_data = Some(bootstrap_result.user_doc_data);
-            content.user_automerge_doc = Some(bootstrap_result.user_automerge_doc);
+        // Set values to content
+        content.meta_doc_data = bootstrap_result.meta_doc_data;
+        content.user_doc_data = Some(bootstrap_result.user_doc_data);
+        content.user_automerge_doc = Some(bootstrap_result.user_automerge_doc);
 
-            let peer_syncs: Vec<(PeerId, FeedDiscoveryKey, u64)> = feed_change_result
-                .iter()
-                // The root feed is not a peer.
-                .filter(|(discovery_key, _)| *discovery_key != &self.doc_discovery_key)
-                .map(|(discovery_key, feed_change)| {
-                    let peer_id = feeds_state.peer_id(discovery_key);
-                    (peer_id, *discovery_key, feed_change.length)
-                })
-                .collect();
-            Ok(Some(peer_syncs))
-        } else {
-            // Got first some other peer's data, need to store it to unapplied changes
-            let feed = get_feed(&self.feeds, synced_discovery_key).await.unwrap();
-            let mut feed = feed.lock().await;
-            let current_length = unapplied_entries.current_length(synced_discovery_key);
-            let shrunk_entries = feed
-                .entries(current_length, synced_contiguous_length - current_length)
-                .await?;
-            let mut new_length = current_length + shrunk_entries.shrunk_count + 1;
-            for entry in shrunk_entries.entries.into_iter() {
-                unapplied_entries.add(synced_discovery_key, new_length, entry, vec![]);
-                new_length += 1;
-            }
-            Ok(None)
-        }
+        let peer_syncs: Vec<(PeerId, FeedDiscoveryKey, u64)> = feed_change_result
+            .iter()
+            // The root feed is not a peer.
+            .filter(|(discovery_key, _)| *discovery_key != &self.doc_discovery_key)
+            .map(|(discovery_key, feed_change)| {
+                let peer_id = feeds_state.peer_id(discovery_key);
+                (peer_id, *discovery_key, feed_change.length)
+            })
+            .collect();
+        Ok(Some(peer_syncs))
     }
 
     async fn update_synced_content(
