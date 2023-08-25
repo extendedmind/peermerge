@@ -5,7 +5,11 @@ use hypercore_protocol::{
     schema::Request,
 };
 
-use crate::{common::state::DocumentFeedsState, feed::FeedDiscoveryKey, PeerId};
+use crate::{
+    common::state::{DocumentFeedInfo, DocumentFeedsState},
+    feed::FeedDiscoveryKey,
+    PeerId,
+};
 
 /// A PeerState stores information about a connected peer.
 #[derive(Debug)]
@@ -25,6 +29,11 @@ pub(super) struct PeerState {
     pub(super) remote_uploading: bool,
     pub(super) remote_downloading: bool,
     pub(super) length_acked: u64,
+
+    /// Broadcasting temporary value to store feeds that we started
+    /// to create. Needed to include them into the next broadcast
+    /// even though they are not yet verified.
+    pub(super) broadcast_created_feeds: Vec<DocumentFeedInfo>,
 
     /// Inflight requests
     pub(super) inflight: InflightTracker,
@@ -66,6 +75,7 @@ impl PeerState {
             remote_uploading: true,
             remote_downloading: true,
             length_acked: 0,
+            broadcast_created_feeds: vec![],
             inflight: InflightTracker::default(),
             synced_contiguous_length: 0,
             notified_remote_synced_contiguous_length: 0,

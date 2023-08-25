@@ -37,15 +37,27 @@ const CLOSED_LOCAL_SIGNAL_NAME: &str = "closed";
 
 pub(super) fn create_broadcast_message(
     feeds_state: &DocumentFeedsState,
+    active_feeds_to_include: Vec<DocumentFeedInfo>,
     inactive_feeds: Option<Vec<DocumentFeedInfo>>,
 ) -> Message {
+    // Take all verified feeds from the store
+    let mut all_active_feeds: Vec<DocumentFeedInfo> = feeds_state
+        .active_peer_feeds(false)
+        .into_iter()
+        .map(|(_, feed)| feed)
+        .collect();
+
+    // Then include also feeds given as parameter, i.e. feeds not-yet-verified
+    // but just now created.
+    for active_feed_to_include in active_feeds_to_include {
+        if !all_active_feeds.contains(&active_feed_to_include) {
+            all_active_feeds.push(active_feed_to_include);
+        }
+    }
+
     let broadcast_message: BroadcastMessage = BroadcastMessage {
         write_feed: feeds_state.write_feed.clone(),
-        active_feeds: feeds_state
-            .active_peer_feeds(false)
-            .into_iter()
-            .map(|(_, feed)| feed)
-            .collect(),
+        active_feeds: all_active_feeds,
         inactive_feeds,
     };
     let mut enc_state = State::new();
@@ -452,10 +464,11 @@ where
                     broadcast_message.inactive_feeds,
                 )?;
 
-                // Immedeately rebroadcast for the other end to get all the info
+                // Immedeately re-broadcast for the other end to get all the info
                 if !compare_result.inactive_feeds_to_rebroadcast.is_empty() {
                     let message = create_broadcast_message(
                         feeds_state,
+                        peer_state.broadcast_created_feeds.clone(),
                         Some(compare_result.inactive_feeds_to_rebroadcast),
                     );
                     channel.send(message).await?;
@@ -472,6 +485,9 @@ where
                         channel.send_batch(&messages).await?;
                     }
                 } else if !compare_result.new_feeds.is_empty() {
+                    peer_state
+                        .broadcast_created_feeds
+                        .extend(compare_result.new_feeds.clone());
                     // New remote feeds found, return a feed event
                     return Ok(vec![FeedEvent::new(
                         peer_state.doc_discovery_key,
@@ -549,7 +565,11 @@ where
                     .await?;
 
                 // Create new broadcast message
-                let mut messages = vec![create_broadcast_message(feeds_state, None)];
+                let mut messages = vec![create_broadcast_message(
+                    feeds_state,
+                    peer_state.broadcast_created_feeds.clone(),
+                    None,
+                )];
 
                 // If sync has not been started, start it now
                 if !peer_state.sync_sent {
@@ -576,7 +596,11 @@ where
                     }
                     if message.peer_id.is_some() {
                         // Verification changed for one of the peer feeds, need to re-broadcast
-                        let message = create_broadcast_message(feeds_state, None);
+                        let message = create_broadcast_message(
+                            feeds_state,
+                            peer_state.broadcast_created_feeds.clone(),
+                            None,
+                        );
                         channel.send(message).await?;
                     }
                 }

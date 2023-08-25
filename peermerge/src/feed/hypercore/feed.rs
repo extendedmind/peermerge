@@ -61,7 +61,7 @@ where
     T: RandomAccess + Debug + Send + 'static,
 {
     // Immediately broadcast hypercores to the other end on the doc peer
-    let message = create_broadcast_message(peer_state.feeds_state.as_ref().unwrap(), None);
+    let message = create_broadcast_message(peer_state.feeds_state.as_ref().unwrap(), vec![], None);
     channel.send(message).await?;
 
     // Start listening on incoming messages or internal messages
