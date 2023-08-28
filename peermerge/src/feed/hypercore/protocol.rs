@@ -13,9 +13,9 @@ use super::{
     messaging::{FEEDS_CHANGED_LOCAL_SIGNAL_NAME, FEED_VERIFICATION_LOCAL_SIGNAL_NAME},
     HypercoreWrapper,
 };
-use crate::common::message::FeedVerificationMessage;
 use crate::common::state::DocumentFeedsState;
 use crate::common::utils::Mutex;
+use crate::common::{message::FeedVerificationMessage, state::ChildDocumentInfo};
 use crate::common::{message::FeedsChangedMessage, FeedEvent};
 use crate::document::{get_document, get_document_by_discovery_key, get_document_ids, Document};
 use crate::{common::keys::discovery_key_from_public_key, feed::FeedDiscoveryKey};
@@ -118,14 +118,18 @@ where
                                     discovery_keys_to_open.extend(active_peer_feeds_discovery_keys);
                                 }
                             }
-                            let (feeds_state, peer_id): (
+                            let (feeds_state, child_documents, peer_id): (
                                 Option<DocumentFeedsState>,
+                                Vec<ChildDocumentInfo>,
                                 Option<PeerId>,
                             ) = if is_doc {
-                                (Some(document.feeds_state().await), None)
+                                let (feeds_state, child_documents) =
+                                    document.feeds_state_and_child_documents().await;
+                                (Some(feeds_state), child_documents, None)
                             } else {
                                 (
                                     None,
+                                    vec![],
                                     Some(document.peer_id_from_discovery_key(discovery_key).await),
                                 )
                             };
@@ -136,6 +140,7 @@ where
                             hypercore.on_channel(
                                 is_doc,
                                 feeds_state,
+                                child_documents,
                                 peer_id,
                                 document.doc_discovery_key(),
                                 document.doc_signature_verifying_key(),

@@ -1,6 +1,6 @@
 use crate::{feed::FeedDiscoveryKey, PeerId};
 
-use super::state::DocumentFeedInfo;
+use super::state::{ChildDocumentInfo, DocumentFeedInfo};
 
 /// An BroadcastMessage transmits info of all of the feeds the peer knows
 /// to the other peer.
@@ -9,17 +9,20 @@ pub(crate) struct BroadcastMessage {
     pub(crate) write_feed: Option<DocumentFeedInfo>,
     pub(crate) active_feeds: Vec<DocumentFeedInfo>,
     pub(crate) inactive_feeds: Option<Vec<DocumentFeedInfo>>,
+    pub(crate) child_documents: Vec<ChildDocumentInfo>,
 }
 impl BroadcastMessage {
     pub(crate) fn new(
         write_feed: Option<DocumentFeedInfo>,
         active_feeds: Vec<DocumentFeedInfo>,
         inactive_feeds: Option<Vec<DocumentFeedInfo>>,
+        child_documents: Vec<ChildDocumentInfo>,
     ) -> Self {
         Self {
             write_feed,
             active_feeds,
             inactive_feeds,
+            child_documents,
         }
     }
 }

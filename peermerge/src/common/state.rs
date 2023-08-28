@@ -4,7 +4,7 @@ use std::{
     hash::{Hash, Hasher},
 };
 
-use hypercore_protocol::hypercore::SigningKey;
+use hypercore_protocol::hypercore::{SigningKey, VerifyingKey};
 use tracing::warn;
 use uuid::Uuid;
 
@@ -78,10 +78,12 @@ pub(crate) struct DocumentState {
     pub(crate) encrypted: Option<bool>,
     /// Is this a proxy document.
     pub(crate) proxy: bool,
-    /// State for all of the feeds that are not the doc feed.
+    /// State for all of the feeds involved in this document
     pub(crate) feeds_state: DocumentFeedsState,
     /// Content of the document. None for proxy.
     pub(crate) content: Option<DocumentContent>,
+    /// Child documents of this document
+    pub(crate) child_documents: Vec<ChildDocumentInfo>,
 }
 impl DocumentState {
     pub(crate) fn new(
@@ -98,6 +100,7 @@ impl DocumentState {
             encrypted,
             feeds_state,
             content,
+            vec![],
         )
     }
 
@@ -108,6 +111,7 @@ impl DocumentState {
         encrypted: Option<bool>,
         feeds_state: DocumentFeedsState,
         content: Option<DocumentContent>,
+        child_documents: Vec<ChildDocumentInfo>,
     ) -> Self {
         let document_id = document_id_from_discovery_key(&feeds_state.doc_discovery_key);
         Self {
@@ -118,6 +122,7 @@ impl DocumentState {
             encrypted,
             feeds_state,
             content,
+            child_documents,
         }
     }
 
@@ -225,6 +230,55 @@ impl DocumentState {
             }
         } else {
             None
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct ChildDocumentInfo {
+    /// Doc feed's public key
+    pub(crate) doc_public_key: FeedPublicKey,
+    /// Doc signature verifying key.
+    pub(crate) doc_signature_verifying_key: VerifyingKey,
+    /// Signature of doc_public_key and doc_signature_verifying_key signed
+    /// with the doc signature key of the parent document. This is needed
+    /// to prevent proxies from announcing bogus documents.
+    pub(crate) signature: Vec<u8>,
+    /// Whether or not the document creation is pending metadoc to
+    /// contain the encryption and/or signing key.
+    pub(crate) creation_pending: bool,
+}
+
+impl PartialEq for ChildDocumentInfo {
+    #[inline]
+    fn eq(&self, other: &ChildDocumentInfo) -> bool {
+        self.doc_public_key == other.doc_public_key
+            && self.doc_signature_verifying_key == other.doc_signature_verifying_key
+            && self.signature == other.signature
+    }
+}
+
+impl Hash for ChildDocumentInfo {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.doc_public_key.hash(state);
+        self.doc_signature_verifying_key.hash(state);
+        self.signature.hash(state);
+    }
+}
+
+impl ChildDocumentInfo {
+    pub(crate) fn new_from_data(
+        doc_public_key: FeedPublicKey,
+        doc_signature_verifying_key: [u8; 32],
+        signature: Vec<u8>,
+        creation_pending: bool,
+    ) -> Self {
+        Self {
+            doc_public_key,
+            doc_signature_verifying_key: VerifyingKey::from_bytes(&doc_signature_verifying_key)
+                .unwrap(),
+            signature,
+            creation_pending,
         }
     }
 }

@@ -6,7 +6,7 @@ use hypercore_protocol::{
 };
 
 use crate::{
-    common::state::{DocumentFeedInfo, DocumentFeedsState},
+    common::state::{ChildDocumentInfo, DocumentFeedInfo, DocumentFeedsState},
     feed::FeedDiscoveryKey,
     PeerId,
 };
@@ -17,6 +17,8 @@ pub(super) struct PeerState {
     pub(super) is_doc: bool,
     /// Set only when is_doc is true
     pub(super) feeds_state: Option<DocumentFeedsState>,
+    /// Non-empty only when is_doc is true
+    pub(super) child_documents: Vec<ChildDocumentInfo>,
     /// Set only when is_doc is false
     pub(super) peer_id: Option<PeerId>,
     pub(super) doc_discovery_key: FeedDiscoveryKey,
@@ -57,6 +59,7 @@ impl PeerState {
         doc_discovery_key: FeedDiscoveryKey,
         doc_signature_verifying_key: VerifyingKey,
         feeds_state: Option<DocumentFeedsState>,
+        child_documents: Vec<ChildDocumentInfo>,
         peer_id: Option<PeerId>,
     ) -> Self {
         PeerState {
@@ -64,6 +67,7 @@ impl PeerState {
             doc_discovery_key,
             doc_signature_verifying_key,
             feeds_state,
+            child_documents,
             peer_id,
             can_upgrade: true,
             remote_fork: 0,

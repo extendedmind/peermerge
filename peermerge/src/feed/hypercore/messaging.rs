@@ -17,7 +17,7 @@ use crate::{
         message::{
             BroadcastMessage, FeedSyncedMessage, FeedVerificationMessage, FeedsChangedMessage,
         },
-        state::{DocumentFeedInfo, DocumentFeedsState},
+        state::{ChildDocumentInfo, DocumentFeedInfo, DocumentFeedsState},
         utils::Mutex,
         FeedEvent,
         FeedEventContent::*,
@@ -38,6 +38,7 @@ const CLOSED_LOCAL_SIGNAL_NAME: &str = "closed";
 
 pub(super) fn create_broadcast_message(
     feeds_state: &DocumentFeedsState,
+    child_documents: &Vec<ChildDocumentInfo>,
     active_feeds_to_include: &Vec<DocumentFeedInfo>,
     inactive_feeds: Option<Vec<DocumentFeedInfo>>,
 ) -> Message {
@@ -60,6 +61,7 @@ pub(super) fn create_broadcast_message(
         write_feed: feeds_state.write_feed.clone(),
         active_feeds: all_active_feeds,
         inactive_feeds,
+        child_documents: child_documents.clone(),
     };
     let mut enc_state = State::new();
     enc_state
@@ -474,6 +476,7 @@ where
                     // that we know we should send.
                     let message = create_broadcast_message(
                         feeds_state,
+                        &peer_state.child_documents,
                         &peer_state.broadcast_new_feeds,
                         Some(compare_result.inactive_feeds_to_rebroadcast),
                     );
@@ -566,6 +569,7 @@ where
                 // Create new broadcast message
                 let messages = vec![create_broadcast_message(
                     feeds_state,
+                    &peer_state.child_documents,
                     &peer_state.broadcast_new_feeds,
                     None,
                 )];
@@ -599,6 +603,7 @@ where
                         // re-broadcast.
                         let message = create_broadcast_message(
                             feeds_state,
+                            &peer_state.child_documents,
                             &peer_state.broadcast_new_feeds,
                             None,
                         );

@@ -26,7 +26,9 @@ use crate::common::entry::{EntryContent, ShrunkEntries};
 use crate::common::keys::{
     discovery_key_from_public_key, document_id_from_discovery_key, generate_keys, SigningKey,
 };
-use crate::common::state::{DocumentFeedInfo, DocumentFeedsState, DocumentState};
+use crate::common::state::{
+    ChildDocumentInfo, DocumentFeedInfo, DocumentFeedsState, DocumentState,
+};
 use crate::common::utils::{Mutex, YieldNow};
 use crate::common::{DocumentInfo, StateEventContent::*};
 use crate::feed::FeedDiscoveryKey;
@@ -182,10 +184,12 @@ where
         document_state_wrapper.state().peer_ids()
     }
 
-    pub(crate) async fn feeds_state(&self) -> DocumentFeedsState {
+    pub(crate) async fn feeds_state_and_child_documents(
+        &self,
+    ) -> (DocumentFeedsState, Vec<ChildDocumentInfo>) {
         let state = self.document_state.lock().await;
         let state = state.state();
-        state.feeds_state.clone()
+        (state.feeds_state.clone(), state.child_documents.clone())
     }
 
     pub(crate) async fn set_feed_verified(

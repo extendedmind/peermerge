@@ -13,7 +13,9 @@ use super::cipher::{DocUrlAppendix, DocumentSecret};
 use super::constants::PEERMERGE_VERSION;
 use super::entry::EntryContent;
 use super::message::{FeedSyncedMessage, FeedVerificationMessage, FeedsChangedMessage};
-use super::state::{DocumentContent, DocumentCursor, DocumentFeedInfo, DocumentFeedsState};
+use super::state::{
+    ChildDocumentInfo, DocumentContent, DocumentCursor, DocumentFeedInfo, DocumentFeedsState,
+};
 use crate::{NameDescription, PeerId, PeermergeError};
 
 impl CompactEncoding<PeermergeState> for State {
@@ -91,6 +93,13 @@ impl CompactEncoding<DocumentState> for State {
         if let Some(content) = &value.content {
             self.preencode(content)?;
         }
+        if !value.child_documents.is_empty() {
+            let len = value.child_documents.len();
+            self.preencode(&len)?;
+            for child_document in &value.child_documents {
+                self.preencode(child_document)?;
+            }
+        }
         Ok(self.end())
     }
 
@@ -111,6 +120,14 @@ impl CompactEncoding<DocumentState> for State {
             flags |= 4;
             self.encode(content, buffer)?;
         }
+        if !value.child_documents.is_empty() {
+            flags |= 8;
+            let len = value.child_documents.len();
+            self.encode(&len, buffer)?;
+            for child_document in &value.child_documents {
+                self.encode(child_document, buffer)?;
+            }
+        }
 
         buffer[flags_index] = flags;
         Ok(self.start())
@@ -129,6 +146,17 @@ impl CompactEncoding<DocumentState> for State {
         } else {
             None
         };
+        let child_documents: Vec<ChildDocumentInfo> = if flags & 8 != 0 {
+            let len: usize = self.decode(buffer)?;
+            let mut docs: Vec<ChildDocumentInfo> = Vec::with_capacity(len);
+            for _ in 0..len {
+                let doc: ChildDocumentInfo = self.decode(buffer)?;
+                docs.push(doc);
+            }
+            docs
+        } else {
+            vec![]
+        };
         Ok(DocumentState::new_with_version(
             version,
             proxy,
@@ -136,6 +164,7 @@ impl CompactEncoding<DocumentState> for State {
             encrypted,
             feeds_state,
             content,
+            child_documents,
         ))
     }
 }
@@ -194,6 +223,48 @@ impl CompactEncoding<DocumentFeedInfo> for State {
             removed,
             discovery_key: None,
         })
+    }
+}
+
+impl CompactEncoding<ChildDocumentInfo> for State {
+    fn preencode(&mut self, value: &ChildDocumentInfo) -> Result<usize, EncodingError> {
+        self.preencode_fixed_32()?; // public_key
+        self.preencode_fixed_32()?; // public_key
+        self.preencode(&value.signature)?; // public_key
+        self.add_end(1) // flags
+    }
+
+    fn encode(
+        &mut self,
+        value: &ChildDocumentInfo,
+        buffer: &mut [u8],
+    ) -> Result<usize, EncodingError> {
+        self.encode_fixed_32(&value.doc_public_key, buffer)?;
+        self.encode_fixed_32(&value.doc_signature_verifying_key.to_bytes(), buffer)?;
+        self.encode(&value.signature, buffer)?;
+        let flags_index = self.start();
+        let mut flags: u8 = 0;
+        self.add_start(1)?;
+        if value.creation_pending {
+            flags |= 1;
+        }
+        buffer[flags_index] = flags;
+        Ok(self.start())
+    }
+
+    fn decode(&mut self, buffer: &[u8]) -> Result<ChildDocumentInfo, EncodingError> {
+        let doc_public_key: FeedPublicKey =
+            self.decode_fixed_32(buffer)?.to_vec().try_into().unwrap();
+        let doc_signature_verifying_key: [u8; 32] =
+            self.decode_fixed_32(buffer)?.to_vec().try_into().unwrap();
+        let signature: Vec<u8> = self.decode(buffer)?;
+        let flags: u8 = self.decode(buffer)?;
+        Ok(ChildDocumentInfo::new_from_data(
+            doc_public_key,
+            doc_signature_verifying_key,
+            signature,
+            flags & 1 != 0,
+        ))
     }
 }
 
@@ -409,6 +480,13 @@ impl CompactEncoding<BroadcastMessage> for State {
                 self.preencode(feed)?;
             }
         }
+        let len = value.child_documents.len();
+        if len > 0 {
+            self.preencode(&len)?;
+            for child in &value.child_documents {
+                self.preencode(child)?;
+            }
+        }
         Ok(self.end())
     }
 
@@ -438,6 +516,14 @@ impl CompactEncoding<BroadcastMessage> for State {
             self.encode(&len, buffer)?;
             for feed in inactive_feeds {
                 self.encode(feed, buffer)?;
+            }
+        }
+        let len = value.child_documents.len();
+        if len > 0 {
+            flags |= 8;
+            self.encode(&len, buffer)?;
+            for child in &value.child_documents {
+                self.encode(child, buffer)?;
             }
         }
         buffer[flags_index] = flags;
@@ -473,10 +559,23 @@ impl CompactEncoding<BroadcastMessage> for State {
         } else {
             None
         };
+        let child_documents: Vec<ChildDocumentInfo> = if flags & 8 != 0 {
+            let len: usize = self.decode(buffer)?;
+            let mut children: Vec<ChildDocumentInfo> = Vec::with_capacity(len);
+            for _ in 0..len {
+                let child: ChildDocumentInfo = self.decode(buffer)?;
+                children.push(child);
+            }
+            children
+        } else {
+            vec![]
+        };
+
         Ok(BroadcastMessage::new(
             write_feed,
             active_feeds,
             inactive_feeds,
+            child_documents,
         ))
     }
 }

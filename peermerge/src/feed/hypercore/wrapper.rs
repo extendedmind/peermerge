@@ -30,7 +30,7 @@ use crate::{
     common::{
         cipher::{add_signature, verify_data_signature, EntryCipher},
         entry::{shrink_entries, Entry, ShrunkEntries},
-        state::{DocumentFeedInfo, DocumentFeedsState},
+        state::{ChildDocumentInfo, DocumentFeedInfo, DocumentFeedsState},
         utils::Mutex,
         FeedEvent,
     },
@@ -276,6 +276,7 @@ where
         &mut self,
         is_doc: bool,
         peers_state: Option<DocumentFeedsState>,
+        child_documents: Vec<ChildDocumentInfo>,
         peer_id: Option<PeerId>,
         doc_discovery_key: FeedDiscoveryKey,
         doc_signature_verifying_key: VerifyingKey,
@@ -291,6 +292,7 @@ where
             doc_discovery_key,
             doc_signature_verifying_key,
             peers_state,
+            child_documents,
             peer_id,
         );
         let hypercore = self.hypercore.clone();
