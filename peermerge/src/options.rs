@@ -36,3 +36,12 @@ pub struct DiskPeermergeOptions {
     #[builder(default = "DEFAULT_MAX_WRITE_FEED_LENGTH")]
     pub max_write_feed_length: u64,
 }
+
+#[derive(Builder)]
+pub struct CreateNewDocumentOptions {
+    pub document_type: String,
+    #[builder(setter(into, strip_option), default)]
+    pub document_header: Option<NameDescription>,
+    #[builder(default = "true")]
+    pub encrypted: bool,
+}

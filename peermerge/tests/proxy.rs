@@ -4,9 +4,9 @@ use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use futures::future::join_all;
 use futures::stream::StreamExt;
 use peermerge::{
-    get_doc_url_info, DiskPeermergeOptionsBuilder, DocumentId, FeedMemoryPersistence,
-    MemoryPeermergeOptionsBuilder, NameDescription, Patch, Peermerge, StateEvent,
-    StateEventContent::*,
+    get_doc_url_info, CreateNewDocumentOptionsBuilder, DiskPeermergeOptionsBuilder, DocumentId,
+    FeedMemoryPersistence, MemoryPeermergeOptionsBuilder, NameDescription, Patch, Peermerge,
+    StateEvent, StateEventContent::*,
 };
 use random_access_memory::RandomAccessMemory;
 use tempfile::Builder;
@@ -41,9 +41,11 @@ async fn proxy_disk_encrypted() -> anyhow::Result<()> {
     .await;
     let (creator_doc_info, _) = peermerge_creator
         .create_new_document_memory(
-            "test",
-            Some(NameDescription::new("proxy_test")),
-            true,
+            CreateNewDocumentOptionsBuilder::default()
+                .document_type("test".to_string())
+                .document_header(NameDescription::new("proxy_test"))
+                .encrypted(true)
+                .build()?,
             |tx| tx.put(ROOT, "version", 1),
         )
         .await?;

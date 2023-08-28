@@ -7,9 +7,9 @@ use futures::channel::mpsc::{
 use futures::stream::StreamExt;
 use hypercore_protocol::{Duplex, Protocol, ProtocolBuilder};
 use peermerge::{
-    DiskPeermergeOptionsBuilder, DocumentId, FeedDiskPersistence, FeedMemoryPersistence,
-    FeedPersistence, MemoryPeermergeOptionsBuilder, NameDescription, Peermerge, RandomAccess,
-    StateEvent, StateEventContent::*, ROOT,
+    CreateNewDocumentOptionsBuilder, DiskPeermergeOptionsBuilder, DocumentId, FeedDiskPersistence,
+    FeedMemoryPersistence, FeedPersistence, MemoryPeermergeOptionsBuilder, NameDescription,
+    Peermerge, RandomAccess, StateEvent, StateEventContent::*, ROOT,
 };
 use random_access_disk::RandomAccessDisk;
 use random_access_memory::RandomAccessMemory;
@@ -40,9 +40,12 @@ pub async fn setup_peermerge_mesh_memory(
         .await;
     let (doc_info, _) = peermerge_creator
         .create_new_document_memory(
-            "bench",
-            Some(NameDescription::new(&format!("{peers}"))),
-            encrypted,
+            CreateNewDocumentOptionsBuilder::default()
+                .document_type("bench".to_string())
+                .document_header(NameDescription::new(&format!("{peers}")))
+                .encrypted(encrypted)
+                .build()
+                .unwrap(),
             |tx| tx.put(ROOT, "version", 1),
         )
         .await
@@ -139,9 +142,12 @@ pub async fn setup_peermerge_mesh_disk(
         .await;
     let (doc_info, _) = peermerge_creator
         .create_new_document_disk(
-            "bench",
-            Some(NameDescription::new(&format!("{peers}"))),
-            encrypted,
+            CreateNewDocumentOptionsBuilder::default()
+                .document_type("bench".to_string())
+                .document_header(NameDescription::new(&format!("{peers}")))
+                .encrypted(encrypted)
+                .build()
+                .unwrap(),
             |tx| tx.put(ROOT, "version", 1),
         )
         .await

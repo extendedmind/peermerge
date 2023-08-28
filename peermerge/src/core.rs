@@ -37,7 +37,7 @@ use crate::{
     document::{get_document_by_discovery_key, DocumentSettings},
     feed::{FeedMemoryPersistence, FeedPersistence, Protocol},
     options::{DiskPeermergeOptions, MemoryPeermergeOptions},
-    DocumentSharingInfo, PeerId, PeermergeError, StateEventContent,
+    CreateNewDocumentOptions, DocumentSharingInfo, PeerId, PeermergeError, StateEventContent,
 };
 use crate::{
     common::{DocumentInfo, FeedEvent},
@@ -103,8 +103,8 @@ where
         }
         if not_empty {
             // Let's drain any patches that are not yet sent out, and push them out. These can
-            // be created by scalar values inserted with peermerge.create_doc_memory() or other
-            // mutating calls executed before this call without a state_event_sender.
+            // be created by values inserted with peermerge.create_new_document_memory/disk()
+            // or other mutating calls executed before this call without a state_event_sender.
             let mut state_event_sender = self.state_event_sender.lock().await;
             if let Some(sender) = state_event_sender.as_mut() {
                 if sender.is_closed() {
@@ -291,9 +291,7 @@ impl Peermerge<RandomAccessMemory, FeedMemoryPersistence> {
 
     pub async fn create_new_document_memory<F, O>(
         &mut self,
-        document_type: &str,
-        document_header: Option<NameDescription>,
-        encrypted: bool,
+        options: CreateNewDocumentOptions,
         init_cb: F,
     ) -> Result<(DocumentInfo, O), PeermergeError>
     where
@@ -302,9 +300,9 @@ impl Peermerge<RandomAccessMemory, FeedMemoryPersistence> {
         let (document, init_result) = Document::create_new_memory(
             self.peer_id,
             &self.default_peer_header,
-            document_type,
-            document_header,
-            encrypted,
+            &options.document_type,
+            options.document_header,
+            options.encrypted,
             self.document_settings.clone(),
             init_cb,
         )
@@ -529,9 +527,7 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
 
     pub async fn create_new_document_disk<F, O>(
         &mut self,
-        document_type: &str,
-        document_header: Option<NameDescription>,
-        encrypted: bool,
+        options: CreateNewDocumentOptions,
         init_cb: F,
     ) -> Result<(DocumentInfo, O), PeermergeError>
     where
@@ -540,9 +536,9 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
         let (document, init_result) = Document::create_new_disk(
             self.peer_id,
             &self.default_peer_header,
-            document_type,
-            document_header,
-            encrypted,
+            &options.document_type,
+            options.document_header,
+            options.encrypted,
             self.document_settings.clone(),
             init_cb,
             &self.prefix,

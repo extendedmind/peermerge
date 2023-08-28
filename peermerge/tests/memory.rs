@@ -3,8 +3,9 @@ use automerge::{ObjId, ROOT};
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use futures::stream::StreamExt;
 use peermerge::{
-    DocumentId, FeedMemoryPersistence, MemoryPeermergeOptionsBuilder, NameDescription, Patch,
-    PeerId, Peermerge, StateEvent, StateEventContent::*,
+    CreateNewDocumentOptionsBuilder, DocumentId, FeedMemoryPersistence,
+    MemoryPeermergeOptionsBuilder, NameDescription, Patch, PeerId, Peermerge, StateEvent,
+    StateEventContent::*,
 };
 use random_access_memory::RandomAccessMemory;
 use std::collections::HashMap;
@@ -52,9 +53,11 @@ async fn memory_three_writers() -> anyhow::Result<()> {
     .await;
     let (creator_doc_info, _) = peermerge_creator
         .create_new_document_memory(
-            "test",
-            Some(NameDescription::new("memory_test")),
-            false,
+            CreateNewDocumentOptionsBuilder::default()
+                .document_type("test".to_string())
+                .document_header(NameDescription::new("memory_test"))
+                .encrypted(false)
+                .build()?,
             |tx| tx.put(ROOT, "version", 1),
         )
         .await?;
