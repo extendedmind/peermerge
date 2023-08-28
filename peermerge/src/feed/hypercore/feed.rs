@@ -60,9 +60,15 @@ pub(super) async fn on_doc_feed<T>(
 where
     T: RandomAccess + Debug + Send + 'static,
 {
-    // Immediately broadcast hypercores to the other end on the doc peer
-    let message = create_broadcast_message(peer_state.feeds_state.as_ref().unwrap(), vec![], None);
-    channel.send(message).await?;
+    // Immediately broadcast hypercores to the other end on the doc peer, and
+    // also start initial sync.
+    let mut messages: Vec<Message> = vec![create_broadcast_message(
+        peer_state.feeds_state.as_ref().unwrap(),
+        &vec![],
+        None,
+    )];
+    messages.extend(create_initial_synchronize(&mut hypercore, &mut peer_state).await);
+    channel.send_batch(&messages).await?;
 
     // Start listening on incoming messages or internal messages
     debug!("Start listening on doc channel messages");

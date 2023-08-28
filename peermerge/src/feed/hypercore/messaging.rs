@@ -13,6 +13,7 @@ use super::PeerState;
 use crate::{
     common::{
         cipher::verify_data_signature,
+        keys::discovery_key_from_public_key,
         message::{
             BroadcastMessage, FeedSyncedMessage, FeedVerificationMessage, FeedsChangedMessage,
         },
@@ -37,7 +38,7 @@ const CLOSED_LOCAL_SIGNAL_NAME: &str = "closed";
 
 pub(super) fn create_broadcast_message(
     feeds_state: &DocumentFeedsState,
-    active_feeds_to_include: Vec<DocumentFeedInfo>,
+    active_feeds_to_include: &Vec<DocumentFeedInfo>,
     inactive_feeds: Option<Vec<DocumentFeedInfo>>,
 ) -> Message {
     // Take all verified feeds from the store
@@ -50,8 +51,8 @@ pub(super) fn create_broadcast_message(
     // Then include also feeds given as parameter, i.e. feeds not-yet-verified
     // but just now created.
     for active_feed_to_include in active_feeds_to_include {
-        if !all_active_feeds.contains(&active_feed_to_include) {
-            all_active_feeds.push(active_feed_to_include);
+        if !all_active_feeds.contains(active_feed_to_include) {
+            all_active_feeds.push(active_feed_to_include.clone());
         }
     }
 
@@ -181,7 +182,6 @@ where
         downloading: true,
     };
 
-    peer_state.sync_sent = true;
     if info.contiguous_length > 0 && peer_state.contiguous_range_sent < info.contiguous_length {
         let range_msg = Range {
             drop: false,
@@ -463,30 +463,29 @@ where
                     broadcast_message.active_feeds,
                     broadcast_message.inactive_feeds,
                 )?;
-
-                // Immedeately re-broadcast for the other end to get all the info
+                if compare_result.wait_for_rebroadcast {
+                    debug!("Expecting a re-broadcast with more information");
+                }
+                if compare_result.stored_active_feeds_found {
+                    debug!("Remote has all of our stored active feeds");
+                }
                 if !compare_result.inactive_feeds_to_rebroadcast.is_empty() {
+                    // Immedeately re-broadcast for the other end to get all the info
+                    // that we know we should send.
                     let message = create_broadcast_message(
                         feeds_state,
-                        peer_state.broadcast_created_feeds.clone(),
+                        &peer_state.broadcast_new_feeds,
                         Some(compare_result.inactive_feeds_to_rebroadcast),
                     );
                     channel.send(message).await?;
                 }
 
-                if !compare_result.wait_for_rebroadcast
-                    && compare_result.stored_active_feeds_found
-                    && compare_result.new_feeds.is_empty()
-                {
-                    // Don't re-initialize if this has already been synced, meaning this is a
-                    // broadcast that notifies a new third party feed after the initial handshake.
-                    if !peer_state.sync_sent {
-                        let messages = create_initial_synchronize(hypercore, peer_state).await;
-                        channel.send_batch(&messages).await?;
-                    }
-                } else if !compare_result.new_feeds.is_empty() {
+                if !compare_result.new_feeds.is_empty() {
+                    // We can send the (possibly partial) new feeds immediately
+                    // because (possible) duplicates from a re-broadcast will be
+                    // removed at merge_new_feeds.
                     peer_state
-                        .broadcast_created_feeds
+                        .broadcast_new_feeds
                         .extend(compare_result.new_feeds.clone());
                     // New remote feeds found, return a feed event
                     return Ok(vec![FeedEvent::new(
@@ -565,16 +564,11 @@ where
                     .await?;
 
                 // Create new broadcast message
-                let mut messages = vec![create_broadcast_message(
+                let messages = vec![create_broadcast_message(
                     feeds_state,
-                    peer_state.broadcast_created_feeds.clone(),
+                    &peer_state.broadcast_new_feeds,
                     None,
                 )];
-
-                // If sync has not been started, start it now
-                if !peer_state.sync_sent {
-                    messages.extend(create_initial_synchronize(hypercore, peer_state).await);
-                }
                 channel.send_batch(&messages).await?;
             }
             FEED_VERIFICATION_LOCAL_SIGNAL_NAME => {
@@ -594,11 +588,18 @@ where
                             .signal_local_protocol(FEED_VERIFICATION_LOCAL_SIGNAL_NAME, data)
                             .await?;
                     }
-                    if message.peer_id.is_some() {
-                        // Verification changed for one of the peer feeds, need to re-broadcast
+                    if message.peer_id.is_some()
+                        && !peer_state.broadcast_new_feeds.iter().any(|feed| {
+                            discovery_key_from_public_key(&feed.public_key)
+                                == message.feed_discovery_key
+                        })
+                    {
+                        // Verification changed for one of the peer feeds, but not the ones that it
+                        // itself sent (and which were already part of a previous broadcast) need to
+                        // re-broadcast.
                         let message = create_broadcast_message(
                             feeds_state,
-                            peer_state.broadcast_created_feeds.clone(),
+                            &peer_state.broadcast_new_feeds,
                             None,
                         );
                         channel.send(message).await?;

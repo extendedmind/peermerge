@@ -30,10 +30,10 @@ pub(super) struct PeerState {
     pub(super) remote_downloading: bool,
     pub(super) length_acked: u64,
 
-    /// Broadcasting temporary value to store feeds that we started
-    /// to create. Needed to include them into the next broadcast
+    /// Broadcasting temporary value to store feeds that we sent
+    /// forward as new. Needed to include them into the next broadcast
     /// even though they are not yet verified.
-    pub(super) broadcast_created_feeds: Vec<DocumentFeedInfo>,
+    pub(super) broadcast_new_feeds: Vec<DocumentFeedInfo>,
 
     /// Inflight requests
     pub(super) inflight: InflightTracker,
@@ -48,8 +48,6 @@ pub(super) struct PeerState {
     pub(super) notified_remote_synced_contiguous_length: u64,
 
     // Sending messaging state
-    /// Has the initial Synchronize message been sent to the remote.
-    pub(super) sync_sent: bool,
     /// The largest contiguous Range that has been sent to the remote.
     pub(super) contiguous_range_sent: u64,
 }
@@ -75,11 +73,10 @@ impl PeerState {
             remote_uploading: true,
             remote_downloading: true,
             length_acked: 0,
-            broadcast_created_feeds: vec![],
+            broadcast_new_feeds: vec![],
             inflight: InflightTracker::default(),
             synced_contiguous_length: 0,
             notified_remote_synced_contiguous_length: 0,
-            sync_sent: false,
             contiguous_range_sent: 0,
         }
     }
