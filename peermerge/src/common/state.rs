@@ -4,7 +4,7 @@ use std::{
     hash::{Hash, Hasher},
 };
 
-use hypercore_protocol::hypercore::{SigningKey, VerifyingKey};
+use hypercore_protocol::hypercore::{sign, SigningKey, VerifyingKey};
 use tracing::warn;
 use uuid::Uuid;
 
@@ -19,7 +19,7 @@ use crate::{
 };
 
 use super::{
-    cipher::{encode_doc_url, DocUrlAppendix},
+    cipher::{encode_doc_url, verify_data_signature, DocUrlAppendix},
     constants::PEERMERGE_VERSION,
     keys::{discovery_key_from_public_key, document_id_from_discovery_key},
 };
@@ -242,7 +242,8 @@ pub(crate) struct ChildDocumentInfo {
     pub(crate) doc_signature_verifying_key: VerifyingKey,
     /// Signature of doc_public_key and doc_signature_verifying_key signed
     /// with the doc signature key of the parent document. This is needed
-    /// to prevent proxies from announcing bogus documents.
+    /// to prevent rogue proxies or read-only peers from announcing bogus
+    /// documents with the broadcast message.
     pub(crate) signature: Vec<u8>,
     /// Whether or not the document creation is pending metadoc to
     /// contain the encryption and/or signing key.
@@ -339,12 +340,18 @@ impl DocumentFeedsState {
         doc_public_key: FeedPublicKey,
         doc_feed_verified: bool,
         write_public_key: &FeedPublicKey,
+        doc_signature_signing_key: &SigningKey,
     ) -> Self {
         Self::new_from_data(
             peer_id,
             doc_public_key,
             doc_feed_verified,
-            Some(DocumentFeedInfo::new(peer_id, *write_public_key, None)),
+            Some(DocumentFeedInfo::new(
+                peer_id,
+                *write_public_key,
+                None,
+                doc_signature_signing_key,
+            )),
             vec![],
         )
     }
@@ -532,9 +539,7 @@ impl DocumentFeedsState {
             for remote_inactive_feed in remote_inactive_feeds {
                 if let Some(stored_feeds) = self.other_feeds.get(&remote_inactive_feed.peer_id) {
                     if !stored_feeds.contains(remote_inactive_feed) {
-                        let mut new_feed = remote_inactive_feed.clone();
-                        new_feed.verified = false;
-                        new_feed.removed = false;
+                        let new_feed = remote_inactive_feed.clone();
                         if let Some(new_remote_feeds) =
                             new_remote_feeds_map.get_mut(&new_feed.peer_id)
                         {
@@ -553,15 +558,13 @@ impl DocumentFeedsState {
                 }
             }
         }
-        if let Some(mut remote_write_feed) = remote_write_feed {
+        if let Some(remote_write_feed) = remote_write_feed {
             // We didn't have this in our active feeds
             if self.replaced_public_key_exists(
                 &remote_write_feed.peer_id,
                 &remote_write_feed.replaced_public_key,
                 &remote_inactive_feeds,
             ) {
-                remote_write_feed.verified = false;
-                remote_write_feed.removed = false;
                 if let Some(new_remote_feeds) =
                     new_remote_feeds_map.get_mut(&remote_write_feed.peer_id)
                 {
@@ -581,7 +584,7 @@ impl DocumentFeedsState {
             }
         };
         let mut inactive_feeds_to_rebroadcast: Vec<DocumentFeedInfo> = vec![];
-        for mut remote_active_feed in remote_active_feeds {
+        for remote_active_feed in remote_active_feeds {
             let mut is_new_feed = false;
             if let Some(stored_feeds) = self.other_feeds.get(&remote_active_feed.peer_id) {
                 if let Some((remote_feed_stored_feeds_index, stored_feed_with_remote_pk)) =
@@ -647,8 +650,6 @@ impl DocumentFeedsState {
                     &remote_active_feed.replaced_public_key,
                     &remote_inactive_feeds,
                 ) {
-                    remote_active_feed.verified = false;
-                    remote_active_feed.removed = false;
                     if let Some(new_remote_feeds) =
                         new_remote_feeds_map.get_mut(&remote_active_feed.peer_id)
                     {
@@ -697,7 +698,7 @@ impl DocumentFeedsState {
         let mut new_feeds: Vec<DocumentFeedInfo> = vec![];
         for feeds in new_remote_feeds_map.into_values() {
             let mut previous_public_key: Option<FeedPublicKey> = None;
-            for feed in feeds {
+            for mut feed in feeds {
                 if previous_public_key.is_some() && feed.replaced_public_key != previous_public_key
                 {
                     // There is a gap, we need to abort
@@ -705,6 +706,9 @@ impl DocumentFeedsState {
                     break;
                 } else {
                     previous_public_key = Some(feed.public_key);
+                    // Reset all feeds sent out
+                    feed.verified = false;
+                    feed.removed = false;
                     new_feeds.push(feed);
                 }
             }
@@ -885,12 +889,14 @@ impl DocumentFeedsState {
     pub(crate) fn replace_write_public_key(
         &mut self,
         new_write_public_key: FeedPublicKey,
+        doc_signature_signing_key: &SigningKey,
     ) -> ChangeDocumentFeedsStateResult {
         let mut replaced_write_feed = self.write_feed.clone().unwrap();
         let mut new_write_feed = DocumentFeedInfo::new(
             replaced_write_feed.peer_id,
             new_write_public_key,
             Some(replaced_write_feed.public_key),
+            doc_signature_signing_key,
         );
         new_write_feed.populate_discovery_key();
         new_write_feed.verified = true;
@@ -973,6 +979,11 @@ pub(crate) struct DocumentFeedInfo {
     /// but needs to be stored/sent to make sure stale peers will
     /// always find the latest feed.
     pub(crate) replaced_public_key: Option<FeedPublicKey>,
+    /// Signature of peer_id, public_key and replaced_public_key signed
+    /// with the doc signature key of the document. This is needed
+    /// to prevent rogue proxies or read-only peers from announcing bogus
+    /// feeds with the broadcast message.
+    pub(crate) signature: Vec<u8>,
     /// If the signature in the first entry of the feed has been
     /// verified to contain valid information.
     pub(crate) verified: bool,
@@ -989,6 +1000,7 @@ impl PartialEq for DocumentFeedInfo {
         self.peer_id == other.peer_id
             && self.public_key == other.public_key
             && self.replaced_public_key == other.replaced_public_key
+            && self.signature == other.signature
     }
 }
 
@@ -997,6 +1009,7 @@ impl Hash for DocumentFeedInfo {
         self.peer_id.hash(state);
         self.public_key.hash(state);
         self.replaced_public_key.hash(state);
+        self.signature.hash(state);
     }
 }
 
@@ -1005,11 +1018,19 @@ impl DocumentFeedInfo {
         id: PeerId,
         public_key: [u8; 32],
         replaced_public_key: Option<FeedPublicKey>,
+        doc_signature_signing_key: &SigningKey,
     ) -> Self {
+        let mut buffer = id.to_vec();
+        buffer.extend(&public_key);
+        if let Some(key) = &replaced_public_key {
+            buffer.extend(key);
+        }
+        let signature = sign(doc_signature_signing_key, &buffer).to_bytes().to_vec();
         Self {
             peer_id: id,
             public_key,
             replaced_public_key,
+            signature,
             verified: false,
             removed: false,
             discovery_key: None,
@@ -1020,6 +1041,19 @@ impl DocumentFeedInfo {
         if self.discovery_key.is_none() {
             self.discovery_key = Some(discovery_key_from_public_key(&self.public_key));
         }
+    }
+
+    pub(crate) fn verify(
+        &self,
+        doc_signature_verifying_key: &VerifyingKey,
+    ) -> Result<(), PeermergeError> {
+        let mut buffer = self.peer_id.to_vec();
+        buffer.extend(&self.public_key);
+        if let Some(key) = &self.replaced_public_key {
+            buffer.extend(key);
+        }
+        buffer.extend(&self.signature);
+        verify_data_signature(&buffer, doc_signature_verifying_key)
     }
 }
 
@@ -1168,6 +1202,8 @@ impl DocumentContent {
 #[cfg(test)]
 mod tests {
 
+    use crate::common::keys::generate_keys;
+
     use super::*;
 
     fn eq_ignore_order<T>(a: &[T], b: &[T]) -> bool
@@ -1190,15 +1226,20 @@ mod tests {
 
     #[test]
     fn feeds_state_write_all_new_remote() -> anyhow::Result<()> {
+        let (signing_key, _) = generate_keys();
         let doc_public_key: [u8; 32] = [100; 32];
         let my_id: [u8; 16] = [0; 16];
-        let my_write_feed: DocumentFeedInfo = DocumentFeedInfo::new(my_id, [0; 32], None);
+        let my_write_feed: DocumentFeedInfo =
+            DocumentFeedInfo::new(my_id, [0; 32], None, &signing_key);
         let peer_1_id: [u8; 16] = [1; 16];
-        let peer_1_write: DocumentFeedInfo = DocumentFeedInfo::new(peer_1_id, [1; 32], None);
+        let peer_1_write: DocumentFeedInfo =
+            DocumentFeedInfo::new(peer_1_id, [1; 32], None, &signing_key);
         let peer_2_id: [u8; 16] = [2; 16];
-        let peer_2: DocumentFeedInfo = DocumentFeedInfo::new(peer_2_id, [2; 32], None);
+        let peer_2: DocumentFeedInfo =
+            DocumentFeedInfo::new(peer_2_id, [2; 32], None, &signing_key);
         let peer_3_id: [u8; 16] = [3; 16];
-        let peer_3: DocumentFeedInfo = DocumentFeedInfo::new(peer_3_id, [3; 32], None);
+        let peer_3: DocumentFeedInfo =
+            DocumentFeedInfo::new(peer_3_id, [3; 32], None, &signing_key);
 
         let mut fs = DocumentFeedsState::new_from_data(
             my_id,
@@ -1257,8 +1298,9 @@ mod tests {
             my_write_feed.peer_id,
             my_new_write_feed_pk,
             Some(my_write_feed.public_key),
+            &signing_key,
         );
-        let replace_result = fs.replace_write_public_key(my_new_write_feed_pk);
+        let replace_result = fs.replace_write_public_key(my_new_write_feed_pk, &signing_key);
         assert_eq!(fs.write_feed, Some(my_new_write_feed.clone()));
         assert_eq!(replace_result.replaced_feeds, vec![my_write_feed.clone()]);
         assert_eq!(
@@ -1277,6 +1319,7 @@ mod tests {
             peer_1_id,
             new_peer_1_write_pk,
             Some(peer_1_write.public_key),
+            &signing_key,
         );
         let compare_result = fs
             .compare_broadcasted_feeds(

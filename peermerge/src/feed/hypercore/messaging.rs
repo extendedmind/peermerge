@@ -484,6 +484,13 @@ where
                 }
 
                 if !compare_result.new_feeds.is_empty() {
+                    // Verify all new feeds broadcasted here before sending them
+                    // forward. This prevents rogue peers from overwhelming the
+                    // disk/memory storage.
+                    for new_feed in &compare_result.new_feeds {
+                        new_feed.verify(&peer_state.doc_signature_verifying_key)?;
+                    }
+
                     // We can send the (possibly partial) new feeds immediately
                     // because (possible) duplicates from a re-broadcast will be
                     // removed at merge_new_feeds.

@@ -3,10 +3,7 @@ use std::path::PathBuf;
 use futures::channel::mpsc::UnboundedSender;
 
 use crate::{
-    common::constants::{
-        DEFAULT_MAX_ENTRY_DATA_SIZE_BYTES, DEFAULT_MAX_FEEDS_VERIFIED_BATCH_SIZE,
-        DEFAULT_MAX_WRITE_FEED_LENGTH,
-    },
+    common::constants::{DEFAULT_MAX_ENTRY_DATA_SIZE_BYTES, DEFAULT_MAX_WRITE_FEED_LENGTH},
     NameDescription, StateEvent,
 };
 
@@ -15,8 +12,6 @@ pub struct MemoryPeermergeOptions {
     pub default_peer_header: NameDescription,
     #[builder(setter(into, strip_option), default)]
     pub state_event_sender: Option<UnboundedSender<StateEvent>>,
-    #[builder(default = "DEFAULT_MAX_FEEDS_VERIFIED_BATCH_SIZE")]
-    pub max_new_feeds_verified_batch_size: usize,
     #[builder(default = "DEFAULT_MAX_ENTRY_DATA_SIZE_BYTES")]
     pub max_entry_data_size_bytes: usize,
     #[builder(default = "DEFAULT_MAX_WRITE_FEED_LENGTH")]
@@ -29,8 +24,6 @@ pub struct DiskPeermergeOptions {
     pub default_peer_header: NameDescription,
     #[builder(setter(into, strip_option), default)]
     pub state_event_sender: Option<UnboundedSender<StateEvent>>,
-    #[builder(default = "DEFAULT_MAX_FEEDS_VERIFIED_BATCH_SIZE")]
-    pub max_new_feeds_verified_batch_size: usize,
     #[builder(default = "DEFAULT_MAX_ENTRY_DATA_SIZE_BYTES")]
     pub max_entry_data_size_bytes: usize,
     #[builder(default = "DEFAULT_MAX_WRITE_FEED_LENGTH")]

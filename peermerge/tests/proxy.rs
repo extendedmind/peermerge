@@ -325,6 +325,7 @@ async fn process_proxy_state_event_with_joiner_initial(
                 peer_syncs += 1;
                 if peer_syncs == 1 {
                     // The first one that will come is joiners own write feed with init
+                    // FIXME: This is flaky: might be 2 when below...
                     assert_eq!(contiguous_length, 1);
                 } else if peer_syncs == 2 {
                     // ..after that the same but now with a change.
@@ -539,6 +540,7 @@ async fn process_joiner_state_events_reopen(
             RemotePeerSynced {
                 contiguous_length, ..
             } => {
+                // FIXME: ...this is flaky: might be 2 (look above for other flaky)
                 assert_eq!(contiguous_length, 3);
                 break;
             }

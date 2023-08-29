@@ -57,7 +57,6 @@ impl CompactEncoding<PeermergeState> for State {
 
 impl CompactEncoding<DocumentSettings> for State {
     fn preencode(&mut self, value: &DocumentSettings) -> Result<usize, EncodingError> {
-        self.preencode(&value.max_new_feeds_verified_batch_size)?;
         self.preencode(&value.max_entry_data_size_bytes)?;
         self.preencode(&value.max_write_feed_length)
     }
@@ -67,17 +66,14 @@ impl CompactEncoding<DocumentSettings> for State {
         value: &DocumentSettings,
         buffer: &mut [u8],
     ) -> Result<usize, EncodingError> {
-        self.encode(&value.max_new_feeds_verified_batch_size, buffer)?;
         self.encode(&value.max_entry_data_size_bytes, buffer)?;
         self.encode(&value.max_write_feed_length, buffer)
     }
 
     fn decode(&mut self, buffer: &[u8]) -> Result<DocumentSettings, EncodingError> {
-        let max_new_feeds_verified_batch_size: usize = self.decode(buffer)?;
         let max_entry_data_size_bytes: usize = self.decode(buffer)?;
         let max_write_feed_length: u64 = self.decode(buffer)?;
         Ok(DocumentSettings {
-            max_new_feeds_verified_batch_size,
             max_entry_data_size_bytes,
             max_write_feed_length,
         })
@@ -177,6 +173,7 @@ impl CompactEncoding<DocumentFeedInfo> for State {
         if value.replaced_public_key.is_some() {
             self.preencode_fixed_32()?;
         }
+        self.preencode(&value.signature)?; // signature
         Ok(self.end())
     }
 
@@ -194,6 +191,7 @@ impl CompactEncoding<DocumentFeedInfo> for State {
             flags |= 1;
             self.encode_fixed_32(replaced_public_key, buffer)?;
         }
+        self.encode(&value.signature, buffer)?; // signature
         if value.verified {
             flags |= 2;
         }
@@ -213,12 +211,14 @@ impl CompactEncoding<DocumentFeedInfo> for State {
         } else {
             None
         };
+        let signature: Vec<u8> = self.decode(buffer)?; // signature
         let verified = flags & 2 != 0;
         let removed = flags & 4 != 0;
         Ok(DocumentFeedInfo {
             peer_id,
             public_key,
             replaced_public_key,
+            signature,
             verified,
             removed,
             discovery_key: None,
@@ -228,9 +228,9 @@ impl CompactEncoding<DocumentFeedInfo> for State {
 
 impl CompactEncoding<ChildDocumentInfo> for State {
     fn preencode(&mut self, value: &ChildDocumentInfo) -> Result<usize, EncodingError> {
-        self.preencode_fixed_32()?; // public_key
-        self.preencode_fixed_32()?; // public_key
-        self.preencode(&value.signature)?; // public_key
+        self.preencode_fixed_32()?; // doc_public_key
+        self.preencode_fixed_32()?; // doc_signature_verifying_key
+        self.preencode(&value.signature)?;
         self.add_end(1) // flags
     }
 

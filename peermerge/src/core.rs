@@ -269,7 +269,6 @@ where
 impl Peermerge<RandomAccessMemory, FeedMemoryPersistence> {
     pub async fn new_memory(options: MemoryPeermergeOptions) -> Self {
         let document_settings = DocumentSettings {
-            max_new_feeds_verified_batch_size: options.max_new_feeds_verified_batch_size,
             max_entry_data_size_bytes: options.max_entry_data_size_bytes,
             max_write_feed_length: options.max_write_feed_length,
         };
@@ -441,7 +440,6 @@ async fn on_feed_event_memory(
 impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
     pub async fn create_new_disk(options: DiskPeermergeOptions) -> Self {
         let document_settings = DocumentSettings {
-            max_new_feeds_verified_batch_size: options.max_new_feeds_verified_batch_size,
             max_entry_data_size_bytes: options.max_entry_data_size_bytes,
             max_write_feed_length: options.max_write_feed_length,
         };

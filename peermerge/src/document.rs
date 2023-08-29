@@ -90,12 +90,6 @@ where
 
 #[derive(Debug, Clone)]
 pub(crate) struct DocumentSettings {
-    /// Maximum number of new feeds verified in a batch. Needed to prevent a malicious-turned
-    /// peer from overwhelming an unsuspecting peer with bogus feeds before we can verify that
-    /// one of them is not valid. This value multiplied by MAX_ENTRY_DATA_SIZE_BYTES roughly
-    /// tells the maximum size a malicious peer can upload to an unsuspecting peer before
-    /// the connection is cut and the malicious data deleted. TODO: Implementing this logic.
-    pub(crate) max_new_feeds_verified_batch_size: usize,
     /// Maximum entry data field size in bytes. Not used for proxy or read-only peers.
     pub(crate) max_entry_data_size_bytes: usize,
     /// Maximum write feed length. Not used for proxy or read-only peers.
@@ -1068,6 +1062,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
                 decoded_doc_url.doc_url_info.doc_public_key,
                 false,
                 &write_public_key,
+                &doc_signature_signing_key,
             ),
             Some(content),
         );
@@ -1366,6 +1361,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
                 decoded_doc_url.doc_url_info.doc_public_key,
                 false,
                 &write_public_key,
+                &doc_signature_signing_key,
             ),
             Some(content),
         );
@@ -1901,7 +1897,13 @@ where
         false,
         doc_signature_verifying_key.to_bytes(),
         Some(encrypted),
-        DocumentFeedsState::new_writer(*peer_id, doc_public_key, true, &write_public_key),
+        DocumentFeedsState::new_writer(
+            *peer_id,
+            doc_public_key,
+            true,
+            &write_public_key,
+            &doc_signature_signing_key,
+        ),
         Some(content),
     );
 

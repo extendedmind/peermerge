@@ -1,11 +1,5 @@
 pub(crate) const PEERMERGE_VERSION: u8 = 1;
 
-/// Use 16 the default max batch size for a verification. This multiplied with
-/// MAX_ENTRY_DATA_SIZE_BYTES gets 16 MiB which is roughly the maximum
-/// amount of data a malicious-turned peer can upload to an unsuspecting peer
-/// before we notice it and delete the data.
-pub const DEFAULT_MAX_FEEDS_VERIFIED_BATCH_SIZE: usize = 16;
-
 /// Use 1 MiB as the absolute max limit for a single data chunk in a feed.
 pub const MAX_ENTRY_DATA_SIZE_BYTES: usize = 1048576;
 
