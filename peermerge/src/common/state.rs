@@ -15,7 +15,8 @@ use crate::{
     },
     document::DocumentSettings,
     feed::{FeedDiscoveryKey, FeedPublicKey},
-    DocUrlInfo, DocumentId, DocumentInfo, NameDescription, PeerId, PeermergeError,
+    AccessType, DocumentId, DocumentInfo, DynamicDocumentInfo, NameDescription, PeerId,
+    PeermergeError, StaticDocumentInfo,
 };
 
 use super::{
@@ -72,7 +73,7 @@ pub(crate) struct DocumentState {
     pub(crate) version: u8,
     /// Document id. Derived from doc_discovery_key.
     pub(crate) document_id: DocumentId,
-    /// Document siganture verifying key in bytes.
+    /// Document signature verifying key in bytes.
     pub(crate) doc_signature_verifying_key: [u8; 32],
     /// Is the document encrypted. If None it is unknown and proxy must be true.
     pub(crate) encrypted: Option<bool>,
@@ -130,16 +131,29 @@ impl DocumentState {
         let doc_url_info = self.doc_url_info();
         if let Some((document_type, document_header)) = self.document_type_and_header() {
             DocumentInfo {
-                doc_url_info,
-                document_type: Some(document_type),
-                document_header,
+                encrypted: self.encrypted.clone(),
+                access_type: if self.proxy {
+                    AccessType::Proxy
+                } else {
+                    AccessType::ReadWrite
+                }, // FIXME: support read-only
+                static_info: doc_url_info,
+                dynamic_info: Some(DynamicDocumentInfo {
+                    document_type,
+                    document_header,
+                }),
                 parent_document_id: None, // TODO: Support for document hierarchies
             }
         } else {
             DocumentInfo {
-                doc_url_info,
-                document_type: None,
-                document_header: None,
+                encrypted: self.encrypted.clone(),
+                access_type: if self.proxy {
+                    AccessType::Proxy
+                } else {
+                    AccessType::ReadWrite
+                }, // FIXME: support read-only
+                static_info: doc_url_info,
+                dynamic_info: None,
                 parent_document_id: None, // TODO: Support for document hierarchies
             }
         }
@@ -168,29 +182,18 @@ impl DocumentState {
         }
     }
 
-    pub(crate) fn doc_url_info(&self) -> DocUrlInfo {
-        if self.proxy {
-            DocUrlInfo::new_proxy_only(
-                self.version,
-                false, // TODO: Child documents
-                crate::FeedType::Hypercore,
-                self.feeds_state.doc_public_key,
-                self.feeds_state.doc_discovery_key,
-                self.document_id,
-                self.doc_signature_verifying_key,
-            )
-        } else {
-            DocUrlInfo::new(
-                self.version,
-                false, // TODO: child documents
-                crate::FeedType::Hypercore,
-                self.feeds_state.doc_public_key,
-                self.feeds_state.doc_discovery_key,
-                self.document_id,
-                self.doc_signature_verifying_key,
-                self.encrypted.unwrap(),
-            )
-        }
+    pub(crate) fn doc_url_info(&self) -> StaticDocumentInfo {
+        StaticDocumentInfo::new(
+            self.version,
+            crate::FeedType::Hypercore,
+            false, // TODO: Child documents
+            self.feeds_state.doc_public_key,
+            self.feeds_state.doc_discovery_key,
+            self.document_id,
+            VerifyingKey::from_bytes(&self.doc_signature_verifying_key).expect(
+                "It should never be possible an invalid verifying key is stored to the state",
+            ),
+        )
     }
 
     pub(crate) fn document_type_and_header(&self) -> Option<(String, Option<NameDescription>)> {
@@ -277,7 +280,9 @@ impl ChildDocumentInfo {
         Self {
             doc_public_key,
             doc_signature_verifying_key: VerifyingKey::from_bytes(&doc_signature_verifying_key)
-                .unwrap(),
+                .expect(
+                    "It should never be possible an invalid verifying key is stored to the state",
+                ),
             signature,
             creation_pending,
         }

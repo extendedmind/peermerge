@@ -119,7 +119,7 @@ async fn memory_three_writers() -> anyhow::Result<()> {
                 .sharing_info(&creator_doc_info.id())
                 .await?
                 .doc_url,
-            &document_secret,
+            Some(document_secret),
         )
         .await?;
     peermerge_joiner
@@ -495,7 +495,7 @@ async fn process_creator_state_events(
                         let latecomer_doc_info = peermerge_latecomer
                             .attach_writer_document_memory(
                                 &peermerge.sharing_info(&doc_id).await?.doc_url,
-                                &document_secret,
+                                Some(document_secret),
                             )
                             .await?;
                         peermerge_latecomer.watch(&doc_id, Some(vec![])).await;

@@ -82,7 +82,7 @@ pub async fn setup_peermerge_mesh_memory(
         )
         .await;
         let _doc_info = peermerge_peer
-            .attach_writer_document_memory(&doc_url, &document_secret)
+            .attach_writer_document_memory(&doc_url, Some(document_secret.clone()))
             .await
             .unwrap();
         peermerge_peer.watch(&doc_info.id(), Some(vec![ROOT])).await;
@@ -194,7 +194,7 @@ pub async fn setup_peermerge_mesh_disk(
         )
         .await;
         let doc_info = peermerge_peer
-            .attach_writer_document_disk(&doc_url, &document_secret)
+            .attach_writer_document_disk(&doc_url, Some(document_secret.clone()))
             .await
             .unwrap();
         peermerge_peer.watch(&doc_info.id(), Some(vec![ROOT])).await;

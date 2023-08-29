@@ -4,7 +4,7 @@ use futures::{
     stream::StreamExt,
 };
 use peermerge::{
-    get_doc_url_info, CreateNewDocumentOptionsBuilder, DiskPeermergeOptionsBuilder, DocumentId,
+    get_document_info, CreateNewDocumentOptionsBuilder, DiskPeermergeOptionsBuilder, DocumentId,
     FeedDiskPersistence, NameDescription, Patch, Peermerge, StateEvent, StateEventContent::*,
 };
 use random_access_disk::RandomAccessDisk;
@@ -75,7 +75,9 @@ async fn disk_two_peers(encrypted: bool) -> anyhow::Result<()> {
         .await
         .unwrap();
     assert_eq!(
-        get_doc_url_info(&doc_url).unwrap().encrypted,
+        get_document_info(&doc_url, Some(document_secret.clone()))
+            .unwrap()
+            .encrypted,
         Some(encrypted)
     );
 
@@ -100,7 +102,7 @@ async fn disk_two_peers(encrypted: bool) -> anyhow::Result<()> {
     )
     .await;
     let joiner_doc_info = peermerge_joiner
-        .attach_writer_document_disk(&doc_url, &document_secret)
+        .attach_writer_document_disk(&doc_url, Some(document_secret.clone()))
         .await?;
 
     run_disk_two_peers(
@@ -116,14 +118,13 @@ async fn disk_two_peers(encrypted: bool) -> anyhow::Result<()> {
     // Reopen the disk peermerges from disk, assert that opening works with new scalar
     let creator_document_infos = Peermerge::document_infos_disk(&creator_dir).await?.unwrap();
     assert_eq!(creator_document_infos.len(), 1);
-    assert_eq!(
-        creator_document_infos[0].doc_url_info.encrypted,
-        Some(encrypted)
-    );
+    assert_eq!(creator_document_infos[0].encrypted, Some(encrypted));
     assert_eq!(
         creator_document_infos[0]
-            .document_header
+            .dynamic_info
             .clone()
+            .unwrap()
+            .document_header
             .unwrap()
             .name,
         document_name
@@ -151,14 +152,13 @@ async fn disk_two_peers(encrypted: bool) -> anyhow::Result<()> {
 
     let joiner_document_infos = Peermerge::document_infos_disk(&creator_dir).await?.unwrap();
     assert_eq!(joiner_document_infos.len(), 1);
-    assert_eq!(
-        joiner_document_infos[0].doc_url_info.encrypted,
-        Some(encrypted)
-    );
+    assert_eq!(joiner_document_infos[0].encrypted, Some(encrypted));
     assert_eq!(
         joiner_document_infos[0]
-            .document_header
+            .dynamic_info
             .clone()
+            .unwrap()
+            .document_header
             .unwrap()
             .name,
         document_name

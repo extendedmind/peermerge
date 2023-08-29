@@ -4,7 +4,7 @@ use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use futures::future::join_all;
 use futures::stream::StreamExt;
 use peermerge::{
-    get_doc_url_info, CreateNewDocumentOptionsBuilder, DiskPeermergeOptionsBuilder, DocumentId,
+    get_document_info, CreateNewDocumentOptionsBuilder, DiskPeermergeOptionsBuilder, DocumentId,
     FeedMemoryPersistence, MemoryPeermergeOptionsBuilder, NameDescription, Patch, Peermerge,
     StateEvent, StateEventContent::*,
 };
@@ -61,8 +61,8 @@ async fn proxy_disk_encrypted() -> anyhow::Result<()> {
         .document_secret(&creator_doc_info.id())
         .await
         .unwrap();
-    let doc_url_info = get_doc_url_info(&doc_url)?;
-    assert_eq!(doc_url_info.encrypted, Some(true));
+    let document_info = get_document_info(&doc_url, Some(document_secret.clone()))?;
+    assert_eq!(document_info.encrypted, Some(true));
     assert!(!sharing_info.proxy);
 
     let mut peermerge_creator_for_task = peermerge_creator.clone();
@@ -137,7 +137,7 @@ async fn proxy_disk_encrypted() -> anyhow::Result<()> {
         .set_state_event_sender(Some(proxy_state_event_sender))
         .await;
     let joiner_doc_info = peermerge_joiner
-        .attach_writer_document_memory(&doc_url, &document_secret)
+        .attach_writer_document_memory(&doc_url, Some(document_secret.clone()))
         .await?;
     let reattach_secret: String = peermerge_joiner
         .reattach_secret(&joiner_doc_info.id())
@@ -196,7 +196,7 @@ async fn proxy_disk_encrypted() -> anyhow::Result<()> {
         .set_state_event_sender(Some(proxy_state_event_sender))
         .await;
     let _joiner_doc_info = peermerge_joiner
-        .reattach_writer_document_memory(&doc_url, &document_secret, &reattach_secret)
+        .reattach_writer_document_memory(&doc_url, Some(document_secret), &reattach_secret)
         .await?;
     let mut peermerge_joiner_for_task = peermerge_joiner.clone();
     let joiner_connect = task::spawn(async move {

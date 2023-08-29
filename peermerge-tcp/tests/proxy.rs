@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use futures::stream::StreamExt;
 use peermerge::transaction::Transactable;
-use peermerge::{get_doc_url_info, CreateNewDocumentOptionsBuilder, DocumentId};
+use peermerge::{get_document_info, CreateNewDocumentOptionsBuilder, DocumentId};
 use peermerge::{DiskPeermergeOptionsBuilder, ROOT};
 use peermerge::{
     FeedDiskPersistence, Peermerge, RandomAccessDisk, StateEvent, StateEventContent::*,
@@ -64,10 +64,12 @@ async fn tcp_proxy_disk_encrypted() -> anyhow::Result<()> {
         .doc_url;
     let document_secret = peermerge_creator
         .document_secret(&creator_doc_info.id())
-        .await;
-    assert_eq!(get_doc_url_info(&doc_url)?.encrypted, Some(true));
-    assert!(document_secret.is_some());
-
+        .await
+        .unwrap();
+    assert_eq!(
+        get_document_info(&doc_url, Some(document_secret.clone()))?.encrypted,
+        Some(true)
+    );
     let proxy_dir = Builder::new()
         .prefix("tcp_proxy_disk_encrypted")
         .tempdir()
@@ -92,9 +94,7 @@ async fn tcp_proxy_disk_encrypted() -> anyhow::Result<()> {
     // Reopen peermerge_creator
     drop(peermerge_creator);
     let mut creator_document_secrets = HashMap::new();
-    if let Some(document_secret) = document_secret.as_ref() {
-        creator_document_secrets.insert(creator_doc_info.id(), document_secret.clone());
-    }
+    creator_document_secrets.insert(creator_doc_info.id(), document_secret.clone());
     let peermerge_creator =
         Peermerge::open_disk(creator_document_secrets, &creator_dir, None).await?;
 

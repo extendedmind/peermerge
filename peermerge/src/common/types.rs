@@ -1,3 +1,5 @@
+use hypercore_protocol::hypercore::VerifyingKey;
+
 use crate::DocumentId;
 
 /// Type of feed.
@@ -19,51 +21,53 @@ impl TryFrom<u8> for FeedType {
     }
 }
 
+/// Access type to a document.
+#[derive(Copy, Clone, Debug, PartialEq)]
+#[repr(u8)]
+pub enum AccessType {
+    /// Proxy-only, meaning not able to access the data inside the document
+    /// but only proxy the data to other peers. NB: If the document is not
+    /// encrypted, reading is technically still possible by investigating
+    /// the storage directly.
+    Proxy = 0,
+    /// Reading the document is possible, but not making changes to it.
+    ReadOnly = 1,
+    /// Reading and writing to the document is possible.
+    ReadWrite = 2,
+}
+
+impl TryFrom<u8> for AccessType {
+    type Error = ();
+    fn try_from(input: u8) -> Result<Self, <Self as TryFrom<u8>>::Error> {
+        match input {
+            0u8 => Ok(Self::Proxy),
+            1u8 => Ok(Self::ReadOnly),
+            2u8 => Ok(Self::ReadWrite),
+            _ => Err(()),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
-pub struct DocUrlInfo {
+pub struct StaticDocumentInfo {
     pub version: u8,
     pub feed_type: FeedType,
     pub child: bool,
     pub doc_public_key: [u8; 32],
     pub doc_discovery_key: [u8; 32],
     pub document_id: DocumentId,
-    pub doc_signature_verifying_key: [u8; 32],
-    pub proxy_only: bool,
-    pub encrypted: Option<bool>,
+    pub doc_signature_verifying_key: VerifyingKey,
 }
 
-impl DocUrlInfo {
+impl StaticDocumentInfo {
     pub(crate) fn new(
         version: u8,
-        child: bool,
         feed_type: FeedType,
+        child: bool,
         doc_public_key: [u8; 32],
         doc_discovery_key: [u8; 32],
         document_id: DocumentId,
-        doc_signature_verifying_key: [u8; 32],
-        encrypted: bool,
-    ) -> Self {
-        Self {
-            version,
-            child,
-            feed_type,
-            doc_public_key,
-            doc_discovery_key,
-            document_id,
-            doc_signature_verifying_key,
-            proxy_only: false,
-            encrypted: Some(encrypted),
-        }
-    }
-
-    pub(crate) fn new_proxy_only(
-        version: u8,
-        child: bool,
-        feed_type: FeedType,
-        doc_public_key: [u8; 32],
-        doc_discovery_key: [u8; 32],
-        document_id: DocumentId,
-        doc_signature_verifying_key: [u8; 32],
+        doc_signature_verifying_key: VerifyingKey,
     ) -> Self {
         Self {
             version,
@@ -73,26 +77,37 @@ impl DocUrlInfo {
             doc_discovery_key,
             document_id,
             doc_signature_verifying_key,
-            proxy_only: true,
-            encrypted: None,
         }
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct DocumentInfo {
-    pub doc_url_info: DocUrlInfo,
-    /// Document type. Missing for proxy documents, but can be
-    /// missing for attached writeable documents too before
-    /// initial sync is ready.
-    pub document_type: Option<String>,
+pub struct DynamicDocumentInfo {
+    pub document_type: String,
     pub document_header: Option<NameDescription>,
+}
+
+#[derive(Debug, Clone)]
+pub struct DocumentInfo {
+    /// Access to the document
+    pub access_type: AccessType,
+    /// Is the document encrypted. For access_type Proxy, this is None.
+    pub encrypted: Option<bool>,
+    /// Parent document information. This is dependent on the peermerge
+    /// installation because a document may have a different
+    /// parent document depending on the peer.
     pub parent_document_id: Option<DocumentId>,
+    /// Static information about the document that's always available
+    /// regardless of access_type.
+    pub static_info: StaticDocumentInfo,
+    /// Dynamic information about the document. This changes over time,
+    /// and is None for access_type Proxy.
+    pub dynamic_info: Option<DynamicDocumentInfo>,
 }
 
 impl DocumentInfo {
     pub fn id(&self) -> DocumentId {
-        self.doc_url_info.document_id
+        self.static_info.document_id
     }
 }
 

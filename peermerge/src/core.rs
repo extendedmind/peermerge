@@ -315,24 +315,26 @@ impl Peermerge<RandomAccessMemory, FeedMemoryPersistence> {
     pub async fn attach_writer_document_memory(
         &mut self,
         doc_url: &str,
-        document_secret: &str,
+        document_secret: Option<String>,
     ) -> Result<DocumentInfo, PeermergeError> {
         let document = Document::attach_writer_memory(
             self.peer_id,
             &self.default_peer_header,
             doc_url,
-            decode_document_secret(document_secret)?,
+            &document_secret
+                .map(|secret| decode_document_secret(&secret))
+                .transpose()?,
             self.document_settings.clone(),
         )
         .await?;
         Ok(self.add_document(document).await)
     }
 
-    /// Reattaches a writer based on given write_key_pair and peer name
+    /// Reattaches a main document writer based on a reattach secret
     pub async fn reattach_writer_document_memory(
         &mut self,
         doc_url: &str,
-        document_secret: &str,
+        document_secret: Option<String>,
         reattach_secret: &str,
     ) -> Result<DocumentInfo, PeermergeError> {
         let (peer_id, write_feed_key_pair_bytes) = decode_reattach_secret(reattach_secret)?;
@@ -342,7 +344,9 @@ impl Peermerge<RandomAccessMemory, FeedMemoryPersistence> {
             write_feed_signing_key,
             &self.default_peer_header.name,
             doc_url,
-            decode_document_secret(document_secret)?,
+            &document_secret
+                .map(|secret| decode_document_secret(&secret))
+                .transpose()?,
             self.document_settings.clone(),
         )
         .await?;
@@ -551,13 +555,15 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
     pub async fn attach_writer_document_disk(
         &mut self,
         doc_url: &str,
-        document_secret: &str,
+        document_secret: Option<String>,
     ) -> Result<DocumentInfo, PeermergeError> {
         let document = Document::attach_writer_disk(
             self.peer_id,
             &self.default_peer_header,
             doc_url,
-            decode_document_secret(document_secret)?,
+            &document_secret
+                .map(|secret| decode_document_secret(&secret))
+                .transpose()?,
             &self.prefix,
             self.document_settings.clone(),
         )

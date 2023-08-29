@@ -11,15 +11,20 @@ use uuid::Uuid;
 use crate::{
     common::keys::{discovery_key_from_public_key, document_id_from_discovery_key},
     feed::{FeedDiscoveryKey, FeedPublicKey},
-    DocUrlInfo, DocumentId, FeedType, NameDescription, PeerId, PeermergeError,
+    DocumentId, DocumentInfo, FeedType, NameDescription, PeerId, PeermergeError,
+    StaticDocumentInfo,
 };
 
-use super::constants::PEERMERGE_VERSION;
+use super::{
+    constants::PEERMERGE_VERSION,
+    types::{AccessType, DynamicDocumentInfo},
+};
 
 const DOC_URL_PREFIX: &str = "peermerge:/";
 const PLAINTEXT_PARAM: &str = "?pt=";
 const CIPHERTEXT_PARAM: &str = "?ct=";
 const SIGNATURE_PARAM: &str = "s=";
+const DOCUMENT_SECRET_PARAM: &str = "&ds=";
 
 /// Generate new v4 UUID. Convenience method to generate UUIDs using
 /// just peermerge without importing the uuid crate and configuring
@@ -55,44 +60,15 @@ pub fn decode_base64_nopad(value: &str) -> Result<Vec<u8>, PeermergeError> {
     Ok(decoded)
 }
 
-/// Get public information about a document URL.
-pub fn get_doc_url_info(doc_url: &str) -> Result<DocUrlInfo, PeermergeError> {
-    Ok(get_doc_url_info_and_appendix_position(doc_url)?.0)
-}
-
-pub(crate) fn get_doc_url_info_and_appendix_position(
-    doc_url: &str,
-) -> Result<(DocUrlInfo, Option<(usize, usize, bool)>), PeermergeError> {
-    let (domain_end, appendix_position) = get_domain_end_and_appendix_start_end_encrypted(doc_url);
-    let domain = decode_domain(doc_url, domain_end, appendix_position)?;
-    if let Some((_, _, encrypted)) = &appendix_position {
-        Ok((
-            DocUrlInfo::new(
-                domain.version,
-                domain.child,
-                domain.feed_type,
-                domain.doc_public_key,
-                domain.doc_discovery_key,
-                domain.document_id,
-                domain.doc_signature_verifying_key.to_bytes(),
-                *encrypted,
-            ),
-            appendix_position,
-        ))
-    } else {
-        Ok((
-            DocUrlInfo::new_proxy_only(
-                domain.version,
-                domain.child,
-                domain.feed_type,
-                domain.doc_public_key,
-                domain.doc_discovery_key,
-                domain.document_id,
-                domain.doc_signature_verifying_key.to_bytes(),
-            ),
-            appendix_position,
-        ))
-    }
+/// Get document information from document URL and optional document secret.
+pub fn get_document_info(
+    document_url: &str,
+    document_secret: Option<String>,
+) -> Result<DocumentInfo, PeermergeError> {
+    let document_secret: Option<DocumentSecret> = document_secret
+        .map(|secret| decode_document_secret(&secret))
+        .transpose()?;
+    Ok(decode_doc_url(document_url, &document_secret)?.into())
 }
 
 pub(crate) struct EntryCipher {
@@ -194,13 +170,31 @@ pub(crate) struct DocUrlAppendix {
 
 #[derive(Debug, Clone)]
 pub(crate) struct DecodedDocUrl {
-    pub(crate) doc_url_info: DocUrlInfo,
+    pub(crate) access_type: AccessType,
+    pub(crate) encrypted: Option<bool>,
+    pub(crate) static_info: StaticDocumentInfo,
     pub(crate) doc_url_appendix: Option<DocUrlAppendix>,
+    pub(crate) document_secret: DocumentSecret,
+}
+
+impl Into<DocumentInfo> for DecodedDocUrl {
+    fn into(self) -> DocumentInfo {
+        DocumentInfo {
+            access_type: self.access_type,
+            encrypted: self.encrypted,
+            parent_document_id: None,
+            static_info: self.static_info,
+            dynamic_info: self.doc_url_appendix.map(|appendix| DynamicDocumentInfo {
+                document_type: appendix.document_type,
+                document_header: appendix.document_header,
+            }),
+        }
+    }
 }
 
 pub(crate) fn decode_doc_url(
     doc_url: &str,
-    document_secret: &DocumentSecret,
+    document_secret: &Option<DocumentSecret>,
 ) -> Result<DecodedDocUrl, PeermergeError> {
     if &doc_url[..DOC_URL_PREFIX.len()] != DOC_URL_PREFIX {
         return Err(PeermergeError::BadArgument {
@@ -208,11 +202,11 @@ pub(crate) fn decode_doc_url(
         });
     }
 
-    let (doc_url_info, appendix_position) = get_doc_url_info_and_appendix_position(doc_url)?;
+    let (static_info, appendix_position, document_secret) =
+        get_static_document_info_and_appendix_position(doc_url, document_secret)?;
+    let document_secret = document_secret.unwrap_or_else(|| DocumentSecret::empty());
     if let Some(doc_signature_signing_key) = &document_secret.doc_signature_signing_key {
-        if doc_url_info.doc_signature_verifying_key
-            != doc_signature_signing_key.verifying_key().to_bytes()
-        {
+        if static_info.doc_signature_verifying_key != doc_signature_signing_key.verifying_key() {
             return Err(PeermergeError::BadArgument {
                 context: "Verifying key in doc URL does not match that given as document secret"
                     .to_string(),
@@ -220,36 +214,47 @@ pub(crate) fn decode_doc_url(
         }
     }
 
-    let doc_url_appendix: Option<DocUrlAppendix> =
-        if let Some((appendix_start, appendix_end, encrypted)) = appendix_position {
-            let buffer = decode_base64_nopad(&doc_url[appendix_start..appendix_end])?;
-            let appendix_buffer: Option<Vec<u8>> = if encrypted {
-                // The url indicates that its encrypted. If an encryption key is given, use it to unwrap the header
-                if let Some(encryption_key) = &document_secret.encryption_key {
-                    let nonce = generate_nonce(&doc_url_info.doc_public_key, 0);
-                    let cipher = XChaCha20Poly1305::new_from_slice(encryption_key).unwrap();
-                    Some(cipher.decrypt(&nonce, &*buffer).unwrap())
-                } else {
-                    None
-                }
-            } else {
-                Some(buffer)
-            };
-            if let Some(appendix_buffer) = appendix_buffer {
-                let mut dec_state = State::from_buffer(&appendix_buffer);
-                let doc_url_appendix: DocUrlAppendix = dec_state
-                    .decode(&appendix_buffer)
-                    .expect("Invalid URL appendix");
-                Some(doc_url_appendix)
+    let (doc_url_appendix, encrypted, access_type): (
+        Option<DocUrlAppendix>,
+        Option<bool>,
+        AccessType,
+    ) = if let Some((appendix_start, appendix_end, encrypted)) = appendix_position {
+        let buffer = decode_base64_nopad(&doc_url[appendix_start..appendix_end])?;
+        let appendix_buffer: Option<Vec<u8>> = if encrypted {
+            // The url indicates that its encrypted. If an encryption key is given, use it to unwrap the header
+            if let Some(encryption_key) = &document_secret.encryption_key {
+                let nonce = generate_nonce(&static_info.doc_public_key, 0);
+                let cipher = XChaCha20Poly1305::new_from_slice(encryption_key).unwrap();
+                Some(cipher.decrypt(&nonce, &*buffer).unwrap())
             } else {
                 None
             }
         } else {
-            None
+            Some(buffer)
         };
+        if let Some(appendix_buffer) = appendix_buffer {
+            let mut dec_state = State::from_buffer(&appendix_buffer);
+            let doc_url_appendix: DocUrlAppendix = dec_state
+                .decode(&appendix_buffer)
+                .expect("Invalid URL appendix");
+            let access_type = if document_secret.doc_signature_signing_key.is_some() {
+                AccessType::ReadWrite
+            } else {
+                AccessType::ReadOnly
+            };
+            (Some(doc_url_appendix), Some(encrypted), access_type)
+        } else {
+            (None, None, AccessType::Proxy)
+        }
+    } else {
+        (None, None, AccessType::Proxy)
+    };
     Ok(DecodedDocUrl {
-        doc_url_info,
+        encrypted,
+        access_type,
+        static_info,
         doc_url_appendix,
+        document_secret,
     })
 }
 
@@ -379,22 +384,12 @@ fn encode_domain(
     encode_base64_nopad(&domain)
 }
 
-#[derive(Debug, Clone)]
-struct DocUrlDomain {
-    version: u8,
-    child: bool,
-    feed_type: FeedType,
-    doc_public_key: FeedPublicKey,
-    doc_discovery_key: FeedDiscoveryKey,
-    document_id: DocumentId,
-    doc_signature_verifying_key: VerifyingKey,
-}
-
-fn decode_domain(
+fn decode_domain_and_document_secret(
     doc_url: &str,
     domain_end: usize,
     appendix_position: Option<(usize, usize, bool)>,
-) -> Result<DocUrlDomain, PeermergeError> {
+    document_secret: &Option<DocumentSecret>,
+) -> Result<(StaticDocumentInfo, Option<DocumentSecret>), PeermergeError> {
     let domain = decode_base64_nopad(&doc_url[DOC_URL_PREFIX.len()..domain_end])?;
     if domain.len() != 64 + 2 {
         return Err(PeermergeError::BadArgument {
@@ -446,7 +441,9 @@ fn decode_domain(
             (domain_end, format!("?{SIGNATURE_PARAM}"))
         };
 
-    // Verify the signature at the end of the doc URL
+    // Verify the signature at the end of the doc URL, and extract a possible
+    // document secret from the end if it is not given as param.
+    let mut document_secret: Option<DocumentSecret> = document_secret.clone();
     let (unsigned_url, signature_base64) = if doc_url[signature_position..].len() < 4
         || doc_url[signature_position..signature_position + 3] != expected_signature_param
     {
@@ -454,23 +451,65 @@ fn decode_domain(
             context: "Invalid URL, missing signature".to_string(),
         });
     } else {
+        let signature_end_index = if let Some(next_param_index) =
+            doc_url[signature_position + 3..].find('&')
+        {
+            let signature_end_index = signature_position + 3 + next_param_index;
+            if doc_url[signature_end_index..].len() < DOCUMENT_SECRET_PARAM.len()
+                || &doc_url[signature_end_index..signature_end_index + DOCUMENT_SECRET_PARAM.len()]
+                    != DOCUMENT_SECRET_PARAM
+            {
+                return Err(PeermergeError::BadArgument {
+                    context: "Invalid URL, unexpected parameter after signature".to_string(),
+                });
+            }
+            if document_secret.is_none() {
+                document_secret = Some(decode_document_secret(
+                    &doc_url[signature_end_index + DOCUMENT_SECRET_PARAM.len()..],
+                )?);
+            }
+            signature_end_index
+        } else {
+            doc_url.len()
+        };
+
         (
             &doc_url[..signature_position + 3],
-            &doc_url[signature_position + 3..],
+            &doc_url[signature_position + 3..signature_end_index],
         )
     };
     let signature = decode_base64_nopad(signature_base64)?;
     verify_url_signature(unsigned_url, &signature, &doc_signature_verifying_key)?;
 
-    Ok(DocUrlDomain {
-        version,
-        child,
-        feed_type,
-        doc_public_key,
-        doc_discovery_key,
-        document_id,
-        doc_signature_verifying_key,
-    })
+    Ok((
+        StaticDocumentInfo {
+            version,
+            child,
+            feed_type,
+            doc_public_key,
+            doc_discovery_key,
+            document_id,
+            doc_signature_verifying_key,
+        },
+        document_secret,
+    ))
+}
+
+fn get_static_document_info_and_appendix_position(
+    doc_url: &str,
+    document_secret: &Option<DocumentSecret>,
+) -> Result<
+    (
+        StaticDocumentInfo,
+        Option<(usize, usize, bool)>,
+        Option<DocumentSecret>,
+    ),
+    PeermergeError,
+> {
+    let (domain_end, appendix_position) = get_domain_end_and_appendix_start_end_encrypted(doc_url);
+    let (static_document_info, document_secret) =
+        decode_domain_and_document_secret(doc_url, domain_end, appendix_position, document_secret)?;
+    Ok((static_document_info, appendix_position, document_secret))
 }
 
 fn get_domain_end_and_appendix_start_end_encrypted(

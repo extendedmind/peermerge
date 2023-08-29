@@ -30,7 +30,7 @@ use crate::common::state::{
     ChildDocumentInfo, DocumentFeedInfo, DocumentFeedsState, DocumentState,
 };
 use crate::common::utils::{Mutex, YieldNow};
-use crate::common::{DocumentInfo, StateEventContent::*};
+use crate::common::{AccessType, DocumentInfo, StateEventContent::*};
 use crate::feed::FeedDiscoveryKey;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::feed::{create_new_read_disk_feed, create_new_write_disk_feed, open_disk_feed};
@@ -819,7 +819,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
         peer_id: PeerId,
         peer_header: &NameDescription,
         doc_url: &str,
-        document_secret: DocumentSecret,
+        document_secret: &Option<DocumentSecret>,
         settings: DocumentSettings,
     ) -> Result<Self, PeermergeError> {
         Self::do_attach_writer_memory(
@@ -838,7 +838,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
         write_feed_signing_key: SigningKey,
         peer_name: &str,
         doc_url: &str,
-        document_secret: DocumentSecret,
+        document_secret: &Option<DocumentSecret>,
         settings: DocumentSettings,
     ) -> Result<Self, PeermergeError> {
         Self::do_attach_writer_memory(
@@ -861,17 +861,18 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
         let encrypted = false;
 
         // Process keys from doc URL
-        let decoded_doc_url = decode_doc_url(&doc_url, &DocumentSecret::empty())?;
-        let doc_discovery_key = decoded_doc_url.doc_url_info.doc_discovery_key;
-        let doc_signature_verifying_key =
-            VerifyingKey::from_bytes(&decoded_doc_url.doc_url_info.doc_signature_verifying_key)
-                .map_err(|err| PeermergeError::BadArgument {
-                    context: format!("Invalid document url, {err}"),
-                })?;
+        let decoded_doc_url = decode_doc_url(&doc_url, &None)?;
+        if decoded_doc_url.access_type != AccessType::Proxy {
+            return Err(PeermergeError::BadArgument {
+                context: "Given document URL is not meant for a proxy".to_string(),
+            });
+        }
+        let doc_discovery_key = decoded_doc_url.static_info.doc_discovery_key;
+        let doc_signature_verifying_key = decoded_doc_url.static_info.doc_signature_verifying_key;
 
         // Create the doc feed
         let doc_feed = create_new_read_memory_feed(
-            &decoded_doc_url.doc_url_info.doc_public_key,
+            &decoded_doc_url.static_info.doc_public_key,
             proxy,
             encrypted,
             &None,
@@ -883,7 +884,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
             proxy,
             doc_signature_verifying_key.to_bytes(),
             None,
-            DocumentFeedsState::new(peer_id, decoded_doc_url.doc_url_info.doc_public_key, false),
+            DocumentFeedsState::new(peer_id, decoded_doc_url.static_info.doc_public_key, false),
             None,
         );
 
@@ -933,17 +934,17 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
         peer_id: PeerId,
         peer_header: &NameDescription,
         doc_url: &str,
-        mut document_secret: DocumentSecret,
+        document_secret: &Option<DocumentSecret>,
         settings: DocumentSettings,
         mut write_feed_signing_key: Option<SigningKey>,
     ) -> Result<Self, PeermergeError> {
         let proxy = false;
 
         // Process keys from doc URL and document secret
-        let decoded_doc_url = decode_doc_url(doc_url, &document_secret)?;
-        let doc_discovery_key = decoded_doc_url.doc_url_info.doc_discovery_key;
-        let encryption_key = document_secret.encryption_key.take();
-        let encrypted = if let Some(encrypted) = decoded_doc_url.doc_url_info.encrypted {
+        let mut decoded_doc_url = decode_doc_url(doc_url, document_secret)?;
+        let doc_discovery_key = decoded_doc_url.static_info.doc_discovery_key;
+        let encryption_key = decoded_doc_url.document_secret.encryption_key.take();
+        let encrypted = if let Some(encrypted) = decoded_doc_url.encrypted {
             if encrypted && encryption_key.is_none() {
                 return Err(PeermergeError::BadArgument {
                     context: "Invalid document secret, missing encryption key".to_string(),
@@ -955,20 +956,18 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
                 context: "Given doc URL is only usable for proxying".to_string(),
             });
         };
-        let doc_signature_signing_key =
-            if let Some(key) = document_secret.doc_signature_signing_key.take() {
-                key
-            } else {
-                return Err(PeermergeError::BadArgument {
-                    context: "Invalid document secret, missing signing key".to_string(),
-                });
-            };
-        let doc_signature_verifying_key =
-            VerifyingKey::from_bytes(&decoded_doc_url.doc_url_info.doc_signature_verifying_key)
-                .map_err(|err| PeermergeError::BadArgument {
-                    context: format!("Invalid document url, {err}"),
-                })?;
-
+        let doc_signature_signing_key = if let Some(key) = decoded_doc_url
+            .document_secret
+            .doc_signature_signing_key
+            .take()
+        {
+            key
+        } else {
+            return Err(PeermergeError::BadArgument {
+                context: "Invalid document secret, missing signing key".to_string(),
+            });
+        };
+        let doc_signature_verifying_key = decoded_doc_url.static_info.doc_signature_verifying_key;
         let meta_doc_data = decoded_doc_url
             .doc_url_appendix
             .expect("Writer needs to have an appendix")
@@ -976,7 +975,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
 
         // Create the root feed
         let root_feed = create_new_read_memory_feed(
-            &decoded_doc_url.doc_url_info.doc_public_key,
+            &decoded_doc_url.static_info.doc_public_key,
             proxy,
             encrypted,
             &encryption_key,
@@ -1044,7 +1043,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
         // Initialize document state
         let content = DocumentContent::new(
             peer_id,
-            &decoded_doc_url.doc_url_info.doc_discovery_key,
+            &decoded_doc_url.static_info.doc_discovery_key,
             0,
             &write_discovery_key,
             write_feed_init_data_len,
@@ -1059,7 +1058,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
             Some(encrypted),
             DocumentFeedsState::new_writer(
                 peer_id,
-                decoded_doc_url.doc_url_info.doc_public_key,
+                decoded_doc_url.static_info.doc_public_key,
                 false,
                 &write_public_key,
                 &doc_signature_signing_key,
@@ -1256,17 +1255,17 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
         peer_id: PeerId,
         peer_header: &NameDescription,
         doc_url: &str,
-        mut document_secret: DocumentSecret,
+        document_secret: &Option<DocumentSecret>,
         data_root_dir: &PathBuf,
         settings: DocumentSettings,
     ) -> Result<Self, PeermergeError> {
         let proxy = false;
 
         // Process keys from doc URL and document secret
-        let decoded_doc_url = decode_doc_url(doc_url, &document_secret)?;
-        let doc_discovery_key = decoded_doc_url.doc_url_info.doc_discovery_key;
-        let encryption_key = document_secret.encryption_key.take();
-        let encrypted = if let Some(encrypted) = decoded_doc_url.doc_url_info.encrypted {
+        let mut decoded_doc_url = decode_doc_url(doc_url, document_secret)?;
+        let doc_discovery_key = decoded_doc_url.static_info.doc_discovery_key;
+        let encryption_key = decoded_doc_url.document_secret.encryption_key.take();
+        let encrypted = if let Some(encrypted) = decoded_doc_url.encrypted {
             if encrypted && encryption_key.is_none() {
                 return Err(PeermergeError::BadArgument {
                     context: "Invalid document secret, missing encryption key".to_string(),
@@ -1278,19 +1277,18 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
                 context: "Given doc URL is only usable for proxying".to_string(),
             });
         };
-        let doc_signature_signing_key =
-            if let Some(key) = document_secret.doc_signature_signing_key.take() {
-                key
-            } else {
-                return Err(PeermergeError::BadArgument {
-                    context: "Invalid document secret, missing signing key".to_string(),
-                });
-            };
-        let doc_signature_verifying_key =
-            VerifyingKey::from_bytes(&decoded_doc_url.doc_url_info.doc_signature_verifying_key)
-                .map_err(|err| PeermergeError::BadArgument {
-                    context: format!("Invalid document url, {err}"),
-                })?;
+        let doc_signature_signing_key = if let Some(key) = decoded_doc_url
+            .document_secret
+            .doc_signature_signing_key
+            .take()
+        {
+            key
+        } else {
+            return Err(PeermergeError::BadArgument {
+                context: "Invalid document secret, missing signing key".to_string(),
+            });
+        };
+        let doc_signature_verifying_key = decoded_doc_url.static_info.doc_signature_verifying_key;
 
         let meta_doc_data = decoded_doc_url
             .doc_url_appendix
@@ -1298,12 +1296,12 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
             .meta_doc_data;
 
         // Create the root feed
-        let postfix = encode_document_id(&decoded_doc_url.doc_url_info.document_id);
+        let postfix = encode_document_id(&decoded_doc_url.static_info.document_id);
         let data_root_dir = data_root_dir.join(postfix);
         let doc_feed = create_new_read_disk_feed(
             &data_root_dir,
-            &decoded_doc_url.doc_url_info.doc_public_key,
-            &decoded_doc_url.doc_url_info.doc_discovery_key,
+            &decoded_doc_url.static_info.doc_public_key,
+            &decoded_doc_url.static_info.doc_discovery_key,
             proxy,
             encrypted,
             &encryption_key,
@@ -1343,7 +1341,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
         // Initialize document state
         let content = DocumentContent::new(
             peer_id,
-            &decoded_doc_url.doc_url_info.doc_discovery_key,
+            &decoded_doc_url.static_info.doc_discovery_key,
             0,
             &write_discovery_key,
             write_feed_init_data_len,
@@ -1358,7 +1356,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
             Some(encrypted),
             DocumentFeedsState::new_writer(
                 peer_id,
-                decoded_doc_url.doc_url_info.doc_public_key,
+                decoded_doc_url.static_info.doc_public_key,
                 false,
                 &write_public_key,
                 &doc_signature_signing_key,
@@ -1393,21 +1391,22 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
         let encrypted = false;
 
         // Process keys from doc URL
-        let decoded_doc_url = decode_doc_url(&doc_url, &DocumentSecret::empty())?;
-        let document_id = decoded_doc_url.doc_url_info.document_id;
-        let doc_discovery_key = decoded_doc_url.doc_url_info.doc_discovery_key;
-        let doc_signature_verifying_key =
-            VerifyingKey::from_bytes(&decoded_doc_url.doc_url_info.doc_signature_verifying_key)
-                .map_err(|err| PeermergeError::BadArgument {
-                    context: format!("Invalid document url, {err}"),
-                })?;
+        let decoded_doc_url = decode_doc_url(&doc_url, &None)?;
+        if decoded_doc_url.access_type != AccessType::Proxy {
+            return Err(PeermergeError::BadArgument {
+                context: "Given document URL is not meant for a proxy".to_string(),
+            });
+        }
+        let document_id = decoded_doc_url.static_info.document_id;
+        let doc_discovery_key = decoded_doc_url.static_info.doc_discovery_key;
+        let doc_signature_verifying_key = decoded_doc_url.static_info.doc_signature_verifying_key;
 
         // Create the doc feed
         let postfix = encode_document_id(&document_id);
         let data_root_dir = data_root_dir.join(postfix);
         let doc_feed = create_new_read_disk_feed(
             &data_root_dir,
-            &decoded_doc_url.doc_url_info.doc_public_key,
+            &decoded_doc_url.static_info.doc_public_key,
             &document_id,
             proxy,
             encrypted,
@@ -1420,7 +1419,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
             proxy,
             doc_signature_verifying_key.to_bytes(),
             None,
-            DocumentFeedsState::new(peer_id, decoded_doc_url.doc_url_info.doc_public_key, false),
+            DocumentFeedsState::new(peer_id, decoded_doc_url.static_info.doc_public_key, false),
             None,
         );
 
