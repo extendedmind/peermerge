@@ -35,7 +35,7 @@ use crate::{
         FeedEvent,
     },
     feed::FeedDiscoveryKey,
-    PeerId, PeermergeError,
+    AccessType, PeerId, PeermergeError,
 };
 
 #[derive(Debug)]
@@ -45,7 +45,7 @@ where
 {
     pub(super) public_key: [u8; 32],
     pub(super) hypercore: Arc<Mutex<Hypercore<T>>>,
-    proxy: bool,
+    access_type: AccessType,
     entry_cipher: Option<EntryCipher>,
     channel_senders: Vec<ChannelSender<Message>>,
 }
@@ -54,14 +54,14 @@ where
 impl HypercoreWrapper<RandomAccessDisk> {
     pub(crate) fn from_disk_hypercore(
         hypercore: Hypercore<RandomAccessDisk>,
-        proxy: bool,
+        access_type: AccessType,
         encrypted: bool,
         encryption_key: &Option<Vec<u8>>,
         generate_encryption_key_if_missing: bool,
     ) -> (Self, Option<Vec<u8>>) {
         let public_key = hypercore.key_pair().public.to_bytes();
         let (entry_cipher, key) = prepare_entry_cipher(
-            proxy,
+            access_type,
             encrypted,
             encryption_key,
             generate_encryption_key_if_missing,
@@ -69,7 +69,7 @@ impl HypercoreWrapper<RandomAccessDisk> {
         let wrapper = HypercoreWrapper {
             public_key,
             hypercore: Arc::new(Mutex::new(hypercore)),
-            proxy,
+            access_type,
             entry_cipher,
             channel_senders: vec![],
         };
@@ -80,14 +80,14 @@ impl HypercoreWrapper<RandomAccessDisk> {
 impl HypercoreWrapper<RandomAccessMemory> {
     pub(crate) fn from_memory_hypercore(
         hypercore: Hypercore<RandomAccessMemory>,
-        proxy: bool,
+        access_type: AccessType,
         encrypted: bool,
         encryption_key: &Option<Vec<u8>>,
         generate_encryption_key_if_missing: bool,
     ) -> (Self, Option<Vec<u8>>) {
         let public_key = hypercore.key_pair().public.to_bytes();
         let (entry_cipher, key) = prepare_entry_cipher(
-            proxy,
+            access_type,
             encrypted,
             encryption_key,
             generate_encryption_key_if_missing,
@@ -95,7 +95,7 @@ impl HypercoreWrapper<RandomAccessMemory> {
         let wrapper = HypercoreWrapper {
             public_key,
             hypercore: Arc::new(Mutex::new(hypercore)),
-            proxy,
+            access_type,
             entry_cipher,
             channel_senders: vec![],
         };
@@ -112,8 +112,8 @@ where
         data_batch: Vec<Vec<u8>>,
         doc_signature_signing_key: &SigningKey,
     ) -> Result<u64, PeermergeError> {
-        if self.proxy {
-            panic!("Can not append to a proxy");
+        if self.access_type != AccessType::ReadWrite {
+            panic!("Can not append to a proxy or read-only feed");
         }
         let outcome = {
             let mut hypercore = self.hypercore.lock().await;
@@ -226,7 +226,7 @@ where
         index: u64,
         len: u64,
     ) -> Result<ShrunkEntries, PeermergeError> {
-        if self.proxy {
+        if self.access_type == AccessType::Proxy {
             panic!("Can not get entries from a proxy");
         }
         let mut hypercore = self.hypercore.lock().await;
@@ -262,9 +262,11 @@ where
         hypercore.key_pair().clone()
     }
 
-    pub(crate) async fn make_read_only(&self) -> Result<bool, PeermergeError> {
+    pub(crate) async fn make_read_only(&mut self) -> Result<bool, PeermergeError> {
         let mut hypercore = self.hypercore.lock().await;
-        Ok(hypercore.make_read_only().await?)
+        let result = hypercore.make_read_only().await?;
+        self.access_type = AccessType::ReadOnly;
+        Ok(result)
     }
 
     pub(super) fn public_key(&self) -> &[u8; 32] {
@@ -374,12 +376,12 @@ where
 }
 
 fn prepare_entry_cipher(
-    proxy: bool,
+    access_type: AccessType,
     encrypted: bool,
     encryption_key: &Option<Vec<u8>>,
     generate_encryption_key_if_missing: bool,
 ) -> (Option<EntryCipher>, Option<Vec<u8>>) {
-    if !proxy && encrypted {
+    if access_type != AccessType::Proxy && encrypted {
         if let Some(encryption_key) = encryption_key {
             (Some(EntryCipher::from_encryption_key(encryption_key)), None)
         } else if generate_encryption_key_if_missing {

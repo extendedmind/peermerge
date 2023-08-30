@@ -77,8 +77,8 @@ pub(crate) struct DocumentState {
     pub(crate) doc_signature_verifying_key: [u8; 32],
     /// Is the document encrypted. If None it is unknown and proxy must be true.
     pub(crate) encrypted: Option<bool>,
-    /// Is this a proxy document.
-    pub(crate) proxy: bool,
+    /// Access to the document.
+    pub(crate) access_type: AccessType,
     /// State for all of the feeds involved in this document
     pub(crate) feeds_state: DocumentFeedsState,
     /// Content of the document. None for proxy.
@@ -88,7 +88,7 @@ pub(crate) struct DocumentState {
 }
 impl DocumentState {
     pub(crate) fn new(
-        proxy: bool,
+        access_type: AccessType,
         doc_signature_verifying_key: [u8; 32],
         encrypted: Option<bool>,
         feeds_state: DocumentFeedsState,
@@ -96,7 +96,7 @@ impl DocumentState {
     ) -> Self {
         Self::new_with_version(
             PEERMERGE_VERSION,
-            proxy,
+            access_type,
             doc_signature_verifying_key,
             encrypted,
             feeds_state,
@@ -107,7 +107,7 @@ impl DocumentState {
 
     pub(crate) fn new_with_version(
         version: u8,
-        proxy: bool,
+        access_type: AccessType,
         doc_signature_verifying_key: [u8; 32],
         encrypted: Option<bool>,
         feeds_state: DocumentFeedsState,
@@ -117,7 +117,7 @@ impl DocumentState {
         let document_id = document_id_from_discovery_key(&feeds_state.doc_discovery_key);
         Self {
             version,
-            proxy,
+            access_type,
             doc_signature_verifying_key,
             document_id,
             encrypted,
@@ -132,11 +132,7 @@ impl DocumentState {
         if let Some((document_type, document_header)) = self.document_type_and_header() {
             DocumentInfo {
                 encrypted: self.encrypted.clone(),
-                access_type: if self.proxy {
-                    AccessType::Proxy
-                } else {
-                    AccessType::ReadWrite
-                }, // FIXME: support read-only
+                access_type: self.access_type,
                 static_info: doc_url_info,
                 dynamic_info: Some(DynamicDocumentInfo {
                     document_type,
@@ -147,11 +143,7 @@ impl DocumentState {
         } else {
             DocumentInfo {
                 encrypted: self.encrypted.clone(),
-                access_type: if self.proxy {
-                    AccessType::Proxy
-                } else {
-                    AccessType::ReadWrite
-                }, // FIXME: support read-only
+                access_type: self.access_type,
                 static_info: doc_url_info,
                 dynamic_info: None,
                 parent_document_id: None, // TODO: Support for document hierarchies

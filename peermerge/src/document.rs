@@ -74,8 +74,8 @@ where
     id: DocumentId,
     /// General settings for the document, stored in Peermerge.
     settings: DocumentSettings,
-    /// If this document is a proxy
-    proxy: bool,
+    /// Access to the document
+    access_type: AccessType,
     /// The write discovery key, if any
     write_discovery_key: Option<FeedDiscoveryKey>,
     /// Whether or not this document is encrypted. If proxy this copied value is set to false
@@ -217,7 +217,7 @@ where
 
     #[instrument(skip_all, fields(ctx = self.log_context))]
     pub(crate) async fn watch(&mut self, ids: Option<Vec<ObjId>>) {
-        if self.proxy {
+        if self.access_type == AccessType::Proxy {
             panic!("Can not watch on a proxy");
         }
         let mut document_state = self.document_state.lock().await;
@@ -229,7 +229,7 @@ where
     where
         F: FnOnce(&AutomergeDoc) -> Result<O, AutomergeError>,
     {
-        if self.proxy {
+        if self.access_type == AccessType::Proxy {
             panic!("Can not read on a proxy");
         }
         let result = {
@@ -256,8 +256,8 @@ where
     where
         F: FnOnce(&mut AutomergeDoc) -> Result<O, AutomergeError>,
     {
-        if self.proxy {
-            panic!("Can not transact on a proxy");
+        if self.access_type != AccessType::ReadWrite {
+            panic!("Can not transact mutating on a proxy or read-only peer");
         }
         let (result, patches) = {
             let mut document_state = self.document_state.lock().await;
@@ -329,8 +329,8 @@ where
         &mut self,
         obj: O,
     ) -> Result<(), PeermergeError> {
-        if self.proxy {
-            panic!("Can not reserve object on a proxy");
+        if self.access_type != AccessType::ReadWrite {
+            panic!("Can not reserve object on a proxy or read-only peer");
         }
         let mut document_state = self.document_state.lock().await;
         document_state.reserve_object(obj);
@@ -342,8 +342,8 @@ where
         &mut self,
         obj: O,
     ) -> Result<Vec<StateEvent>, PeermergeError> {
-        if self.proxy {
-            panic!("Can not unreserve object on a proxy");
+        if self.access_type != AccessType::ReadWrite {
+            panic!("Can not unreserve object on a proxy or read-only peer");
         }
         let mut document_state = self.document_state.lock().await;
         document_state.unreserve_object(obj);
@@ -423,7 +423,7 @@ where
 
     #[instrument(skip_all, fields(ctx = self.log_context))]
     pub(crate) fn document_secret(&self) -> Option<DocumentSecret> {
-        if self.proxy {
+        if self.access_type == AccessType::Proxy {
             None
         } else {
             Some(DocumentSecret::new(
@@ -435,8 +435,8 @@ where
 
     #[instrument(skip_all, fields(ctx = self.log_context))]
     pub(crate) async fn write_feed_signing_key(&self) -> SigningKey {
-        if self.proxy {
-            panic!("A proxy does not have a write feed");
+        if self.access_type != AccessType::ReadWrite {
+            panic!("A proxy or read only peer does not have a write feed");
         }
         let document_state = self.document_state.lock().await;
         let write_discovery_key = document_state.write_discovery_key();
@@ -489,7 +489,7 @@ where
             "Processing peer synced, is_root={}",
             discovery_key == self.doc_discovery_key
         );
-        if self.proxy {
+        if self.access_type == AccessType::Proxy {
             if let Some(peer_id) = peer_id {
                 // Just notify a peer sync forward
                 return vec![StateEvent::new(
@@ -857,7 +857,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
         doc_url: &str,
         settings: DocumentSettings,
     ) -> Result<Self, PeermergeError> {
-        let proxy = true;
+        let access_type = AccessType::Proxy;
         let encrypted = false;
 
         // Process keys from doc URL
@@ -873,7 +873,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
         // Create the doc feed
         let doc_feed = create_new_read_memory_feed(
             &decoded_doc_url.static_info.doc_public_key,
-            proxy,
+            access_type,
             encrypted,
             &None,
         )
@@ -881,7 +881,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
 
         // Initialize document state
         let state = DocumentState::new(
-            proxy,
+            access_type,
             doc_signature_verifying_key.to_bytes(),
             None,
             DocumentFeedsState::new(peer_id, decoded_doc_url.static_info.doc_public_key, false),
@@ -938,7 +938,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
         settings: DocumentSettings,
         mut write_feed_signing_key: Option<SigningKey>,
     ) -> Result<Self, PeermergeError> {
-        let proxy = false;
+        let access_type = AccessType::ReadWrite;
 
         // Process keys from doc URL and document secret
         let mut decoded_doc_url = decode_doc_url(doc_url, document_secret)?;
@@ -973,10 +973,10 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
             .expect("Writer needs to have an appendix");
         let meta_doc_data = doc_url_appendix.meta_doc_data;
 
-        // Create the root feed
+        // Create the doc feed
         let root_feed = create_new_read_memory_feed(
             &decoded_doc_url.static_info.doc_public_key,
-            proxy,
+            AccessType::ReadOnly,
             encrypted,
             &encryption_key,
         )
@@ -1055,7 +1055,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
             doc_url_appendix.document_header,
         );
         let state = DocumentState::new(
-            false,
+            access_type,
             doc_signature_verifying_key.to_bytes(),
             Some(encrypted),
             DocumentFeedsState::new_writer(
@@ -1105,7 +1105,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
         } else {
             None
         };
-        let proxy = state.proxy;
+        let access_type = state.access_type;
         let log_context = log_context(&mut state);
         let document_state = DocStateWrapper::new_memory(state).await;
 
@@ -1114,7 +1114,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
             document_state: Arc::new(Mutex::new(document_state)),
             peer_id,
             prefix: PathBuf::new(),
-            proxy,
+            access_type,
             doc_discovery_key,
             doc_signature_key_pair,
             id,
@@ -1143,7 +1143,11 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
                         dashmap::mapref::entry::Entry::Vacant(vacant) => {
                             let feed = create_new_read_memory_feed(
                                 &feed_info.public_key,
-                                self.proxy,
+                                if self.access_type == AccessType::Proxy {
+                                    AccessType::Proxy
+                                } else {
+                                    AccessType::ReadOnly
+                                },
                                 self.encryption_key.is_some(),
                                 &self.encryption_key,
                             )
@@ -1261,7 +1265,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
         data_root_dir: &PathBuf,
         settings: DocumentSettings,
     ) -> Result<Self, PeermergeError> {
-        let proxy = false;
+        let access_type = AccessType::ReadWrite;
 
         // Process keys from doc URL and document secret
         let mut decoded_doc_url = decode_doc_url(doc_url, document_secret)?;
@@ -1296,14 +1300,14 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
             .expect("Writer needs to have an appendix");
         let meta_doc_data = doc_url_appendix.meta_doc_data;
 
-        // Create the root feed
+        // Create the doc feed
         let postfix = encode_document_id(&decoded_doc_url.static_info.document_id);
         let data_root_dir = data_root_dir.join(postfix);
         let doc_feed = create_new_read_disk_feed(
             &data_root_dir,
             &decoded_doc_url.static_info.doc_public_key,
             &decoded_doc_url.static_info.doc_discovery_key,
-            proxy,
+            AccessType::ReadOnly,
             encrypted,
             &encryption_key,
         )
@@ -1354,7 +1358,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
             doc_url_appendix.document_header,
         );
         let state = DocumentState::new(
-            proxy,
+            access_type,
             doc_signature_verifying_key.to_bytes(),
             Some(encrypted),
             DocumentFeedsState::new_writer(
@@ -1390,7 +1394,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
         settings: DocumentSettings,
         data_root_dir: &PathBuf,
     ) -> Result<Self, PeermergeError> {
-        let proxy = true;
+        let access_type = AccessType::Proxy;
         let encrypted = false;
 
         // Process keys from doc URL
@@ -1411,7 +1415,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
             &data_root_dir,
             &decoded_doc_url.static_info.doc_public_key,
             &document_id,
-            proxy,
+            access_type,
             encrypted,
             &None,
         )
@@ -1419,7 +1423,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
 
         // Initialize document state
         let state = DocumentState::new(
-            proxy,
+            access_type,
             doc_signature_verifying_key.to_bytes(),
             None,
             DocumentFeedsState::new(peer_id, decoded_doc_url.static_info.doc_public_key, false),
@@ -1466,7 +1470,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
         // First gather all needed data from state to be able to mutate it later
         let (
             id,
-            proxy,
+            access_type,
             encryption_key,
             doc_signature_signing_key,
             doc_signature_verifying_key,
@@ -1481,7 +1485,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
         ) = {
             let state = document_state_wrapper.state_mut();
             let id = state.document_id;
-            let proxy = state.proxy;
+            let access_type = state.access_type;
             let encryption_key = document_secret
                 .as_ref()
                 .and_then(|secret| secret.encryption_key.clone());
@@ -1504,7 +1508,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
                 }
                 encrypted
             } else {
-                if !proxy {
+                if access_type != AccessType::Proxy {
                     panic!("Stored document is not a proxy but encryption status is not known");
                 }
                 false
@@ -1518,7 +1522,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
             let log_context = log_context(state);
             (
                 id,
-                proxy,
+                access_type,
                 encryption_key,
                 doc_signature_signing_key,
                 doc_signature_verifying_key,
@@ -1547,7 +1551,11 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
         let (_, doc_feed) = open_disk_feed(
             data_root_dir,
             &doc_discovery_key,
-            proxy,
+            if access_type == AccessType::Proxy {
+                AccessType::Proxy
+            } else {
+                AccessType::ReadOnly
+            },
             encrypted,
             &encryption_key,
         )
@@ -1574,7 +1582,11 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
             let (_, peer_feed) = open_disk_feed(
                 data_root_dir,
                 &discovery_key,
-                proxy,
+                if access_type == AccessType::Proxy {
+                    AccessType::Proxy
+                } else {
+                    AccessType::ReadOnly
+                },
                 encrypted,
                 &encryption_key,
             )
@@ -1586,14 +1598,14 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
         let (feeds, write_discovery_key) = if let Some(write_peer) = write_feed {
             let write_discovery_key = discovery_key_from_public_key(&write_peer.public_key);
             debug!(
-                "open_disk: peers={}, writable, proxy={proxy}, encrypted={encrypted}",
+                "open_disk: peers={}, writable, access_type={access_type:?}, encrypted={encrypted}",
                 feeds.len() - 1
             );
             if write_peer.public_key != doc_public_key {
                 let (_, write_feed) = open_disk_feed(
                     data_root_dir,
                     &write_discovery_key,
-                    proxy,
+                    AccessType::ReadWrite,
                     encrypted,
                     &encryption_key,
                 )
@@ -1635,7 +1647,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
             (feeds, Some(write_discovery_key))
         } else {
             debug!(
-                "open_disk: peers={}, not writable, proxy={proxy}, encrypted={encrypted}",
+                "open_disk: peers={}, not writable, access_type={access_type:?}, encrypted={encrypted}",
                 feeds.len() - 1
             );
             (Arc::new(feeds), None)
@@ -1654,7 +1666,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
             doc_discovery_key,
             id,
             write_discovery_key,
-            proxy,
+            access_type,
             encrypted,
             encryption_key: encryption_key.clone(),
             log_context,
@@ -1709,7 +1721,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
         } else {
             None
         };
-        let proxy = state.proxy;
+        let access_type = state.access_type;
         let log_context = log_context(&mut state);
         let document_state = DocStateWrapper::new_disk(state, data_root_dir).await;
 
@@ -1718,7 +1730,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
             document_state: Arc::new(Mutex::new(document_state)),
             peer_id,
             prefix: data_root_dir.clone(),
-            proxy,
+            access_type,
             doc_discovery_key,
             doc_signature_key_pair,
             id,
@@ -1750,7 +1762,11 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
                                 &self.prefix,
                                 &feed_info.public_key,
                                 &discovery_key,
-                                self.proxy,
+                                if self.access_type == AccessType::Proxy {
+                                    AccessType::Proxy
+                                } else {
+                                    AccessType::ReadOnly
+                                },
                                 self.encryption_key.is_some(),
                                 &self.encryption_key,
                             )
@@ -1898,7 +1914,7 @@ where
         None,
     );
     let state = DocumentState::new(
-        false,
+        AccessType::ReadWrite,
         doc_signature_verifying_key.to_bytes(),
         Some(encrypted),
         DocumentFeedsState::new_writer(

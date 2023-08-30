@@ -8,6 +8,7 @@ use random_access_memory::RandomAccessMemory;
 use std::path::PathBuf;
 
 use super::HypercoreWrapper;
+use crate::AccessType;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) async fn create_new_write_disk_hypercore(
@@ -28,8 +29,13 @@ pub(crate) async fn create_new_write_disk_hypercore(
         .build()
         .await
         .unwrap();
-    let (wrapper, encryption_key) =
-        HypercoreWrapper::from_disk_hypercore(hypercore, false, encrypted, encryption_key, true);
+    let (wrapper, encryption_key) = HypercoreWrapper::from_disk_hypercore(
+        hypercore,
+        AccessType::ReadWrite,
+        encrypted,
+        encryption_key,
+        true,
+    );
     (wrapper, encryption_key)
 }
 
@@ -38,7 +44,7 @@ pub(crate) async fn create_new_read_disk_hypercore(
     prefix: &PathBuf,
     public_key: &[u8; 32],
     discovery_key: &[u8; 32],
-    proxy: bool,
+    access_type: AccessType,
     encrypted: bool,
     encryption_key: &Option<Vec<u8>>,
 ) -> HypercoreWrapper<RandomAccessDisk> {
@@ -53,14 +59,15 @@ pub(crate) async fn create_new_read_disk_hypercore(
         .build()
         .await
         .unwrap();
-    HypercoreWrapper::from_disk_hypercore(hypercore, proxy, encrypted, encryption_key, false).0
+    HypercoreWrapper::from_disk_hypercore(hypercore, access_type, encrypted, encryption_key, false)
+        .0
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) async fn open_disk_hypercore(
     prefix: &PathBuf,
     discovery_key: &[u8; 32],
-    proxy: bool,
+    access_type: AccessType,
     encrypted: bool,
     encryption_key: &Option<Vec<u8>>,
 ) -> (u64, HypercoreWrapper<RandomAccessDisk>) {
@@ -74,7 +81,14 @@ pub(crate) async fn open_disk_hypercore(
         .unwrap();
     (
         hypercore.info().length,
-        HypercoreWrapper::from_disk_hypercore(hypercore, proxy, encrypted, encryption_key, false).0,
+        HypercoreWrapper::from_disk_hypercore(
+            hypercore,
+            access_type,
+            encrypted,
+            encryption_key,
+            false,
+        )
+        .0,
     )
 }
 
@@ -89,7 +103,7 @@ pub(crate) async fn create_new_write_memory_hypercore(
             public: signing_key.verifying_key(),
             secret: Some(signing_key),
         },
-        false,
+        AccessType::ReadWrite,
         encrypted,
         encryption_key,
         reattach,
@@ -99,7 +113,7 @@ pub(crate) async fn create_new_write_memory_hypercore(
 
 pub(crate) async fn create_new_read_memory_hypercore(
     public_key: &[u8; 32],
-    proxy: bool,
+    access_type: AccessType,
     encrypted: bool,
     encryption_key: &Option<Vec<u8>>,
 ) -> HypercoreWrapper<RandomAccessMemory> {
@@ -108,7 +122,7 @@ pub(crate) async fn create_new_read_memory_hypercore(
             public: VerifyingKey::from_bytes(public_key).unwrap(),
             secret: None,
         },
-        proxy,
+        access_type,
         encrypted,
         encryption_key,
         false,
@@ -119,7 +133,7 @@ pub(crate) async fn create_new_read_memory_hypercore(
 
 async fn create_new_memory_hypercore(
     key_pair: PartialKeypair,
-    proxy: bool,
+    access_type: AccessType,
     encrypted: bool,
     encryption_key: &Option<Vec<u8>>,
     reattach: bool,
@@ -133,7 +147,7 @@ async fn create_new_memory_hypercore(
 
     let (wrapper, encryption_key) = HypercoreWrapper::from_memory_hypercore(
         hypercore,
-        proxy,
+        access_type,
         encrypted,
         encryption_key,
         !reattach,

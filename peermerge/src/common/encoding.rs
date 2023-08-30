@@ -16,7 +16,7 @@ use super::message::{FeedSyncedMessage, FeedVerificationMessage, FeedsChangedMes
 use super::state::{
     ChildDocumentInfo, DocumentContent, DocumentCursor, DocumentFeedInfo, DocumentFeedsState,
 };
-use crate::{NameDescription, PeerId, PeermergeError};
+use crate::{AccessType, NameDescription, PeerId, PeermergeError};
 
 impl CompactEncoding<PeermergeState> for State {
     fn preencode(&mut self, value: &PeermergeState) -> Result<usize, EncodingError> {
@@ -105,7 +105,7 @@ impl CompactEncoding<DocumentState> for State {
         let flags_index = self.start();
         let mut flags: u8 = 0;
         self.add_start(1)?;
-        if value.proxy {
+        if value.access_type == AccessType::Proxy {
             flags |= 1;
         }
         if value.encrypted.unwrap_or(false) {
@@ -123,6 +123,9 @@ impl CompactEncoding<DocumentState> for State {
             for child_document in &value.child_documents {
                 self.encode(child_document, buffer)?;
             }
+        }
+        if value.access_type == AccessType::ReadWrite {
+            flags |= 16;
         }
 
         buffer[flags_index] = flags;
@@ -153,9 +156,17 @@ impl CompactEncoding<DocumentState> for State {
         } else {
             vec![]
         };
+        let writable = flags & 16 != 0;
+        let access_type = if proxy {
+            AccessType::Proxy
+        } else if writable {
+            AccessType::ReadWrite
+        } else {
+            AccessType::ReadOnly
+        };
         Ok(DocumentState::new_with_version(
             version,
-            proxy,
+            access_type,
             doc_signature_verifying_key,
             encrypted,
             feeds_state,
