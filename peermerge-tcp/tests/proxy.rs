@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use futures::stream::StreamExt;
 use peermerge::transaction::Transactable;
-use peermerge::{get_document_info, CreateNewDocumentOptionsBuilder, DocumentId};
+use peermerge::{get_document_info, DiskCreateNewDocumentOptionsBuilder, DocumentId};
 use peermerge::{DiskPeermergeOptionsBuilder, ROOT};
 use peermerge::{
     FeedDiskPersistence, Peermerge, RandomAccessDisk, StateEvent, StateEventContent::*,
@@ -46,7 +46,7 @@ async fn tcp_proxy_disk_encrypted() -> anyhow::Result<()> {
     .await;
     let (creator_doc_info, _) = peermerge_creator
         .create_new_document_disk(
-            CreateNewDocumentOptionsBuilder::default()
+            DiskCreateNewDocumentOptionsBuilder::default()
                 .document_type("test".to_string())
                 .document_header(NameDescription::new("tcp_proxy_test"))
                 .encrypted(true)

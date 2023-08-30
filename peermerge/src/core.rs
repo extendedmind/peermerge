@@ -20,8 +20,6 @@ use tokio::task;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_futures::spawn_local;
 
-#[cfg(not(target_arch = "wasm32"))]
-use crate::feed::FeedDiskPersistence;
 use crate::{
     automerge::AutomergeDoc,
     common::{
@@ -36,8 +34,8 @@ use crate::{
     },
     document::{get_document_by_discovery_key, DocumentSettings},
     feed::{FeedMemoryPersistence, FeedPersistence, Protocol},
-    options::{DiskPeermergeOptions, MemoryPeermergeOptions},
-    CreateNewDocumentOptions, DocumentSharingInfo, PeerId, PeermergeError, StateEventContent,
+    options::MemoryPeermergeOptions,
+    DocumentSharingInfo, MemoryCreateNewDocumentOptions, PeerId, PeermergeError, StateEventContent,
 };
 use crate::{
     common::{DocumentInfo, FeedEvent},
@@ -46,6 +44,11 @@ use crate::{
     DocumentId, NameDescription, IO,
 };
 use crate::{document::Document, StateEvent};
+#[cfg(not(target_arch = "wasm32"))]
+use crate::{
+    feed::FeedDiskPersistence,
+    options::{DiskCreateNewDocumentOptions, DiskPeermergeOptions},
+};
 
 /// Peermerge is the main abstraction and a store for multiple documents.
 #[derive(derivative::Derivative)]
@@ -79,10 +82,25 @@ where
     T: RandomAccess + Debug + Send + 'static,
     U: FeedPersistence,
 {
-    pub fn default_peer_name(&self) -> String {
-        self.default_peer_header.name.clone()
+    /// Get my peer id
+    #[instrument(skip(self), fields(peer_name = self.default_peer_header.name))]
+    pub async fn peer_id(&self) -> PeerId {
+        self.peer_id
     }
 
+    /// Get all known peer ids in a document
+    #[instrument(skip(self), fields(peer_name = self.default_peer_header.name))]
+    pub async fn peer_ids(&self, document_id: &DocumentId) -> Vec<PeerId> {
+        let document = get_document(&self.documents, document_id).await.unwrap();
+        document.peer_ids().await
+    }
+
+    /// Get my default peer header given to a new document
+    pub fn default_peer_header(&self) -> NameDescription {
+        self.default_peer_header.clone()
+    }
+
+    /// Get the current peer header value in a new document
     pub async fn peer_header(
         &self,
         document_id: &DocumentId,
@@ -206,34 +224,12 @@ where
     }
 
     #[instrument(skip(self), fields(peer_name = self.default_peer_header.name))]
-    pub async fn close(&mut self) -> Result<(), PeermergeError> {
-        for document_id in get_document_ids(&self.documents).await {
-            let mut document = get_document(&self.documents, &document_id).await.unwrap();
-            document.close().await?;
-        }
-        Ok(())
-    }
-
-    #[instrument(skip(self), fields(peer_name = self.default_peer_header.name))]
     pub async fn sharing_info(
         &self,
         document_id: &DocumentId,
     ) -> Result<DocumentSharingInfo, PeermergeError> {
         let document = get_document(&self.documents, document_id).await.unwrap();
         document.sharing_info().await
-    }
-
-    /// Get my peer id
-    #[instrument(skip(self), fields(peer_name = self.default_peer_header.name))]
-    pub async fn peer_id(&self) -> PeerId {
-        self.peer_id
-    }
-
-    /// Get all known peer ids in a document
-    #[instrument(skip(self), fields(peer_name = self.default_peer_header.name))]
-    pub async fn peer_ids(&self, document_id: &DocumentId) -> Vec<PeerId> {
-        let document = get_document(&self.documents, document_id).await.unwrap();
-        document.peer_ids().await
     }
 
     #[instrument(skip(self), fields(peer_name = self.default_peer_header.name))]
@@ -251,6 +247,15 @@ where
             &self.peer_id,
             &signing_key_to_bytes(&write_feed_signing_key),
         )
+    }
+
+    #[instrument(skip(self), fields(peer_name = self.default_peer_header.name))]
+    pub async fn close(&mut self) -> Result<(), PeermergeError> {
+        for document_id in get_document_ids(&self.documents).await {
+            let mut document = get_document(&self.documents, &document_id).await.unwrap();
+            document.close().await?;
+        }
+        Ok(())
     }
 
     async fn add_document(&mut self, document: Document<T, U>) -> DocumentInfo {
@@ -290,7 +295,7 @@ impl Peermerge<RandomAccessMemory, FeedMemoryPersistence> {
 
     pub async fn create_new_document_memory<F, O>(
         &mut self,
-        options: CreateNewDocumentOptions,
+        options: MemoryCreateNewDocumentOptions,
         init_cb: F,
     ) -> Result<(DocumentInfo, O), PeermergeError>
     where
@@ -529,7 +534,7 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
 
     pub async fn create_new_document_disk<F, O>(
         &mut self,
-        options: CreateNewDocumentOptions,
+        options: DiskCreateNewDocumentOptions,
         init_cb: F,
     ) -> Result<(DocumentInfo, O), PeermergeError>
     where

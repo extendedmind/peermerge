@@ -3,7 +3,7 @@ use automerge::{ObjId, ROOT};
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use futures::stream::StreamExt;
 use peermerge::{
-    CreateNewDocumentOptionsBuilder, DocumentId, FeedMemoryPersistence,
+    DocumentId, FeedMemoryPersistence, MemoryCreateNewDocumentOptionsBuilder,
     MemoryPeermergeOptionsBuilder, NameDescription, Patch, PeerId, Peermerge, StateEvent,
     StateEventContent::*,
 };
@@ -53,7 +53,7 @@ async fn memory_three_writers() -> anyhow::Result<()> {
     .await;
     let (creator_doc_info, _) = peermerge_creator
         .create_new_document_memory(
-            CreateNewDocumentOptionsBuilder::default()
+            MemoryCreateNewDocumentOptionsBuilder::default()
                 .document_type("test".to_string())
                 .document_header(NameDescription::new("memory_test"))
                 .encrypted(false)

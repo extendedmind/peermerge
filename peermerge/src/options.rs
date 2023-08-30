@@ -18,6 +18,7 @@ pub struct MemoryPeermergeOptions {
     pub max_write_feed_length: u64,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Builder)]
 pub struct DiskPeermergeOptions {
     pub data_root_dir: PathBuf,
@@ -31,7 +32,17 @@ pub struct DiskPeermergeOptions {
 }
 
 #[derive(Builder)]
-pub struct CreateNewDocumentOptions {
+pub struct MemoryCreateNewDocumentOptions {
+    pub document_type: String,
+    #[builder(setter(into, strip_option), default)]
+    pub document_header: Option<NameDescription>,
+    #[builder(default = "true")]
+    pub encrypted: bool,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Builder)]
+pub struct DiskCreateNewDocumentOptions {
     pub document_type: String,
     #[builder(setter(into, strip_option), default)]
     pub document_header: Option<NameDescription>,
