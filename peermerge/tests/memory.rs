@@ -3,9 +3,8 @@ use automerge::{ObjId, ROOT};
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use futures::stream::StreamExt;
 use peermerge::{
-    DocumentId, FeedMemoryPersistence, MemoryCreateNewDocumentOptionsBuilder,
-    MemoryPeermergeOptionsBuilder, NameDescription, Patch, PeerId, Peermerge, StateEvent,
-    StateEventContent::*,
+    CreateNewDocumentMemoryOptionsBuilder, DocumentId, FeedMemoryPersistence, NameDescription,
+    Patch, PeerId, Peermerge, PeermergeMemoryOptionsBuilder, StateEvent, StateEventContent::*,
 };
 use random_access_memory::RandomAccessMemory;
 use std::collections::HashMap;
@@ -45,7 +44,7 @@ async fn memory_three_writers() -> anyhow::Result<()> {
         UnboundedReceiver<StateEvent>,
     ) = unbounded();
     let mut peermerge_creator = Peermerge::new_memory(
-        MemoryPeermergeOptionsBuilder::default()
+        PeermergeMemoryOptionsBuilder::default()
             .default_peer_header(NameDescription::new("creator"))
             .state_event_sender(creator_state_event_sender)
             .build()?,
@@ -53,7 +52,7 @@ async fn memory_three_writers() -> anyhow::Result<()> {
     .await;
     let (creator_doc_info, _) = peermerge_creator
         .create_new_document_memory(
-            MemoryCreateNewDocumentOptionsBuilder::default()
+            CreateNewDocumentMemoryOptionsBuilder::default()
                 .document_type("test".to_string())
                 .document_header(NameDescription::new("memory_test"))
                 .encrypted(false)
@@ -107,7 +106,7 @@ async fn memory_three_writers() -> anyhow::Result<()> {
     });
 
     let mut peermerge_joiner = Peermerge::new_memory(
-        MemoryPeermergeOptionsBuilder::default()
+        PeermergeMemoryOptionsBuilder::default()
             .default_peer_header(NameDescription::new("joiner"))
             .state_event_sender(joiner_state_event_sender)
             .build()?,
@@ -486,7 +485,7 @@ async fn process_creator_state_events(
                         ) = unbounded();
 
                         let mut peermerge_latecomer = Peermerge::new_memory(
-                            MemoryPeermergeOptionsBuilder::default()
+                            PeermergeMemoryOptionsBuilder::default()
                                 .default_peer_header(NameDescription::new("latecomer"))
                                 .state_event_sender(latecomer_state_event_sender)
                                 .build()?,

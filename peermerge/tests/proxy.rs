@@ -4,9 +4,9 @@ use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use futures::future::join_all;
 use futures::stream::StreamExt;
 use peermerge::{
-    get_document_info, DiskPeermergeOptionsBuilder, DocumentId, FeedMemoryPersistence,
-    MemoryCreateNewDocumentOptionsBuilder, MemoryPeermergeOptionsBuilder, NameDescription, Patch,
-    Peermerge, StateEvent, StateEventContent::*,
+    get_document_info, CreateNewDocumentMemoryOptionsBuilder, DocumentId, FeedMemoryPersistence,
+    NameDescription, Patch, Peermerge, PeermergeDiskOptionsBuilder, PeermergeMemoryOptionsBuilder,
+    StateEvent, StateEventContent::*,
 };
 use random_access_memory::RandomAccessMemory;
 use tempfile::Builder;
@@ -33,7 +33,7 @@ async fn proxy_disk_encrypted() -> anyhow::Result<()> {
         UnboundedReceiver<StateEvent>,
     ) = unbounded();
     let mut peermerge_creator = Peermerge::new_memory(
-        MemoryPeermergeOptionsBuilder::default()
+        PeermergeMemoryOptionsBuilder::default()
             .default_peer_header(NameDescription::new("creator"))
             .state_event_sender(creator_state_event_sender)
             .build()?,
@@ -41,7 +41,7 @@ async fn proxy_disk_encrypted() -> anyhow::Result<()> {
     .await;
     let (creator_doc_info, _) = peermerge_creator
         .create_new_document_memory(
-            MemoryCreateNewDocumentOptionsBuilder::default()
+            CreateNewDocumentMemoryOptionsBuilder::default()
                 .document_type("test".to_string())
                 .document_header(NameDescription::new("proxy_test"))
                 .encrypted(true)
@@ -80,7 +80,7 @@ async fn proxy_disk_encrypted() -> anyhow::Result<()> {
         .into_path();
 
     let mut peermerge_proxy = Peermerge::create_new_disk(
-        DiskPeermergeOptionsBuilder::default()
+        PeermergeDiskOptionsBuilder::default()
             .default_peer_header(NameDescription::new("proxy"))
             .state_event_sender(proxy_state_event_sender)
             .data_root_dir(proxy_dir.clone())
@@ -127,7 +127,7 @@ async fn proxy_disk_encrypted() -> anyhow::Result<()> {
         UnboundedReceiver<StateEvent>,
     ) = unbounded();
     let mut peermerge_joiner = Peermerge::new_memory(
-        MemoryPeermergeOptionsBuilder::default()
+        PeermergeMemoryOptionsBuilder::default()
             .default_peer_header(NameDescription::new("joiner"))
             .state_event_sender(joiner_state_event_sender)
             .build()?,
@@ -186,7 +186,7 @@ async fn proxy_disk_encrypted() -> anyhow::Result<()> {
         UnboundedReceiver<StateEvent>,
     ) = unbounded();
     let mut peermerge_joiner = Peermerge::new_memory(
-        MemoryPeermergeOptionsBuilder::default()
+        PeermergeMemoryOptionsBuilder::default()
             .default_peer_header(NameDescription::new("joiner"))
             .state_event_sender(joiner_state_event_sender)
             .build()?,

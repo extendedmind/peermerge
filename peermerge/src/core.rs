@@ -34,8 +34,8 @@ use crate::{
     },
     document::{get_document_by_discovery_key, DocumentSettings},
     feed::{FeedMemoryPersistence, FeedPersistence, Protocol},
-    options::MemoryPeermergeOptions,
-    DocumentSharingInfo, MemoryCreateNewDocumentOptions, PeerId, PeermergeError, StateEventContent,
+    options::PeermergeMemoryOptions,
+    CreateNewDocumentMemoryOptions, DocumentSharingInfo, PeerId, PeermergeError, StateEventContent,
 };
 use crate::{
     common::{DocumentInfo, FeedEvent},
@@ -47,7 +47,7 @@ use crate::{document::Document, StateEvent};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::{
     feed::FeedDiskPersistence,
-    options::{DiskCreateNewDocumentOptions, DiskPeermergeOptions},
+    options::{CreateNewDocumentDiskOptions, PeermergeDiskOptions},
 };
 
 /// Peermerge is the main abstraction and a store for multiple documents.
@@ -272,7 +272,7 @@ where
 // Memory
 
 impl Peermerge<RandomAccessMemory, FeedMemoryPersistence> {
-    pub async fn new_memory(options: MemoryPeermergeOptions) -> Self {
+    pub async fn new_memory(options: PeermergeMemoryOptions) -> Self {
         let document_settings = DocumentSettings {
             max_entry_data_size_bytes: options.max_entry_data_size_bytes,
             max_write_feed_length: options.max_write_feed_length,
@@ -295,7 +295,7 @@ impl Peermerge<RandomAccessMemory, FeedMemoryPersistence> {
 
     pub async fn create_new_document_memory<F, O>(
         &mut self,
-        options: MemoryCreateNewDocumentOptions,
+        options: CreateNewDocumentMemoryOptions,
         init_cb: F,
     ) -> Result<(DocumentInfo, O), PeermergeError>
     where
@@ -447,7 +447,7 @@ async fn on_feed_event_memory(
 
 #[cfg(not(target_arch = "wasm32"))]
 impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
-    pub async fn create_new_disk(options: DiskPeermergeOptions) -> Self {
+    pub async fn create_new_disk(options: PeermergeDiskOptions) -> Self {
         let document_settings = DocumentSettings {
             max_entry_data_size_bytes: options.max_entry_data_size_bytes,
             max_write_feed_length: options.max_write_feed_length,
@@ -534,7 +534,7 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
 
     pub async fn create_new_document_disk<F, O>(
         &mut self,
-        options: DiskCreateNewDocumentOptions,
+        options: CreateNewDocumentDiskOptions,
         init_cb: F,
     ) -> Result<(DocumentInfo, O), PeermergeError>
     where

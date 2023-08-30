@@ -8,7 +8,7 @@ use crate::{
 };
 
 #[derive(Builder)]
-pub struct MemoryPeermergeOptions {
+pub struct PeermergeMemoryOptions {
     pub default_peer_header: NameDescription,
     #[builder(setter(into, strip_option), default)]
     pub state_event_sender: Option<UnboundedSender<StateEvent>>,
@@ -20,7 +20,7 @@ pub struct MemoryPeermergeOptions {
 
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Builder)]
-pub struct DiskPeermergeOptions {
+pub struct PeermergeDiskOptions {
     pub data_root_dir: PathBuf,
     pub default_peer_header: NameDescription,
     #[builder(setter(into, strip_option), default)]
@@ -32,7 +32,7 @@ pub struct DiskPeermergeOptions {
 }
 
 #[derive(Builder)]
-pub struct MemoryCreateNewDocumentOptions {
+pub struct CreateNewDocumentMemoryOptions {
     pub document_type: String,
     #[builder(setter(into, strip_option), default)]
     pub document_header: Option<NameDescription>,
@@ -42,7 +42,7 @@ pub struct MemoryCreateNewDocumentOptions {
 
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Builder)]
-pub struct DiskCreateNewDocumentOptions {
+pub struct CreateNewDocumentDiskOptions {
     pub document_type: String,
     #[builder(setter(into, strip_option), default)]
     pub document_header: Option<NameDescription>,

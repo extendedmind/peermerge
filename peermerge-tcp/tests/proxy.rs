@@ -3,12 +3,12 @@ use std::collections::HashMap;
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use futures::stream::StreamExt;
 use peermerge::transaction::Transactable;
-use peermerge::{get_document_info, DiskCreateNewDocumentOptionsBuilder, DocumentId};
-use peermerge::{DiskPeermergeOptionsBuilder, ROOT};
+use peermerge::{get_document_info, CreateNewDocumentDiskOptionsBuilder, DocumentId};
 use peermerge::{
     FeedDiskPersistence, Peermerge, RandomAccessDisk, StateEvent, StateEventContent::*,
 };
 use peermerge::{NameDescription, Patch};
+use peermerge::{PeermergeDiskOptionsBuilder, ROOT};
 use peermerge_tcp::{connect_tcp_client_disk, connect_tcp_server_disk};
 use tempfile::Builder;
 use test_log::test;
@@ -37,7 +37,7 @@ async fn tcp_proxy_disk_encrypted() -> anyhow::Result<()> {
         .unwrap()
         .into_path();
     let mut peermerge_creator = Peermerge::create_new_disk(
-        DiskPeermergeOptionsBuilder::default()
+        PeermergeDiskOptionsBuilder::default()
             .default_peer_header(NameDescription::new("creator"))
             .state_event_sender(creator_state_event_sender)
             .data_root_dir(creator_dir.clone())
@@ -46,7 +46,7 @@ async fn tcp_proxy_disk_encrypted() -> anyhow::Result<()> {
     .await;
     let (creator_doc_info, _) = peermerge_creator
         .create_new_document_disk(
-            DiskCreateNewDocumentOptionsBuilder::default()
+            CreateNewDocumentDiskOptionsBuilder::default()
                 .document_type("test".to_string())
                 .document_header(NameDescription::new("tcp_proxy_test"))
                 .encrypted(true)
@@ -77,7 +77,7 @@ async fn tcp_proxy_disk_encrypted() -> anyhow::Result<()> {
         .into_path();
 
     let mut peermerge_proxy = Peermerge::create_new_disk(
-        DiskPeermergeOptionsBuilder::default()
+        PeermergeDiskOptionsBuilder::default()
             .default_peer_header(NameDescription::new("proxy"))
             .state_event_sender(proxy_state_event_sender)
             .data_root_dir(proxy_dir.clone())
