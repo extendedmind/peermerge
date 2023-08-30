@@ -104,6 +104,21 @@ async fn disk_two_peers(encrypted: bool) -> anyhow::Result<()> {
     let joiner_doc_info = peermerge_joiner
         .attach_writer_document_disk(&doc_url, Some(document_secret.clone()))
         .await?;
+    assert_eq!(
+        joiner_doc_info.dynamic_info.as_ref().unwrap().document_type,
+        "test".to_string()
+    );
+    assert_eq!(
+        joiner_doc_info
+            .dynamic_info
+            .as_ref()
+            .unwrap()
+            .document_header
+            .as_ref()
+            .unwrap()
+            .name,
+        document_name
+    );
 
     run_disk_two_peers(
         peermerge_creator,
