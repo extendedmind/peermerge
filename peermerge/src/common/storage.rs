@@ -187,6 +187,10 @@ where
         &self.state
     }
 
+    pub(crate) fn state_mut(&mut self) -> &mut DocumentState {
+        &mut self.state
+    }
+
     pub(crate) fn user_automerge_doc(&self) -> Option<&AutomergeDoc> {
         self.state
             .content

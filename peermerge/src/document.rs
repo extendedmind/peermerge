@@ -114,8 +114,8 @@ where
     }
 
     pub(crate) async fn info(&self) -> DocumentInfo {
-        let document_state_wrapper = self.document_state.lock().await;
-        document_state_wrapper.state().info()
+        let mut document_state_wrapper = self.document_state.lock().await;
+        document_state_wrapper.state_mut().info()
     }
 
     pub(crate) async fn peer_header(&self, peer_id: &PeerId) -> Option<NameDescription> {
@@ -404,8 +404,8 @@ where
                 _ => panic!("Invalid doc feed"),
             };
 
-            let document_state = self.document_state.lock().await;
-            let doc_url = document_state.state().doc_url(
+            let mut document_state = self.document_state.lock().await;
+            let doc_url = document_state.state_mut().doc_url(
                 meta_doc_data.to_vec(),
                 doc_signature_signing_key,
                 &self.encryption_key,
@@ -968,10 +968,10 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
             });
         };
         let doc_signature_verifying_key = decoded_doc_url.static_info.doc_signature_verifying_key;
-        let meta_doc_data = decoded_doc_url
+        let doc_url_appendix = decoded_doc_url
             .doc_url_appendix
-            .expect("Writer needs to have an appendix")
-            .meta_doc_data;
+            .expect("Writer needs to have an appendix");
+        let meta_doc_data = doc_url_appendix.meta_doc_data;
 
         // Create the root feed
         let root_feed = create_new_read_memory_feed(
@@ -1051,6 +1051,8 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
             None,
             meta_automerge_doc,
             None,
+            Some(doc_url_appendix.document_type),
+            doc_url_appendix.document_header,
         );
         let state = DocumentState::new(
             false,
@@ -1087,7 +1089,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
         doc_feed: ([u8; 32], Feed<FeedMemoryPersistence>),
         doc_signature_key_pair: PartialKeypair,
         write_feed: Option<([u8; 32], Feed<FeedMemoryPersistence>)>,
-        state: DocumentState,
+        mut state: DocumentState,
         encrypted: bool,
         encryption_key: Option<Vec<u8>>,
         settings: DocumentSettings,
@@ -1104,7 +1106,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
             None
         };
         let proxy = state.proxy;
-        let log_context = log_context(&state);
+        let log_context = log_context(&mut state);
         let document_state = DocStateWrapper::new_memory(state).await;
 
         Self {
@@ -1289,11 +1291,10 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
             });
         };
         let doc_signature_verifying_key = decoded_doc_url.static_info.doc_signature_verifying_key;
-
-        let meta_doc_data = decoded_doc_url
+        let doc_url_appendix = decoded_doc_url
             .doc_url_appendix
-            .expect("Writer needs to have an appendix")
-            .meta_doc_data;
+            .expect("Writer needs to have an appendix");
+        let meta_doc_data = doc_url_appendix.meta_doc_data;
 
         // Create the root feed
         let postfix = encode_document_id(&decoded_doc_url.static_info.document_id);
@@ -1349,6 +1350,8 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
             None,
             meta_automerge_doc,
             None,
+            Some(doc_url_appendix.document_type),
+            doc_url_appendix.document_header,
         );
         let state = DocumentState::new(
             proxy,
@@ -1449,7 +1452,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
                 init_automerge_doc_from_data(&content.peer_id, &content.meta_doc_data);
             content.meta_automerge_doc = Some(meta_automerge_doc);
         }
-        Ok(document_state_wrapper.state().info())
+        Ok(document_state_wrapper.state_mut().info())
     }
 
     pub(crate) async fn open_disk(
@@ -1476,7 +1479,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
             write_feed,
             log_context,
         ) = {
-            let state = document_state_wrapper.state();
+            let state = document_state_wrapper.state_mut();
             let id = state.document_id;
             let proxy = state.proxy;
             let encryption_key = document_secret
@@ -1690,7 +1693,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
         doc_feed: ([u8; 32], Feed<FeedDiskPersistence>),
         doc_signature_key_pair: PartialKeypair,
         write_feed: Option<([u8; 32], Feed<FeedDiskPersistence>)>,
-        state: DocumentState,
+        mut state: DocumentState,
         encrypted: bool,
         encryption_key: Option<Vec<u8>>,
         data_root_dir: &PathBuf,
@@ -1707,7 +1710,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
             None
         };
         let proxy = state.proxy;
-        let log_context = log_context(&state);
+        let log_context = log_context(&mut state);
         let document_state = DocStateWrapper::new_disk(state, data_root_dir).await;
 
         Self {
@@ -1891,6 +1894,8 @@ where
         Some(create_result.user_doc_data),
         create_result.meta_automerge_doc,
         Some(create_result.user_automerge_doc),
+        None,
+        None,
     );
     let state = DocumentState::new(
         false,
@@ -2043,7 +2048,7 @@ async fn update_content_from_edit_result(
     Ok((user_patches, peer_syncs))
 }
 
-fn log_context(state: &DocumentState) -> String {
+fn log_context(state: &mut DocumentState) -> String {
     if enabled!(Level::DEBUG) {
         if let Some((document_type, document_header)) = state.document_type_and_header() {
             let postfix: String = if let Some(document_header) = document_header {

@@ -127,7 +127,7 @@ impl DocumentState {
         }
     }
 
-    pub(crate) fn info(&self) -> DocumentInfo {
+    pub(crate) fn info(&mut self) -> DocumentInfo {
         let doc_url_info = self.doc_url_info();
         if let Some((document_type, document_header)) = self.document_type_and_header() {
             DocumentInfo {
@@ -160,7 +160,7 @@ impl DocumentState {
     }
 
     pub(crate) fn doc_url(
-        &self,
+        &mut self,
         initial_meta_doc_data: Vec<u8>,
         doc_signature_signing_key: &SigningKey,
         encryption_key: &Option<Vec<u8>>,
@@ -196,12 +196,29 @@ impl DocumentState {
         )
     }
 
-    pub(crate) fn document_type_and_header(&self) -> Option<(String, Option<NameDescription>)> {
-        if let Some(content) = &self.content {
+    pub(crate) fn document_type_and_header(&mut self) -> Option<(String, Option<NameDescription>)> {
+        if let Some(content) = self.content.as_mut() {
             if let Some(meta_automerge_doc) = &content.meta_automerge_doc {
-                read_document_type_and_header(meta_automerge_doc)
+                let stored_type_and_header = read_document_type_and_header(meta_automerge_doc);
+                if stored_type_and_header.is_some() {
+                    if content.temporary_document_type.is_some() {
+                        // Remove temporary values when dynamic values are found
+                        content.temporary_document_type = None;
+                        content.temporary_document_header = None;
+                    }
+                    stored_type_and_header
+                } else {
+                    // Return temporarily stored values
+                    Some((
+                        content
+                            .temporary_document_type
+                            .clone()
+                            .expect("Temporary document type should always have a value when meta document doesn't"),
+                        content.temporary_document_header.clone(),
+                    ))
+                }
             } else {
-                None
+                panic!("Meta automerge doc should always be initialized");
             }
         } else {
             None
@@ -301,8 +318,8 @@ pub(crate) struct DocumentFeedsState {
     pub(crate) doc_feed_verified: bool,
     /// Id and public key of personal writeable feed. None if proxy.
     pub(crate) write_feed: Option<DocumentFeedInfo>,
-    /// Id and public key of peers' feeds and also our replaced write
-    /// feeds.
+    /// Id and public key of peers' feeds and also our old replaced
+    /// write feeds.
     pub(crate) other_feeds: HashMap<PeerId, Vec<DocumentFeedInfo>>,
 }
 
@@ -1100,6 +1117,15 @@ pub(crate) struct DocumentContent {
     /// meta state, created from user_doc_data the first time it is
     /// accessed.
     pub(crate) user_automerge_doc: Option<AutomergeDoc>,
+
+    /// Temporary storage of the document type that was stored to
+    /// document URL. Stored only up until meta_automerge_doc has a
+    /// value after which it is set to None.
+    pub(crate) temporary_document_type: Option<String>,
+    /// Temporary storage of the document header that was stored to
+    /// document URL. Stored only up until meta_automerge_doc has a
+    /// value after which it is set to None.
+    pub(crate) temporary_document_header: Option<NameDescription>,
 }
 impl DocumentContent {
     pub(crate) fn new(
@@ -1112,6 +1138,8 @@ impl DocumentContent {
         user_doc_data: Option<Vec<u8>>,
         meta_automerge_doc: AutomergeDoc,
         user_automerge_doc: Option<AutomergeDoc>,
+        temporary_document_type: Option<String>,
+        temporary_document_header: Option<NameDescription>,
     ) -> Self {
         let cursors: Vec<DocumentCursor> = vec![
             DocumentCursor::new(*doc_discovery_key, doc_feed_length.try_into().unwrap()),
@@ -1124,6 +1152,8 @@ impl DocumentContent {
             user_doc_data,
             meta_automerge_doc: Some(meta_automerge_doc),
             user_automerge_doc,
+            temporary_document_type,
+            temporary_document_header,
         }
     }
 

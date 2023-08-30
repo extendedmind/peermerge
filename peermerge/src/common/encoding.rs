@@ -374,6 +374,12 @@ impl CompactEncoding<DocumentContent> for State {
         if let Some(user_doc_data) = &value.user_doc_data {
             self.preencode(user_doc_data)?;
         }
+        if let Some(document_type) = &value.temporary_document_type {
+            self.preencode(document_type)?;
+        }
+        if let Some(document_header) = &value.temporary_document_header {
+            self.preencode(document_header)?;
+        }
         Ok(self.end())
     }
 
@@ -399,6 +405,14 @@ impl CompactEncoding<DocumentContent> for State {
             flags |= 2;
             self.encode(user_doc_data, buffer)?;
         }
+        if let Some(document_type) = &value.temporary_document_type {
+            flags |= 4;
+            self.encode(document_type, buffer)?;
+        }
+        if let Some(document_header) = &value.temporary_document_header {
+            flags |= 8;
+            self.encode(document_header, buffer)?;
+        }
         buffer[flags_index] = flags;
         Ok(self.start())
     }
@@ -423,6 +437,16 @@ impl CompactEncoding<DocumentContent> for State {
         } else {
             None
         };
+        let temporary_document_type: Option<String> = if flags & 4 != 0 {
+            Some(self.decode(buffer)?)
+        } else {
+            None
+        };
+        let temporary_document_header: Option<NameDescription> = if flags & 8 != 0 {
+            Some(self.decode(buffer)?)
+        } else {
+            None
+        };
 
         Ok(DocumentContent {
             peer_id,
@@ -431,6 +455,8 @@ impl CompactEncoding<DocumentContent> for State {
             user_doc_data,
             meta_automerge_doc: None,
             user_automerge_doc: None,
+            temporary_document_type,
+            temporary_document_header,
         })
     }
 }
