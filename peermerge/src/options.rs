@@ -1,10 +1,10 @@
-use std::path::PathBuf;
+use std::{collections::HashMap, path::PathBuf};
 
 use futures::channel::mpsc::UnboundedSender;
 
 use crate::{
     common::constants::{DEFAULT_MAX_ENTRY_DATA_SIZE_BYTES, DEFAULT_MAX_WRITE_FEED_LENGTH},
-    NameDescription, StateEvent,
+    DocumentId, NameDescription, StateEvent,
 };
 
 #[derive(Builder)]
@@ -48,4 +48,25 @@ pub struct CreateNewDocumentDiskOptions {
     pub document_header: Option<NameDescription>,
     #[builder(default = "true")]
     pub encrypted: bool,
+}
+
+#[derive(Builder)]
+pub struct AttachDocumentMemoryOptions {
+    pub document_url: String,
+    #[builder(setter(into, strip_option), default)]
+    pub document_secret: Option<String>,
+    #[builder(setter(into, strip_option), default)]
+    pub reattach_secrets: Option<HashMap<DocumentId, String>>,
+    #[builder(setter(into, strip_option), default)]
+    pub parent_document_id: Option<DocumentId>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Builder)]
+pub struct AttachDocumentDiskOptions {
+    pub document_url: String,
+    #[builder(setter(into, strip_option), default)]
+    pub document_secret: Option<String>,
+    #[builder(setter(into, strip_option), default)]
+    pub parent_document_id: Option<DocumentId>,
 }

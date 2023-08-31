@@ -8,6 +8,7 @@ use random_access_disk::RandomAccessDisk;
 use random_access_memory::RandomAccessMemory;
 use random_access_storage::RandomAccess;
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::Arc;
 use std::{fmt::Debug, path::PathBuf};
 use tracing::{debug, enabled, instrument, warn, Level};
@@ -19,7 +20,7 @@ use crate::automerge::{
     ApplyEntriesFeedChange, AutomergeDoc, DocsChangeResult, UnappliedEntries,
 };
 use crate::common::cipher::{
-    decode_doc_url, encode_document_id, proxy_doc_url_from_doc_url, DocumentSecret,
+    decode_doc_url, encode_document_id, proxy_doc_url_from_doc_url, DecodedDocUrl, DocumentSecret,
 };
 use crate::common::encoding::{serialize_entry, serialize_init_entries};
 use crate::common::entry::{EntryContent, ShrunkEntries};
@@ -83,6 +84,8 @@ where
     encrypted: bool,
     /// If encrypted is true and not a proxy, the encryption key to use to decrypt feed entries.
     encryption_key: Option<Vec<u8>>,
+    /// Transient save of reattach secrets for child documents, used only for memory documents.
+    reattach_secrets: Option<HashMap<DocumentId, SigningKey>>,
     /// Log context for the entry points of Document. Will be read from meta data
     /// during creation or set to empty if not possible.
     log_context: String,
@@ -808,11 +811,202 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
                 prepare_result.state,
                 encrypted,
                 doc_encryption_key,
+                None,
                 settings,
             )
             .await,
             init_result,
         ))
+    }
+
+    pub(crate) async fn attach_memory(
+        peer_id: PeerId,
+        peer_header: &NameDescription,
+        mut decoded_doc_url: DecodedDocUrl,
+        mut reattach_secrets: Option<HashMap<DocumentId, SigningKey>>,
+        _parent_document_id: Option<DocumentId>, // TODO: Attach to a parent
+        settings: DocumentSettings,
+    ) -> Result<Self, PeermergeError> {
+        let access_type = decoded_doc_url.access_type;
+        let document_id = decoded_doc_url.static_info.document_id;
+        let doc_discovery_key = decoded_doc_url.static_info.doc_discovery_key;
+        let encryption_key = decoded_doc_url.document_secret.encryption_key.take();
+        let feeds_encrypted = if let Some(encrypted) = &decoded_doc_url.encrypted {
+            if *encrypted && encryption_key.is_none() {
+                return Err(PeermergeError::BadArgument {
+                    context: "Invalid document secret, missing encryption key".to_string(),
+                });
+            }
+            *encrypted
+        } else if access_type != AccessType::Proxy {
+            return Err(PeermergeError::BadArgument {
+                context: "Given doc URL is only usable for proxying".to_string(),
+            });
+        } else {
+            // Set feeds encryption to false for proxy
+            false
+        };
+
+        let doc_signature_signing_key = decoded_doc_url.document_secret.doc_signature_signing_key;
+        let doc_signature_verifying_key = decoded_doc_url.static_info.doc_signature_verifying_key;
+
+        // Create the doc feed
+        let doc_feed = create_new_read_memory_feed(
+            &decoded_doc_url.static_info.doc_public_key,
+            AccessType::ReadOnly,
+            feeds_encrypted,
+            &encryption_key,
+        )
+        .await;
+
+        let (content, feeds_state, write_discovery_key_and_feed, reattach_secrets) =
+            match access_type {
+                AccessType::ReadWrite => {
+                    let doc_signature_signing_key = if let Some(key) = &doc_signature_signing_key {
+                        key
+                    } else {
+                        return Err(PeermergeError::BadArgument {
+                            context: "Invalid document secret for read/write, missing signing key"
+                                .to_string(),
+                        });
+                    };
+                    let doc_url_appendix = decoded_doc_url
+                        .doc_url_appendix
+                        .expect("Writer needs to have an appendix");
+                    let meta_doc_data = doc_url_appendix.meta_doc_data;
+
+                    // (Re)create the write feed
+                    let (
+                        write_public_key,
+                        write_discovery_key,
+                        write_feed,
+                        write_feed_init_data_len,
+                        meta_automerge_doc,
+                        reattach_secrets,
+                    ) = if let Some(mut reattach_secrets) = reattach_secrets.take() {
+                        let write_feed_signing_key =
+                            reattach_secrets.remove(&document_id).take().unwrap();
+                        let write_verifying_key = write_feed_signing_key.verifying_key();
+                        let write_public_key = write_verifying_key.to_bytes();
+                        let write_discovery_key = discovery_key_from_public_key(&write_public_key);
+                        let meta_automerge_doc =
+                            init_automerge_doc_from_data(&peer_id, &meta_doc_data);
+                        let (write_feed, _) = create_new_write_memory_feed(
+                            write_feed_signing_key,
+                            feeds_encrypted,
+                            &encryption_key,
+                            true,
+                        )
+                        .await;
+                        (
+                            write_public_key,
+                            write_discovery_key,
+                            write_feed,
+                            0,
+                            meta_automerge_doc,
+                            Some(reattach_secrets),
+                        )
+                    } else {
+                        let (write_key_pair, write_discovery_key) = generate_keys();
+                        let write_verifying_key = write_key_pair.verifying_key();
+                        let write_public_key = write_verifying_key.to_bytes();
+
+                        // Init the meta document from the URL
+                        let mut meta_automerge_doc =
+                            init_automerge_doc_from_data(&peer_id, &meta_doc_data);
+                        let init_peer_entries = init_peer(
+                            &mut meta_automerge_doc,
+                            None,
+                            &peer_id,
+                            &Some(peer_header.clone()),
+                            settings.max_entry_data_size_bytes,
+                        )?;
+                        let (mut write_feed, _) = create_new_write_memory_feed(
+                            write_key_pair,
+                            feeds_encrypted,
+                            &encryption_key,
+                            false,
+                        )
+                        .await;
+                        let write_feed_init_data: Vec<Vec<u8>> =
+                            serialize_init_entries(init_peer_entries)?;
+                        let write_feed_init_data_len: usize = write_feed
+                            .append_batch(write_feed_init_data, doc_signature_signing_key)
+                            .await?
+                            .try_into()
+                            .unwrap();
+                        (
+                            write_public_key,
+                            write_discovery_key,
+                            write_feed,
+                            write_feed_init_data_len,
+                            meta_automerge_doc,
+                            None,
+                        )
+                    };
+                    let content = DocumentContent::new(
+                        peer_id,
+                        &decoded_doc_url.static_info.doc_discovery_key,
+                        0,
+                        &write_discovery_key,
+                        write_feed_init_data_len,
+                        meta_doc_data,
+                        None,
+                        meta_automerge_doc,
+                        None,
+                        Some(doc_url_appendix.document_type),
+                        doc_url_appendix.document_header,
+                    );
+                    let feeds_state = DocumentFeedsState::new_writer(
+                        peer_id,
+                        decoded_doc_url.static_info.doc_public_key,
+                        false,
+                        &write_public_key,
+                        doc_signature_signing_key,
+                    );
+                    (
+                        Some(content),
+                        feeds_state,
+                        Some((write_discovery_key, write_feed)),
+                        reattach_secrets,
+                    )
+                }
+                AccessType::ReadOnly => {
+                    unimplemented!("TODO: read-only DocumentContent");
+                }
+                AccessType::Proxy => {
+                    let feeds_state = DocumentFeedsState::new(
+                        peer_id,
+                        decoded_doc_url.static_info.doc_public_key,
+                        false,
+                    );
+                    (None, feeds_state, None, None)
+                }
+            };
+
+        let state = DocumentState::new(
+            access_type,
+            doc_signature_verifying_key.to_bytes(),
+            decoded_doc_url.encrypted,
+            feeds_state,
+            content,
+        );
+
+        Ok(Self::new_memory(
+            peer_id,
+            (doc_discovery_key, doc_feed),
+            PartialKeypair {
+                public: doc_signature_verifying_key,
+                secret: doc_signature_signing_key,
+            },
+            write_discovery_key_and_feed,
+            state,
+            feeds_encrypted,
+            encryption_key,
+            reattach_secrets,
+            settings,
+        )
+        .await)
     }
 
     pub(crate) async fn attach_writer_memory(
@@ -898,6 +1092,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
             None,
             state,
             encrypted,
+            None,
             None,
             settings,
         )
@@ -1079,6 +1274,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
             state,
             encrypted,
             encryption_key,
+            None,
             settings,
         )
         .await)
@@ -1092,6 +1288,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
         mut state: DocumentState,
         encrypted: bool,
         encryption_key: Option<Vec<u8>>,
+        reattach_secrets: Option<HashMap<DocumentId, SigningKey>>,
         settings: DocumentSettings,
     ) -> Self {
         let id = state.document_id;
@@ -1121,6 +1318,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
             write_discovery_key,
             encrypted,
             encryption_key,
+            reattach_secrets,
             log_context,
             settings,
         }
@@ -1257,12 +1455,166 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
         ))
     }
 
+    pub(crate) async fn attach_disk(
+        peer_id: PeerId,
+        peer_header: &NameDescription,
+        mut decoded_doc_url: DecodedDocUrl,
+        _parent_document_id: Option<DocumentId>, // TODO: Attach to a parent
+        data_root_dir: &Path,
+        settings: DocumentSettings,
+    ) -> Result<Self, PeermergeError> {
+        let access_type = decoded_doc_url.access_type;
+
+        // Process keys from doc URL and document secret
+        let doc_discovery_key = decoded_doc_url.static_info.doc_discovery_key;
+        let encryption_key = decoded_doc_url.document_secret.encryption_key.take();
+        let feeds_encrypted = if let Some(encrypted) = decoded_doc_url.encrypted {
+            if encrypted && encryption_key.is_none() {
+                return Err(PeermergeError::BadArgument {
+                    context: "Invalid document secret, missing encryption key".to_string(),
+                });
+            }
+            encrypted
+        } else if access_type != AccessType::Proxy {
+            return Err(PeermergeError::BadArgument {
+                context: "Given doc URL is only usable for proxying".to_string(),
+            });
+        } else {
+            // Set feeds encryption to false for proxy
+            false
+        };
+        let doc_signature_signing_key = decoded_doc_url.document_secret.doc_signature_signing_key;
+        let doc_signature_verifying_key = decoded_doc_url.static_info.doc_signature_verifying_key;
+
+        // Create the doc feed
+        let postfix = encode_document_id(&decoded_doc_url.static_info.document_id);
+        let data_root_dir = data_root_dir.join(postfix);
+        let doc_feed = create_new_read_disk_feed(
+            &data_root_dir,
+            &decoded_doc_url.static_info.doc_public_key,
+            &decoded_doc_url.static_info.doc_discovery_key,
+            AccessType::ReadOnly,
+            feeds_encrypted,
+            &encryption_key,
+        )
+        .await;
+
+        let (content, feeds_state, write_discovery_key_and_feed) = match access_type {
+            AccessType::ReadWrite => {
+                let doc_signature_signing_key = if let Some(key) = &doc_signature_signing_key {
+                    key
+                } else {
+                    return Err(PeermergeError::BadArgument {
+                        context: "Invalid document secret for read/write, missing signing key"
+                            .to_string(),
+                    });
+                };
+                let doc_url_appendix = decoded_doc_url
+                    .doc_url_appendix
+                    .expect("Writer needs to have an appendix");
+                let meta_doc_data = doc_url_appendix.meta_doc_data;
+
+                // Create the write feed keys
+                let (write_key_pair, write_discovery_key) = generate_keys();
+                let write_verifying_key = write_key_pair.verifying_key();
+                let write_public_key = write_verifying_key.to_bytes();
+
+                // Init the meta document from the URL
+                let mut meta_automerge_doc = init_automerge_doc_from_data(&peer_id, &meta_doc_data);
+                let init_peer_entries = init_peer(
+                    &mut meta_automerge_doc,
+                    None,
+                    &peer_id,
+                    &Some(peer_header.clone()),
+                    settings.max_entry_data_size_bytes,
+                )?;
+                let write_feed_init_data: Vec<Vec<u8>> = serialize_init_entries(init_peer_entries)?;
+                let write_feed_init_data_len = write_feed_init_data.len();
+
+                // Create the write feed
+                let (mut write_feed, _) = create_new_write_disk_feed(
+                    &data_root_dir,
+                    write_key_pair,
+                    &write_discovery_key,
+                    feeds_encrypted,
+                    &encryption_key,
+                )
+                .await;
+                write_feed
+                    .append_batch(write_feed_init_data, doc_signature_signing_key)
+                    .await?;
+
+                // Initialize document state
+                let content = DocumentContent::new(
+                    peer_id,
+                    &decoded_doc_url.static_info.doc_discovery_key,
+                    0,
+                    &write_discovery_key,
+                    write_feed_init_data_len,
+                    meta_doc_data,
+                    None,
+                    meta_automerge_doc,
+                    None,
+                    Some(doc_url_appendix.document_type),
+                    doc_url_appendix.document_header,
+                );
+                let feeds_state = DocumentFeedsState::new_writer(
+                    peer_id,
+                    decoded_doc_url.static_info.doc_public_key,
+                    false,
+                    &write_public_key,
+                    doc_signature_signing_key,
+                );
+                (
+                    Some(content),
+                    feeds_state,
+                    Some((write_discovery_key, write_feed)),
+                )
+            }
+            AccessType::ReadOnly => {
+                unimplemented!("TODO: read-only DocumentContent");
+            }
+            AccessType::Proxy => {
+                let feeds_state = DocumentFeedsState::new(
+                    peer_id,
+                    decoded_doc_url.static_info.doc_public_key,
+                    false,
+                );
+                (None, feeds_state, None)
+            }
+        };
+
+        let state = DocumentState::new(
+            access_type,
+            doc_signature_verifying_key.to_bytes(),
+            Some(feeds_encrypted),
+            feeds_state,
+            content,
+        );
+
+        Ok(Self::new_disk(
+            peer_id,
+            (doc_discovery_key, doc_feed),
+            PartialKeypair {
+                public: doc_signature_verifying_key,
+                secret: doc_signature_signing_key,
+            },
+            write_discovery_key_and_feed,
+            state,
+            feeds_encrypted,
+            encryption_key,
+            &data_root_dir,
+            settings,
+        )
+        .await)
+    }
+
     pub(crate) async fn attach_writer_disk(
         peer_id: PeerId,
         peer_header: &NameDescription,
         doc_url: &str,
         document_secret: &Option<DocumentSecret>,
-        data_root_dir: &PathBuf,
+        data_root_dir: &Path,
         settings: DocumentSettings,
     ) -> Result<Self, PeermergeError> {
         let access_type = AccessType::ReadWrite;
@@ -1669,6 +2021,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
             access_type,
             encrypted,
             encryption_key: encryption_key.clone(),
+            reattach_secrets: None,
             log_context,
             settings,
         })
@@ -1738,6 +2091,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
             write_discovery_key,
             encrypted,
             encryption_key,
+            reattach_secrets: None,
             log_context,
         }
     }

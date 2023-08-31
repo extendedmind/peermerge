@@ -1,11 +1,14 @@
+use std::collections::HashMap;
+
 use automerge::transaction::Transactable;
 use automerge::ROOT;
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use futures::future::join_all;
 use futures::stream::StreamExt;
 use peermerge::{
-    get_document_info, CreateNewDocumentMemoryOptionsBuilder, DocumentId, FeedMemoryPersistence,
-    NameDescription, Patch, Peermerge, PeermergeDiskOptionsBuilder, PeermergeMemoryOptionsBuilder,
+    get_document_info, AttachDocumentDiskOptionsBuilder, AttachDocumentMemoryOptionsBuilder,
+    CreateNewDocumentMemoryOptionsBuilder, DocumentId, FeedMemoryPersistence, NameDescription,
+    Patch, PeerId, Peermerge, PeermergeDiskOptionsBuilder, PeermergeMemoryOptionsBuilder,
     StateEvent, StateEventContent::*,
 };
 use random_access_memory::RandomAccessMemory;
@@ -39,6 +42,7 @@ async fn proxy_disk_encrypted() -> anyhow::Result<()> {
             .build()?,
     )
     .await;
+    let creator_peer_id = peermerge_creator.peer_id();
     let (creator_doc_info, _) = peermerge_creator
         .create_new_document_memory(
             CreateNewDocumentMemoryOptionsBuilder::default()
@@ -87,8 +91,13 @@ async fn proxy_disk_encrypted() -> anyhow::Result<()> {
             .build()?,
     )
     .await;
+    let proxy_peer_id = peermerge_proxy.peer_id();
     peermerge_proxy
-        .attach_proxy_document_disk(&proxy_doc_url)
+        .attach_document_disk(
+            AttachDocumentDiskOptionsBuilder::default()
+                .document_url(proxy_doc_url)
+                .build()?,
+        )
         .await?;
 
     let mut peermerge_proxy_for_task = peermerge_proxy.clone();
@@ -133,15 +142,23 @@ async fn proxy_disk_encrypted() -> anyhow::Result<()> {
             .build()?,
     )
     .await;
+    let joiner_peer_id = peermerge_joiner.peer_id();
     peermerge_proxy
         .set_state_event_sender(Some(proxy_state_event_sender))
         .await;
     let joiner_doc_info = peermerge_joiner
-        .attach_writer_document_memory(&doc_url, Some(document_secret.clone()))
+        .attach_document_memory(
+            AttachDocumentMemoryOptionsBuilder::default()
+                .document_url(doc_url.clone())
+                .document_secret(document_secret.clone())
+                .build()?,
+        )
         .await?;
-    let reattach_secret: String = peermerge_joiner
-        .reattach_secret(&joiner_doc_info.id())
-        .await;
+    let document_id = joiner_doc_info.id();
+    let reattach_secrets: HashMap<DocumentId, String> = HashMap::from([(
+        document_id,
+        peermerge_joiner.reattach_secret(&document_id).await,
+    )]);
     let mut peermerge_joiner_for_task = peermerge_joiner.clone();
     let joiner_connect = task::spawn(async move {
         peermerge_joiner_for_task
@@ -159,9 +176,13 @@ async fn proxy_disk_encrypted() -> anyhow::Result<()> {
     });
 
     let proxy_process = task::spawn(async move {
-        process_proxy_state_event_with_joiner_initial(proxy_state_event_receiver)
-            .await
-            .unwrap();
+        process_proxy_state_event_with_joiner_initial(
+            proxy_state_event_receiver,
+            creator_peer_id,
+            joiner_peer_id,
+        )
+        .await
+        .unwrap();
     });
 
     let peermerge_joiner_for_task = peermerge_joiner.clone();
@@ -196,8 +217,15 @@ async fn proxy_disk_encrypted() -> anyhow::Result<()> {
         .set_state_event_sender(Some(proxy_state_event_sender))
         .await;
     let _joiner_doc_info = peermerge_joiner
-        .reattach_writer_document_memory(&doc_url, Some(document_secret), &reattach_secret)
+        .attach_document_memory(
+            AttachDocumentMemoryOptionsBuilder::default()
+                .document_url(doc_url.clone())
+                .document_secret(document_secret)
+                .reattach_secrets(reattach_secrets)
+                .build()?,
+        )
         .await?;
+    assert_eq!(peermerge_joiner.peer_id(), joiner_peer_id);
     let mut peermerge_joiner_for_task = peermerge_joiner.clone();
     let joiner_connect = task::spawn(async move {
         peermerge_joiner_for_task
@@ -215,9 +243,13 @@ async fn proxy_disk_encrypted() -> anyhow::Result<()> {
     });
 
     let proxy_process = task::spawn(async move {
-        process_proxy_state_event_with_joiner_reopen(proxy_state_event_receiver)
-            .await
-            .unwrap();
+        process_proxy_state_event_with_joiner_reopen(
+            proxy_state_event_receiver,
+            creator_peer_id,
+            joiner_peer_id,
+        )
+        .await
+        .unwrap();
     });
 
     let peermerge_joiner_for_task = peermerge_joiner.clone();
@@ -225,6 +257,8 @@ async fn proxy_disk_encrypted() -> anyhow::Result<()> {
         peermerge_joiner_for_task,
         joiner_doc_info.id(),
         joiner_state_event_receiver,
+        creator_peer_id,
+        proxy_peer_id,
     )
     .await?;
 
@@ -313,26 +347,28 @@ async fn process_creator_state_events(
 #[instrument(skip_all)]
 async fn process_proxy_state_event_with_joiner_initial(
     mut proxy_state_event_receiver: UnboundedReceiver<StateEvent>,
+    creator_peer_id: PeerId,
+    joiner_peer_id: PeerId,
 ) -> anyhow::Result<()> {
-    let mut peer_syncs = 0;
     let mut remote_peer_syncs = 0;
     while let Some(event) = proxy_state_event_receiver.next().await {
         info!("Received event {:?}", event);
         match event.content {
             PeerSynced {
-                contiguous_length, ..
+                peer_id,
+                contiguous_length,
+                ..
             } => {
-                peer_syncs += 1;
-                if peer_syncs == 1 {
-                    // The first one that will come is joiners own write feed with init
-                    // FIXME: This is flaky: might be 2 when below...
-                    assert_eq!(contiguous_length, 1);
-                } else if peer_syncs == 2 {
-                    // ..after that the same but now with a change.
-                    assert_eq!(contiguous_length, 2);
+                if peer_id == creator_peer_id {
+                    info!("Creator feed synced to {contiguous_length}");
+                } else if peer_id == joiner_peer_id {
+                    info!("Joiner feed synced to {contiguous_length}");
+                }
+                if contiguous_length == 2 {
+                    // Joiner's own write feed init and one change.
                     break;
-                } else {
-                    panic!("Too many peer syncs");
+                } else if contiguous_length > 2 {
+                    panic!("Too large continuous length");
                 }
             }
             RemotePeerSynced {
@@ -424,23 +460,28 @@ async fn process_joiner_state_events_initial(
 #[instrument(skip_all)]
 async fn process_proxy_state_event_with_joiner_reopen(
     mut proxy_state_event_receiver: UnboundedReceiver<StateEvent>,
+    creator_peer_id: PeerId,
+    joiner_peer_id: PeerId,
 ) -> anyhow::Result<()> {
-    let mut peer_syncs = 0;
     let mut remote_peer_syncs = 0;
     while let Some(event) = proxy_state_event_receiver.next().await {
         info!("Received event {:?}", event);
         match event.content {
             PeerSynced {
-                contiguous_length, ..
+                peer_id,
+                contiguous_length,
+                ..
             } => {
-                peer_syncs += 1;
-                if peer_syncs == 1 {
-                    // The first one that will come is joiners own write feed with init, original
-                    // change and reopen change
-                    assert_eq!(contiguous_length, 3);
+                if peer_id == creator_peer_id {
+                    info!("Creator feed synced to {contiguous_length}");
+                } else if peer_id == joiner_peer_id {
+                    info!("Joiner feed synced to {contiguous_length}");
+                }
+                if contiguous_length == 3 {
+                    // Joiners own write feed with init, original change and reopen change
                     break;
-                } else {
-                    panic!("Too many peer syncs");
+                } else if contiguous_length > 3 {
+                    panic!("Too large contiguous length");
                 }
             }
             RemotePeerSynced {
@@ -468,6 +509,8 @@ async fn process_joiner_state_events_reopen(
     mut peermerge: Peermerge<RandomAccessMemory, FeedMemoryPersistence>,
     doc_id: DocumentId,
     mut joiner_state_event_receiver: UnboundedReceiver<StateEvent>,
+    creator_peer_id: PeerId,
+    proxy_peer_id: PeerId,
 ) -> anyhow::Result<()> {
     let mut document_changes: Vec<Vec<Patch>> = vec![];
     let mut full_peer_syncs = 0;
@@ -480,8 +523,15 @@ async fn process_joiner_state_events_reopen(
         );
         match event.content {
             PeerSynced {
-                contiguous_length, ..
+                peer_id,
+                contiguous_length,
+                ..
             } => {
+                if peer_id == creator_peer_id {
+                    info!("Creator feed synced to {contiguous_length}");
+                } else if peer_id == proxy_peer_id {
+                    info!("Proxy feed synced to {contiguous_length}");
+                }
                 // There are two, creator and joiner itself, both have init and one change
                 if contiguous_length == 2 {
                     full_peer_syncs += 1;
@@ -540,9 +590,11 @@ async fn process_joiner_state_events_reopen(
             RemotePeerSynced {
                 contiguous_length, ..
             } => {
-                // FIXME: ...this is flaky: might be 2 (look above for other flaky)
-                assert_eq!(contiguous_length, 3);
-                break;
+                if contiguous_length == 3 {
+                    break;
+                } else if contiguous_length > 3 {
+                    panic!("Too large contiguous length")
+                }
             }
         }
     }

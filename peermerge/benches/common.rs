@@ -7,6 +7,7 @@ use futures::channel::mpsc::{
 use futures::stream::StreamExt;
 use hypercore_protocol::{Duplex, Protocol, ProtocolBuilder};
 use peermerge::{
+    AttachDocumentDiskOptionsBuilder, AttachDocumentMemoryOptionsBuilder,
     CreateNewDocumentDiskOptionsBuilder, CreateNewDocumentMemoryOptionsBuilder, DocumentId,
     FeedDiskPersistence, FeedMemoryPersistence, FeedPersistence, NameDescription, Peermerge,
     PeermergeDiskOptionsBuilder, PeermergeMemoryOptionsBuilder, RandomAccess, StateEvent,
@@ -83,7 +84,13 @@ pub async fn setup_peermerge_mesh_memory(
         )
         .await;
         let _doc_info = peermerge_peer
-            .attach_writer_document_memory(&doc_url, Some(document_secret.clone()))
+            .attach_document_memory(
+                AttachDocumentMemoryOptionsBuilder::default()
+                    .document_url(doc_url.clone())
+                    .document_secret(document_secret.clone())
+                    .build()
+                    .unwrap(),
+            )
             .await
             .unwrap();
         peermerge_peer.watch(&doc_info.id(), Some(vec![ROOT])).await;
@@ -195,7 +202,13 @@ pub async fn setup_peermerge_mesh_disk(
         )
         .await;
         let doc_info = peermerge_peer
-            .attach_writer_document_disk(&doc_url, Some(document_secret.clone()))
+            .attach_document_disk(
+                AttachDocumentDiskOptionsBuilder::default()
+                    .document_url(doc_url.clone())
+                    .document_secret(document_secret.clone())
+                    .build()
+                    .unwrap(),
+            )
             .await
             .unwrap();
         peermerge_peer.watch(&doc_info.id(), Some(vec![ROOT])).await;

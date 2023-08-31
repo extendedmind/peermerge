@@ -4,9 +4,9 @@ use futures::{
     stream::StreamExt,
 };
 use peermerge::{
-    get_document_info, CreateNewDocumentDiskOptionsBuilder, DocumentId, FeedDiskPersistence,
-    NameDescription, Patch, Peermerge, PeermergeDiskOptionsBuilder, StateEvent,
-    StateEventContent::*,
+    get_document_info, AttachDocumentDiskOptionsBuilder, CreateNewDocumentDiskOptionsBuilder,
+    DocumentId, FeedDiskPersistence, NameDescription, Patch, Peermerge,
+    PeermergeDiskOptionsBuilder, StateEvent, StateEventContent::*,
 };
 use random_access_disk::RandomAccessDisk;
 use std::{collections::HashMap, sync::Arc};
@@ -103,7 +103,12 @@ async fn disk_two_peers(encrypted: bool) -> anyhow::Result<()> {
     )
     .await;
     let joiner_doc_info = peermerge_joiner
-        .attach_writer_document_disk(&doc_url, Some(document_secret.clone()))
+        .attach_document_disk(
+            AttachDocumentDiskOptionsBuilder::default()
+                .document_url(doc_url)
+                .document_secret(document_secret.clone())
+                .build()?,
+        )
         .await?;
     assert_eq!(
         joiner_doc_info.dynamic_info.as_ref().unwrap().document_type,

@@ -3,8 +3,9 @@ use automerge::{ObjId, ROOT};
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use futures::stream::StreamExt;
 use peermerge::{
-    CreateNewDocumentMemoryOptionsBuilder, DocumentId, FeedMemoryPersistence, NameDescription,
-    Patch, PeerId, Peermerge, PeermergeMemoryOptionsBuilder, StateEvent, StateEventContent::*,
+    AttachDocumentMemoryOptionsBuilder, CreateNewDocumentMemoryOptionsBuilder, DocumentId,
+    FeedMemoryPersistence, NameDescription, Patch, PeerId, Peermerge,
+    PeermergeMemoryOptionsBuilder, StateEvent, StateEventContent::*,
 };
 use random_access_memory::RandomAccessMemory;
 use std::collections::HashMap;
@@ -112,13 +113,16 @@ async fn memory_three_writers() -> anyhow::Result<()> {
             .build()?,
     )
     .await;
+    let document_url = peermerge_creator
+        .sharing_info(&creator_doc_info.id())
+        .await?
+        .doc_url;
     let joiner_doc_info = peermerge_joiner
-        .attach_writer_document_memory(
-            &peermerge_creator
-                .sharing_info(&creator_doc_info.id())
-                .await?
-                .doc_url,
-            Some(document_secret),
+        .attach_document_memory(
+            AttachDocumentMemoryOptionsBuilder::default()
+                .document_url(document_url)
+                .document_secret(document_secret)
+                .build()?,
         )
         .await?;
     peermerge_joiner
@@ -491,10 +495,13 @@ async fn process_creator_state_events(
                                 .build()?,
                         )
                         .await;
+                        let document_url = peermerge.sharing_info(&doc_id).await?.doc_url;
                         let latecomer_doc_info = peermerge_latecomer
-                            .attach_writer_document_memory(
-                                &peermerge.sharing_info(&doc_id).await?.doc_url,
-                                Some(document_secret),
+                            .attach_document_memory(
+                                AttachDocumentMemoryOptionsBuilder::default()
+                                    .document_url(document_url)
+                                    .document_secret(document_secret)
+                                    .build()?,
                             )
                             .await?;
                         peermerge_latecomer.watch(&doc_id, Some(vec![])).await;

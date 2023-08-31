@@ -3,7 +3,10 @@ use std::collections::HashMap;
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use futures::stream::StreamExt;
 use peermerge::transaction::Transactable;
-use peermerge::{get_document_info, CreateNewDocumentDiskOptionsBuilder, DocumentId};
+use peermerge::{
+    get_document_info, AttachDocumentDiskOptionsBuilder, CreateNewDocumentDiskOptionsBuilder,
+    DocumentId,
+};
 use peermerge::{
     FeedDiskPersistence, Peermerge, RandomAccessDisk, StateEvent, StateEventContent::*,
 };
@@ -99,7 +102,13 @@ async fn tcp_proxy_disk_encrypted() -> anyhow::Result<()> {
         Peermerge::open_disk(creator_document_secrets, &creator_dir, None).await?;
 
     // Delay attaching proxy document until after server above has been started.
-    let _proxy_doc_id = peermerge_proxy.attach_proxy_document_disk(&doc_url).await?;
+    let _proxy_doc_id = peermerge_proxy
+        .attach_document_disk(
+            AttachDocumentDiskOptionsBuilder::default()
+                .document_url(doc_url)
+                .build()?,
+        )
+        .await?;
 
     // Now ready to start client
     let peermerge_creator_for_task = peermerge_creator.clone();

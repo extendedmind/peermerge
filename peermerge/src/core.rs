@@ -4,6 +4,7 @@ use futures::{
     channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender},
     StreamExt,
 };
+use hypercore_protocol::hypercore::SigningKey;
 #[cfg(not(target_arch = "wasm32"))]
 use random_access_disk::RandomAccessDisk;
 use random_access_memory::RandomAccessMemory;
@@ -24,7 +25,7 @@ use crate::{
     automerge::AutomergeDoc,
     common::{
         cipher::{
-            decode_document_secret, decode_reattach_secret, encode_document_id,
+            decode_doc_url, decode_document_secret, decode_reattach_secret, encode_document_id,
             encode_document_secret, encode_reattach_secret, DocumentSecret,
         },
         keys::{signing_key_from_bytes, signing_key_to_bytes},
@@ -35,7 +36,8 @@ use crate::{
     document::{get_document_by_discovery_key, DocumentSettings},
     feed::{FeedMemoryPersistence, FeedPersistence, Protocol},
     options::PeermergeMemoryOptions,
-    CreateNewDocumentMemoryOptions, DocumentSharingInfo, PeerId, PeermergeError, StateEventContent,
+    AttachDocumentDiskOptions, AttachDocumentMemoryOptions, CreateNewDocumentMemoryOptions,
+    DocumentSharingInfo, PeerId, PeermergeError, StateEventContent,
 };
 use crate::{
     common::{DocumentInfo, FeedEvent},
@@ -84,7 +86,7 @@ where
 {
     /// Get my peer id
     #[instrument(skip(self), fields(peer_name = self.default_peer_header.name))]
-    pub async fn peer_id(&self) -> PeerId {
+    pub fn peer_id(&self) -> PeerId {
         self.peer_id
     }
 
@@ -315,6 +317,72 @@ impl Peermerge<RandomAccessMemory, FeedMemoryPersistence> {
             notify_document_initialized(state_event_sender, true, &document.id()).await;
         }
         Ok((self.add_document(document).await, init_result))
+    }
+
+    pub async fn attach_document_memory(
+        &mut self,
+        options: AttachDocumentMemoryOptions,
+    ) -> Result<DocumentInfo, PeermergeError> {
+        let document_secret = options
+            .document_secret
+            .map(|secret| decode_document_secret(&secret))
+            .transpose()?;
+        let decoded_document_url = decode_doc_url(&options.document_url, &document_secret)?;
+        let reattach_secrets = if let Some(reattach_secrets) = options.reattach_secrets {
+            if decoded_document_url.static_info.child {
+                return Err(PeermergeError::BadArgument {
+                    context: "Can not reattach a child document".to_string(),
+                });
+            }
+            if !self.documents.is_empty() {
+                return Err(PeermergeError::BadArgument {
+                    context: "Can only reattach to an empty peermerge".to_string(),
+                });
+            }
+            let mut secrets: HashMap<DocumentId, SigningKey> = HashMap::new();
+            let mut new_peer_id: Option<PeerId> = None;
+            for (document_id, reattach_secret) in reattach_secrets {
+                let (peer_id, write_feed_key_pair_bytes) =
+                    decode_reattach_secret(&reattach_secret)?;
+                if let Some(id) = new_peer_id {
+                    if peer_id != id {
+                        return Err(PeermergeError::BadArgument {
+                            context: "Invalid reattach secrets, peer id is not the same"
+                                .to_string(),
+                        });
+                    }
+                } else {
+                    new_peer_id = Some(peer_id);
+                }
+                let write_feed_signing_key = signing_key_from_bytes(&write_feed_key_pair_bytes);
+                secrets.insert(document_id, write_feed_signing_key);
+            }
+            if let Some(new_peer_id) = new_peer_id {
+                if !secrets.contains_key(&decoded_document_url.static_info.document_id) {
+                    return Err(PeermergeError::BadArgument {
+                        context:
+                            "Reattach secrets did not contain the key for document id for the URL"
+                                .to_string(),
+                    });
+                }
+                self.peer_id = new_peer_id;
+                Some(secrets)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        let document = Document::attach_memory(
+            self.peer_id,
+            &self.default_peer_header,
+            decoded_document_url,
+            reattach_secrets,
+            options.parent_document_id,
+            self.document_settings.clone(),
+        )
+        .await?;
+        Ok(self.add_document(document).await)
     }
 
     pub async fn attach_writer_document_memory(
@@ -555,6 +623,27 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
             notify_document_initialized(state_event_sender, true, &document.id()).await;
         }
         Ok((self.add_document(document).await, init_result))
+    }
+
+    pub async fn attach_document_disk(
+        &mut self,
+        options: AttachDocumentDiskOptions,
+    ) -> Result<DocumentInfo, PeermergeError> {
+        let document_secret = options
+            .document_secret
+            .map(|secret| decode_document_secret(&secret))
+            .transpose()?;
+        let decoded_document_url = decode_doc_url(&options.document_url, &document_secret)?;
+        let document = Document::attach_disk(
+            self.peer_id,
+            &self.default_peer_header,
+            decoded_document_url,
+            options.parent_document_id,
+            &self.prefix,
+            self.document_settings.clone(),
+        )
+        .await?;
+        Ok(self.add_document(document).await)
     }
 
     pub async fn attach_writer_document_disk(
