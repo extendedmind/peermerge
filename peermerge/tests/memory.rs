@@ -333,8 +333,8 @@ async fn process_joiner_state_event(
                     panic!("Did not expect more joiner document changes");
                 }
             }
-            _ => {
-                panic!("Unkown event {event:?}");
+            PeerChanged { .. } => {
+                // Skip
             }
         }
     }
@@ -552,8 +552,8 @@ async fn process_creator_state_events(
             DocumentInitialized { .. } => {
                 // Skip
             }
-            _ => {
-                panic!("Unkown event {event:?}");
+            PeerChanged { .. } => {
+                // Skip
             }
         }
     }
@@ -659,8 +659,8 @@ async fn process_latecomer_state_event(
                 wait_for_condvar(append_sync).await;
                 break;
             }
-            _ => {
-                panic!("Unkown event {event:?}");
+            PeerChanged { .. } => {
+                // Skip
             }
         }
     }

@@ -336,8 +336,8 @@ async fn process_creator_state_events(
             DocumentInitialized { .. } => {
                 // Skip
             }
-            _ => {
-                panic!("Unexpected event {event:?}");
+            PeerChanged { .. } => {
+                // Skip
             }
         }
     }
@@ -380,6 +380,9 @@ async fn process_proxy_state_event_with_joiner_initial(
                 } else {
                     panic!("Too many remote peer syncs");
                 }
+            }
+            PeerChanged { .. } => {
+                // Skip
             }
             _ => {
                 panic!("Unexpected event {event:?}");
@@ -449,8 +452,8 @@ async fn process_joiner_state_events_initial(
                         .await?;
                 }
             }
-            _ => {
-                panic!("Unexpected event {event:?}");
+            PeerChanged { .. } => {
+                // Skip
             }
         }
     }

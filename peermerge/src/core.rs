@@ -303,7 +303,7 @@ impl Peermerge<RandomAccessMemory, FeedMemoryPersistence> {
     where
         F: FnOnce(&mut Transaction) -> Result<O, AutomergeError>,
     {
-        let (document, init_result) = Document::create_new_memory(
+        let (document, init_result, state_events) = Document::create_new_memory(
             self.peer_id,
             &self.default_peer_header,
             &options.document_type,
@@ -314,7 +314,7 @@ impl Peermerge<RandomAccessMemory, FeedMemoryPersistence> {
         )
         .await?;
         if let Some(state_event_sender) = self.state_event_sender.lock().await.as_mut() {
-            notify_document_initialized(state_event_sender, true, &document.id()).await;
+            send_state_events(state_event_sender, state_events);
         }
         Ok((self.add_document(document).await, init_result))
     }
@@ -373,7 +373,7 @@ impl Peermerge<RandomAccessMemory, FeedMemoryPersistence> {
         } else {
             None
         };
-        let document = Document::attach_memory(
+        let (document, state_events) = Document::attach_memory(
             self.peer_id,
             &self.default_peer_header,
             decoded_document_url,
@@ -382,6 +382,11 @@ impl Peermerge<RandomAccessMemory, FeedMemoryPersistence> {
             self.document_settings.clone(),
         )
         .await?;
+        if !state_events.is_empty() {
+            if let Some(state_event_sender) = self.state_event_sender.lock().await.as_mut() {
+                send_state_events(state_event_sender, state_events);
+            }
+        }
         Ok(self.add_document(document).await)
     }
 
@@ -525,7 +530,7 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
                 };
             let postfix = encode_document_id(document_id);
             let document_data_root_dir = data_root_dir.join(postfix);
-            let document = Document::open_disk(
+            let (document, state_events) = Document::open_disk(
                 peer_id,
                 document_secret,
                 &document_data_root_dir,
@@ -533,7 +538,7 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
             )
             .await?;
             if let Some(state_event_sender) = state_event_sender.as_mut() {
-                notify_document_initialized(state_event_sender, false, document_id).await;
+                send_state_events(state_event_sender, state_events);
             }
             documents.insert(*document_id, document);
         }
@@ -557,7 +562,7 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
     where
         F: FnOnce(&mut Transaction) -> Result<O, AutomergeError>,
     {
-        let (document, init_result) = Document::create_new_disk(
+        let (document, init_result, state_events) = Document::create_new_disk(
             self.peer_id,
             &self.default_peer_header,
             &options.document_type,
@@ -569,7 +574,7 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
         )
         .await?;
         if let Some(state_event_sender) = self.state_event_sender.lock().await.as_mut() {
-            notify_document_initialized(state_event_sender, true, &document.id()).await;
+            send_state_events(state_event_sender, state_events);
         }
         Ok((self.add_document(document).await, init_result))
     }
@@ -583,7 +588,7 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
             .map(|secret| decode_document_secret(&secret))
             .transpose()?;
         let decoded_document_url = decode_doc_url(&options.document_url, &document_secret)?;
-        let document = Document::attach_disk(
+        let (document, state_events) = Document::attach_disk(
             self.peer_id,
             &self.default_peer_header,
             decoded_document_url,
@@ -592,6 +597,11 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
             self.document_settings.clone(),
         )
         .await?;
+        if !state_events.is_empty() {
+            if let Some(state_event_sender) = self.state_event_sender.lock().await.as_mut() {
+                send_state_events(state_event_sender, state_events);
+            }
+        }
         Ok(self.add_document(document).await)
     }
 
@@ -660,21 +670,14 @@ async fn on_feed_event_disk(
 //
 // Utilities
 
-async fn notify_document_initialized(
+fn send_state_events(
     state_event_sender: &mut UnboundedSender<StateEvent>,
-    new_document: bool,
-    document_id: &DocumentId,
+    state_events: Vec<StateEvent>,
 ) {
     if !state_event_sender.is_closed() {
-        state_event_sender
-            .unbounded_send(StateEvent::new(
-                *document_id,
-                StateEventContent::DocumentInitialized {
-                    new_document,
-                    parent_document_id: None, // TODO: child
-                },
-            ))
-            .unwrap();
+        for event in state_events {
+            state_event_sender.unbounded_send(event).unwrap();
+        }
     }
 }
 

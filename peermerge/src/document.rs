@@ -750,7 +750,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
         encrypted: bool,
         settings: DocumentSettings,
         init_cb: F,
-    ) -> Result<(Self, O), PeermergeError>
+    ) -> Result<(Self, O, Vec<StateEvent>), PeermergeError>
     where
         F: FnOnce(&mut Transaction) -> Result<O, AutomergeError>,
     {
@@ -798,7 +798,6 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
                 &prepare_result.doc_signature_signing_key,
             )
             .await?;
-
         Ok((
             Self::new_memory(
                 peer_id,
@@ -816,6 +815,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
             )
             .await,
             init_result,
+            prepare_result.state_events,
         ))
     }
 
@@ -826,7 +826,8 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
         mut reattach_secrets: Option<HashMap<DocumentId, SigningKey>>,
         _parent_document_id: Option<DocumentId>, // TODO: Attach to a parent
         settings: DocumentSettings,
-    ) -> Result<Self, PeermergeError> {
+    ) -> Result<(Self, Vec<StateEvent>), PeermergeError> {
+        let mut state_events: Vec<StateEvent> = vec![];
         let access_type = decoded_doc_url.access_type;
         let document_id = decoded_doc_url.static_info.document_id;
         let doc_discovery_key = decoded_doc_url.static_info.doc_discovery_key;
@@ -928,6 +929,14 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
                             false,
                         )
                         .await;
+                        state_events.push(StateEvent::new(
+                            document_id,
+                            StateEventContent::PeerChanged {
+                                peer_id,
+                                discovery_key: write_discovery_key,
+                                replaced_discovery_key: None,
+                            },
+                        ));
                         let write_feed_init_data: Vec<Vec<u8>> =
                             serialize_init_entries(init_peer_entries)?;
                         let write_feed_init_data_len: usize = write_feed
@@ -992,21 +1001,24 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
             content,
         );
 
-        Ok(Self::new_memory(
-            peer_id,
-            (doc_discovery_key, doc_feed),
-            PartialKeypair {
-                public: doc_signature_verifying_key,
-                secret: doc_signature_signing_key,
-            },
-            write_discovery_key_and_feed,
-            state,
-            feeds_encrypted,
-            encryption_key,
-            reattach_secrets,
-            settings,
-        )
-        .await)
+        Ok((
+            Self::new_memory(
+                peer_id,
+                (doc_discovery_key, doc_feed),
+                PartialKeypair {
+                    public: doc_signature_verifying_key,
+                    secret: doc_signature_signing_key,
+                },
+                write_discovery_key_and_feed,
+                state,
+                feeds_encrypted,
+                encryption_key,
+                reattach_secrets,
+                settings,
+            )
+            .await,
+            state_events,
+        ))
     }
 
     #[instrument(level = "debug", skip_all, fields(ctx = self.log_context))]
@@ -1133,7 +1145,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
         settings: DocumentSettings,
         init_cb: F,
         data_root_dir: &PathBuf,
-    ) -> Result<(Self, O), PeermergeError>
+    ) -> Result<(Self, O, Vec<StateEvent>), PeermergeError>
     where
         F: FnOnce(&mut Transaction) -> Result<O, AutomergeError>,
     {
@@ -1207,6 +1219,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
             )
             .await,
             init_result,
+            prepare_result.state_events,
         ))
     }
 
@@ -1217,11 +1230,13 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
         _parent_document_id: Option<DocumentId>, // TODO: Attach to a parent
         data_root_dir: &Path,
         settings: DocumentSettings,
-    ) -> Result<Self, PeermergeError> {
+    ) -> Result<(Self, Vec<StateEvent>), PeermergeError> {
         let access_type = decoded_doc_url.access_type;
+        let mut state_events: Vec<StateEvent> = vec![];
 
         // Process keys from doc URL and document secret
         let doc_discovery_key = decoded_doc_url.static_info.doc_discovery_key;
+        let document_id = decoded_doc_url.static_info.document_id;
         let encryption_key = decoded_doc_url.document_secret.encryption_key.take();
         let feeds_encrypted = if let Some(encrypted) = decoded_doc_url.encrypted {
             if encrypted && encryption_key.is_none() {
@@ -1295,6 +1310,14 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
                     &encryption_key,
                 )
                 .await;
+                state_events.push(StateEvent::new(
+                    document_id,
+                    StateEventContent::PeerChanged {
+                        peer_id,
+                        discovery_key: write_discovery_key,
+                        replaced_discovery_key: None,
+                    },
+                ));
                 write_feed
                     .append_batch(write_feed_init_data, doc_signature_signing_key)
                     .await?;
@@ -1347,21 +1370,24 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
             content,
         );
 
-        Ok(Self::new_disk(
-            peer_id,
-            (doc_discovery_key, doc_feed),
-            PartialKeypair {
-                public: doc_signature_verifying_key,
-                secret: doc_signature_signing_key,
-            },
-            write_discovery_key_and_feed,
-            state,
-            feeds_encrypted,
-            encryption_key,
-            &data_root_dir,
-            settings,
-        )
-        .await)
+        Ok((
+            Self::new_disk(
+                peer_id,
+                (doc_discovery_key, doc_feed),
+                PartialKeypair {
+                    public: doc_signature_verifying_key,
+                    secret: doc_signature_signing_key,
+                },
+                write_discovery_key_and_feed,
+                state,
+                feeds_encrypted,
+                encryption_key,
+                &data_root_dir,
+                settings,
+            )
+            .await,
+            state_events,
+        ))
     }
 
     pub(crate) async fn info_disk(data_root_dir: &PathBuf) -> Result<DocumentInfo, PeermergeError> {
@@ -1381,12 +1407,13 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
         document_secret: Option<DocumentSecret>,
         data_root_dir: &PathBuf,
         settings: DocumentSettings,
-    ) -> Result<Self, PeermergeError> {
+    ) -> Result<(Self, Vec<StateEvent>), PeermergeError> {
+        let mut state_events: Vec<StateEvent> = vec![];
         let mut document_state_wrapper = DocStateWrapper::open_disk(data_root_dir).await?;
 
         // First gather all needed data from state to be able to mutate it later
         let (
-            id,
+            document_id,
             access_type,
             encryption_key,
             doc_signature_signing_key,
@@ -1401,7 +1428,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
             log_context,
         ) = {
             let state = document_state_wrapper.state_mut();
-            let id = state.document_id;
+            let document_id = state.document_id;
             let access_type = state.access_type;
             let encryption_key = document_secret
                 .as_ref()
@@ -1438,7 +1465,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
             let write_feed = state.feeds_state.write_feed.clone();
             let log_context = log_context(state);
             (
-                id,
+                document_id,
                 access_type,
                 encryption_key,
                 doc_signature_signing_key,
@@ -1570,26 +1597,37 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
             (Arc::new(feeds), None)
         };
 
-        // Create Document
-        Ok(Self {
-            feeds,
-            document_state: Arc::new(Mutex::new(document_state_wrapper)),
-            doc_signature_key_pair: PartialKeypair {
-                public: doc_signature_verifying_key,
-                secret: doc_signature_signing_key,
+        state_events.push(StateEvent::new(
+            document_id,
+            StateEventContent::DocumentInitialized {
+                new_document: false,
+                parent_document_id: None, // TODO: child
             },
-            peer_id,
-            prefix: data_root_dir.clone(),
-            doc_discovery_key,
-            id,
-            write_discovery_key,
-            access_type,
-            encrypted,
-            encryption_key: encryption_key.clone(),
-            reattach_secrets: None,
-            log_context,
-            settings,
-        })
+        ));
+
+        // Create Document
+        Ok((
+            Self {
+                feeds,
+                document_state: Arc::new(Mutex::new(document_state_wrapper)),
+                doc_signature_key_pair: PartialKeypair {
+                    public: doc_signature_verifying_key,
+                    secret: doc_signature_signing_key,
+                },
+                peer_id,
+                prefix: data_root_dir.clone(),
+                doc_discovery_key,
+                id: document_id,
+                write_discovery_key,
+                access_type,
+                encrypted,
+                encryption_key: encryption_key.clone(),
+                reattach_secrets: None,
+                log_context,
+                settings,
+            },
+            state_events,
+        ))
     }
 
     #[instrument(level = "debug", skip_all, fields(ctx = self.log_context))]
@@ -1767,6 +1805,7 @@ struct PrepareCreateResult {
     doc_feed_init_data: Vec<Vec<u8>>,
     write_feed_init_data: Vec<Vec<u8>>,
     state: DocumentState,
+    state_events: Vec<StateEvent>,
 }
 
 async fn prepare_create<F, O>(
@@ -1781,6 +1820,8 @@ async fn prepare_create<F, O>(
 where
     F: FnOnce(&mut Transaction) -> Result<O, AutomergeError>,
 {
+    let mut state_events: Vec<StateEvent> = vec![];
+
     // Generate a doc feed signing pair, its discovery key and the public key string
     let (doc_signing_key, doc_discovery_key) = generate_keys();
     let doc_verifying_key = doc_signing_key.verifying_key();
@@ -1795,6 +1836,14 @@ where
     let (write_key_pair, write_discovery_key) = generate_keys();
     let write_verifying_key = write_key_pair.verifying_key();
     let write_public_key = write_verifying_key.to_bytes();
+    state_events.push(StateEvent::new(
+        document_id,
+        StateEventContent::PeerChanged {
+            peer_id: *peer_id,
+            discovery_key: write_discovery_key,
+            replaced_discovery_key: None,
+        },
+    ));
 
     // Initialize the documents
     let (mut create_result, init_result, doc_feed_init_entries) = init_automerge_docs(
@@ -1806,6 +1855,13 @@ where
     )
     .unwrap();
     let doc_feed_init_data: Vec<Vec<u8>> = serialize_init_entries(doc_feed_init_entries)?;
+    state_events.push(StateEvent::new(
+        document_id,
+        StateEventContent::DocumentInitialized {
+            new_document: true,
+            parent_document_id: None, // TODO: child
+        },
+    ));
 
     // Initialize the first peer
     let write_feed_init_entries = init_first_peer(
@@ -1858,6 +1914,7 @@ where
             doc_feed_init_data,
             write_feed_init_data,
             state,
+            state_events,
         },
         init_result,
     ))
