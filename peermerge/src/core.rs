@@ -385,57 +385,6 @@ impl Peermerge<RandomAccessMemory, FeedMemoryPersistence> {
         Ok(self.add_document(document).await)
     }
 
-    pub async fn attach_writer_document_memory(
-        &mut self,
-        doc_url: &str,
-        document_secret: Option<String>,
-    ) -> Result<DocumentInfo, PeermergeError> {
-        let document = Document::attach_writer_memory(
-            self.peer_id,
-            &self.default_peer_header,
-            doc_url,
-            &document_secret
-                .map(|secret| decode_document_secret(&secret))
-                .transpose()?,
-            self.document_settings.clone(),
-        )
-        .await?;
-        Ok(self.add_document(document).await)
-    }
-
-    /// Reattaches a main document writer based on a reattach secret
-    pub async fn reattach_writer_document_memory(
-        &mut self,
-        doc_url: &str,
-        document_secret: Option<String>,
-        reattach_secret: &str,
-    ) -> Result<DocumentInfo, PeermergeError> {
-        let (peer_id, write_feed_key_pair_bytes) = decode_reattach_secret(reattach_secret)?;
-        let write_feed_signing_key = signing_key_from_bytes(&write_feed_key_pair_bytes);
-        let document = Document::reattach_writer_memory(
-            peer_id,
-            write_feed_signing_key,
-            &self.default_peer_header.name,
-            doc_url,
-            &document_secret
-                .map(|secret| decode_document_secret(&secret))
-                .transpose()?,
-            self.document_settings.clone(),
-        )
-        .await?;
-        Ok(self.add_document(document).await)
-    }
-
-    pub async fn attach_proxy_document_memory(
-        &mut self,
-        doc_url: &str,
-    ) -> Result<DocumentInfo, PeermergeError> {
-        let document =
-            Document::attach_proxy_memory(self.peer_id, doc_url, self.document_settings.clone())
-                .await?;
-        Ok(self.add_document(document).await)
-    }
-
     #[instrument(skip_all, fields(peer_name = self.default_peer_header.name))]
     pub async fn connect_protocol_memory<T>(
         &mut self,
@@ -641,39 +590,6 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
             options.parent_document_id,
             &self.prefix,
             self.document_settings.clone(),
-        )
-        .await?;
-        Ok(self.add_document(document).await)
-    }
-
-    pub async fn attach_writer_document_disk(
-        &mut self,
-        doc_url: &str,
-        document_secret: Option<String>,
-    ) -> Result<DocumentInfo, PeermergeError> {
-        let document = Document::attach_writer_disk(
-            self.peer_id,
-            &self.default_peer_header,
-            doc_url,
-            &document_secret
-                .map(|secret| decode_document_secret(&secret))
-                .transpose()?,
-            &self.prefix,
-            self.document_settings.clone(),
-        )
-        .await?;
-        Ok(self.add_document(document).await)
-    }
-
-    pub async fn attach_proxy_document_disk(
-        &mut self,
-        doc_url: &str,
-    ) -> Result<DocumentInfo, PeermergeError> {
-        let document = Document::attach_proxy_disk(
-            self.peer_id,
-            doc_url,
-            self.document_settings.clone(),
-            &self.prefix,
         )
         .await?;
         Ok(self.add_document(document).await)
