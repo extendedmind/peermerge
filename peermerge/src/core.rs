@@ -36,8 +36,8 @@ use crate::{
     document::{get_document_by_discovery_key, DocumentSettings},
     feed::{FeedMemoryPersistence, FeedPersistence, Protocol},
     options::PeermergeMemoryOptions,
-    AttachDocumentDiskOptions, AttachDocumentMemoryOptions, CreateNewDocumentMemoryOptions,
-    DocumentSharingInfo, PeerId, PeermergeError, StateEventContent,
+    AttachDocumentMemoryOptions, CreateNewDocumentMemoryOptions, DocumentSharingInfo, PeerId,
+    PeermergeError, StateEventContent,
 };
 use crate::{
     common::{DocumentInfo, FeedEvent},
@@ -49,7 +49,7 @@ use crate::{document::Document, StateEvent};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::{
     feed::FeedDiskPersistence,
-    options::{CreateNewDocumentDiskOptions, PeermergeDiskOptions},
+    options::{AttachDocumentDiskOptions, CreateNewDocumentDiskOptions, PeermergeDiskOptions},
 };
 
 /// Peermerge is the main abstraction and a store for multiple documents.
