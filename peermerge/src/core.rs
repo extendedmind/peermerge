@@ -91,9 +91,9 @@ where
 
     /// Get all known peer ids in a document
     #[instrument(skip(self), fields(peer_name = self.default_peer_header.name))]
-    pub async fn peer_ids(&self, document_id: &DocumentId) -> Vec<PeerId> {
-        let document = get_document(&self.documents, document_id).await.unwrap();
-        document.peer_ids().await
+    pub async fn peer_ids(&self, document_id: &DocumentId) -> Result<Vec<PeerId>, PeermergeError> {
+        let document = self.get_document(document_id).await?;
+        Ok(document.peer_ids().await)
     }
 
     /// Get my default peer header given to a new document
@@ -106,15 +106,15 @@ where
         &self,
         document_id: &DocumentId,
         peer_id: &PeerId,
-    ) -> Option<NameDescription> {
-        let document = get_document(&self.documents, document_id).await.unwrap();
-        document.peer_header(peer_id).await
+    ) -> Result<Option<NameDescription>, PeermergeError> {
+        let document = self.get_document(document_id).await?;
+        Ok(document.peer_header(peer_id).await)
     }
 
     pub async fn set_state_event_sender(
         &mut self,
         state_event_sender: Option<UnboundedSender<StateEvent>>,
-    ) {
+    ) -> Result<(), PeermergeError> {
         let not_empty = state_event_sender.is_some();
 
         {
@@ -131,8 +131,7 @@ where
                 } else {
                     let mut document_patches: Vec<(DocumentId, Vec<Patch>)> = vec![];
                     for document_id in get_document_ids(&self.documents).await {
-                        let mut document =
-                            get_document(&self.documents, &document_id).await.unwrap();
+                        let mut document = self.get_document(&document_id).await?;
                         let new_patches = document.take_patches().await;
                         if !new_patches.is_empty() {
                             document_patches.push((document_id, new_patches))
@@ -152,6 +151,7 @@ where
                 }
             }
         }
+        Ok(())
     }
 
     #[instrument(skip(self, cb), fields(peer_name = self.default_peer_header.name))]
@@ -160,7 +160,7 @@ where
         F: FnOnce(&AutomergeDoc) -> Result<O, AutomergeError>,
     {
         let result = {
-            let document = get_document(&self.documents, document_id).await.unwrap();
+            let document = self.get_document(document_id).await?;
             document.transact(cb).await?
         };
         Ok(result)
@@ -177,7 +177,7 @@ where
         F: FnOnce(&mut AutomergeDoc) -> Result<O, AutomergeError>,
     {
         let result = {
-            let mut document = get_document(&self.documents, document_id).await.unwrap();
+            let mut document = self.get_document(document_id).await?;
             document
                 .transact_mut(cb, change_id, &mut self.state_event_sender)
                 .await?
@@ -186,9 +186,13 @@ where
     }
 
     #[instrument(skip(self))]
-    pub async fn watch(&mut self, document_id: &DocumentId, ids: Option<Vec<ObjId>>) {
-        let mut document = get_document(&self.documents, document_id).await.unwrap();
-        document.watch(ids).await;
+    pub async fn watch(
+        &mut self,
+        document_id: &DocumentId,
+        ids: Option<Vec<ObjId>>,
+    ) -> Result<(), PeermergeError> {
+        let mut document = self.get_document(document_id).await?;
+        Ok(document.watch(ids).await)
     }
 
     /// Reserve a given object for only local changes, preventing any peers from making changes
@@ -201,7 +205,7 @@ where
         document_id: &DocumentId,
         obj: O,
     ) -> Result<(), PeermergeError> {
-        let mut document = get_document(&self.documents, document_id).await.unwrap();
+        let mut document = self.get_document(document_id).await?;
         document.reserve_object(obj.as_ref().clone()).await
     }
 
@@ -212,7 +216,7 @@ where
         document_id: &DocumentId,
         obj: O,
     ) -> Result<(), PeermergeError> {
-        let mut document = get_document(&self.documents, document_id).await.unwrap();
+        let mut document = self.get_document(document_id).await?;
         let state_events = document.unreserve_object(obj).await?;
         if !state_events.is_empty() {
             if let Some(state_event_sender) = self.state_event_sender.lock().await.as_mut() {
@@ -229,34 +233,52 @@ where
         &self,
         document_id: &DocumentId,
     ) -> Result<DocumentSharingInfo, PeermergeError> {
-        let document = get_document(&self.documents, document_id).await.unwrap();
+        let document = self.get_document(document_id).await?;
         document.sharing_info().await
     }
 
     #[instrument(skip(self), fields(peer_name = self.default_peer_header.name))]
-    pub async fn document_secret(&self, document_id: &DocumentId) -> Option<String> {
-        let document = get_document(&self.documents, document_id).await.unwrap();
+    pub async fn document_secret(
+        &self,
+        document_id: &DocumentId,
+    ) -> Result<Option<String>, PeermergeError> {
+        let document = self.get_document(document_id).await?;
         let document_secret = document.document_secret();
-        document_secret.as_ref().map(encode_document_secret)
+        Ok(document_secret.as_ref().map(encode_document_secret))
     }
 
     #[instrument(skip(self), fields(peer_name = self.default_peer_header.name))]
-    pub async fn reattach_secret(&self, document_id: &DocumentId) -> String {
-        let document = get_document(&self.documents, document_id).await.unwrap();
+    pub async fn reattach_secret(
+        &self,
+        document_id: &DocumentId,
+    ) -> Result<String, PeermergeError> {
+        let document = self.get_document(document_id).await?;
         let write_feed_signing_key = document.write_feed_signing_key().await;
-        encode_reattach_secret(
+        Ok(encode_reattach_secret(
             &self.peer_id,
             &signing_key_to_bytes(&write_feed_signing_key),
-        )
+        ))
     }
 
     #[instrument(skip(self), fields(peer_name = self.default_peer_header.name))]
     pub async fn close(&mut self) -> Result<(), PeermergeError> {
         for document_id in get_document_ids(&self.documents).await {
-            let mut document = get_document(&self.documents, &document_id).await.unwrap();
+            let mut document = self.get_document(&document_id).await?;
             document.close().await?;
         }
         Ok(())
+    }
+
+    // Private
+    async fn get_document(
+        &self,
+        document_id: &DocumentId,
+    ) -> Result<Document<T, U>, PeermergeError> {
+        get_document(&self.documents, document_id)
+            .await
+            .ok_or_else(|| PeermergeError::BadArgument {
+                context: format!("No document found with given document id: {document_id:02X?}"),
+            })
     }
 
     async fn add_document(&mut self, document: Document<T, U>) -> DocumentInfo {
@@ -273,7 +295,7 @@ where
 // Memory
 
 impl Peermerge<RandomAccessMemory, FeedMemoryPersistence> {
-    pub async fn new_memory(options: PeermergeMemoryOptions) -> Self {
+    pub async fn new_memory(options: PeermergeMemoryOptions) -> Result<Self, PeermergeError> {
         let document_settings = DocumentSettings {
             max_entry_data_size_bytes: options.max_entry_data_size_bytes,
             max_write_feed_length: options.max_write_feed_length,
@@ -283,7 +305,7 @@ impl Peermerge<RandomAccessMemory, FeedMemoryPersistence> {
             document_settings.clone(),
         )
         .await;
-        Self {
+        Ok(Self {
             peer_id: wrapper.state.peer_id,
             default_peer_header: options.default_peer_header,
             prefix: PathBuf::new(),
@@ -291,7 +313,7 @@ impl Peermerge<RandomAccessMemory, FeedMemoryPersistence> {
             documents: Arc::new(DashMap::new()),
             state_event_sender: Arc::new(Mutex::new(options.state_event_sender)),
             document_settings,
-        }
+        })
     }
 
     pub async fn create_new_document_memory<F, O>(
@@ -468,7 +490,7 @@ async fn on_feed_event_memory(
 
 #[cfg(not(target_arch = "wasm32"))]
 impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
-    pub async fn create_new_disk(options: PeermergeDiskOptions) -> Self {
+    pub async fn create_new_disk(options: PeermergeDiskOptions) -> Result<Self, PeermergeError> {
         let document_settings = DocumentSettings {
             max_entry_data_size_bytes: options.max_entry_data_size_bytes,
             max_write_feed_length: options.max_write_feed_length,
@@ -478,8 +500,8 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
             &options.data_root_dir,
             document_settings.clone(),
         )
-        .await;
-        Self {
+        .await?;
+        Ok(Self {
             peer_id: wrapper.state.peer_id,
             default_peer_header: options.default_peer_header,
             prefix: options.data_root_dir.clone(),
@@ -487,7 +509,7 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
             documents: Arc::new(DashMap::new()),
             state_event_sender: Arc::new(Mutex::new(options.state_event_sender)),
             document_settings,
-        }
+        })
     }
 
     pub async fn document_infos_disk(

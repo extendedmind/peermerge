@@ -61,12 +61,17 @@ impl PeermergeStateWrapper<RandomAccessDisk> {
         peer_header: &NameDescription,
         data_root_dir: &PathBuf,
         document_write_settings: DocumentSettings,
-    ) -> Self {
+    ) -> Result<Self, PeermergeError> {
         let state = PeermergeState::new(peer_header, vec![], document_write_settings);
         let state_path = get_peermerge_state_path(data_root_dir);
-        let mut storage = RandomAccessDisk::builder(state_path).build().await.unwrap();
+        let mut storage = RandomAccessDisk::builder(state_path.clone())
+            .build()
+            .await
+            .map_err(|err| PeermergeError::InvalidOperation {
+                context: format!("Could not create file to path {state_path:?}, {err}"),
+            })?;
         write_repo_state(&state, &mut storage).await;
-        Self { state, storage }
+        Ok(Self { state, storage })
     }
 
     pub(crate) async fn open_disk(data_root_dir: &PathBuf) -> Result<Option<Self>, PeermergeError> {

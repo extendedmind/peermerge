@@ -39,7 +39,8 @@ pub async fn setup_peermerge_mesh_memory(
                 .build()
                 .unwrap(),
         )
-        .await;
+        .await
+        .unwrap();
     let (doc_info, _) = peermerge_creator
         .create_new_document_memory(
             CreateNewDocumentMemoryOptionsBuilder::default()
@@ -55,10 +56,12 @@ pub async fn setup_peermerge_mesh_memory(
     let document_secret = peermerge_creator
         .document_secret(&doc_info.id())
         .await
+        .unwrap()
         .unwrap();
     peermerge_creator
         .watch(&doc_info.id(), Some(vec![ROOT]))
-        .await;
+        .await
+        .unwrap();
 
     let mut senders = Vec::with_capacity(peers);
     let doc_url = peermerge_creator
@@ -82,7 +85,8 @@ pub async fn setup_peermerge_mesh_memory(
                 .build()
                 .unwrap(),
         )
-        .await;
+        .await
+        .unwrap();
         let _doc_info = peermerge_peer
             .attach_document_memory(
                 AttachDocumentMemoryOptionsBuilder::default()
@@ -93,7 +97,10 @@ pub async fn setup_peermerge_mesh_memory(
             )
             .await
             .unwrap();
-        peermerge_peer.watch(&doc_info.id(), Some(vec![ROOT])).await;
+        peermerge_peer
+            .watch(&doc_info.id(), Some(vec![ROOT]))
+            .await
+            .unwrap();
 
         let peermerge_peer_for_task = peermerge_peer.clone();
         let task_span = tracing::debug_span!("call_connect").or_current();
@@ -147,7 +154,8 @@ pub async fn setup_peermerge_mesh_disk(
                 .build()
                 .unwrap(),
         )
-        .await;
+        .await
+        .unwrap();
     let (doc_info, _) = peermerge_creator
         .create_new_document_disk(
             CreateNewDocumentDiskOptionsBuilder::default()
@@ -163,10 +171,12 @@ pub async fn setup_peermerge_mesh_disk(
     let document_secret = peermerge_creator
         .document_secret(&doc_info.id())
         .await
+        .unwrap()
         .unwrap();
     peermerge_creator
         .watch(&doc_info.id(), Some(vec![ROOT]))
-        .await;
+        .await
+        .unwrap();
 
     let mut senders = Vec::with_capacity(peers);
     let doc_url = peermerge_creator
@@ -200,7 +210,8 @@ pub async fn setup_peermerge_mesh_disk(
                 .build()
                 .unwrap(),
         )
-        .await;
+        .await
+        .unwrap();
         let doc_info = peermerge_peer
             .attach_document_disk(
                 AttachDocumentDiskOptionsBuilder::default()
@@ -211,7 +222,10 @@ pub async fn setup_peermerge_mesh_disk(
             )
             .await
             .unwrap();
-        peermerge_peer.watch(&doc_info.id(), Some(vec![ROOT])).await;
+        peermerge_peer
+            .watch(&doc_info.id(), Some(vec![ROOT]))
+            .await
+            .unwrap();
 
         let peermerge_peer_for_task = peermerge_peer.clone();
         let task_span = tracing::debug_span!("call_connect").or_current();

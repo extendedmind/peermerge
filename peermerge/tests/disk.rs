@@ -56,7 +56,7 @@ async fn disk_two_peers(encrypted: bool) -> anyhow::Result<()> {
             .data_root_dir(creator_dir.clone())
             .build()?,
     )
-    .await;
+    .await?;
     let document_name = "disk_test";
     let (creator_doc_info, _) = peermerge_creator
         .create_new_document_disk(
@@ -74,7 +74,7 @@ async fn disk_two_peers(encrypted: bool) -> anyhow::Result<()> {
         .doc_url;
     let document_secret = peermerge_creator
         .document_secret(&creator_doc_info.id())
-        .await
+        .await?
         .unwrap();
     assert_eq!(
         get_document_info(&doc_url, Some(document_secret.clone()))
@@ -126,7 +126,7 @@ async fn disk_two_peers(encrypted: bool) -> anyhow::Result<()> {
             .data_root_dir(joiner_dir.clone())
             .build()?,
     )
-    .await;
+    .await?;
     let joiner_doc_info = peermerge_joiner
         .attach_document_disk(
             AttachDocumentDiskOptionsBuilder::default()
@@ -250,14 +250,14 @@ async fn run_disk_two_peers(
     ) = unbounded();
     peermerge_creator
         .set_state_event_sender(Some(creator_state_event_sender))
-        .await;
+        .await?;
     let (joiner_state_event_sender, joiner_state_event_receiver): (
         UnboundedSender<StateEvent>,
         UnboundedReceiver<StateEvent>,
     ) = unbounded();
     peermerge_joiner
         .set_state_event_sender(Some(joiner_state_event_sender))
-        .await;
+        .await?;
 
     let assert_sync_creator = init_condvar();
     let assert_sync_joiner = Arc::clone(&assert_sync_creator);
@@ -328,7 +328,7 @@ async fn process_joiner_state_event(
             } => {
                 let name = peermerge
                     .peer_header(&event.document_id, &peer_id)
-                    .await
+                    .await?
                     .unwrap()
                     .name;
                 assert_eq!(name, "creator");
@@ -384,7 +384,7 @@ async fn process_creator_state_events(
             } => {
                 let name = peermerge
                     .peer_header(&event.document_id, &peer_id)
-                    .await
+                    .await?
                     .unwrap()
                     .name;
 

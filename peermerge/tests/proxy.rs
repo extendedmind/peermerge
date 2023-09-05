@@ -40,7 +40,7 @@ async fn proxy_disk_encrypted() -> anyhow::Result<()> {
             .state_event_sender(creator_state_event_sender)
             .build()?,
     )
-    .await;
+    .await?;
     let creator_peer_id = peermerge_creator.peer_id();
     let (creator_doc_info, _) = peermerge_creator
         .create_new_document_memory(
@@ -54,7 +54,7 @@ async fn proxy_disk_encrypted() -> anyhow::Result<()> {
         .await?;
     peermerge_creator
         .watch(&creator_doc_info.id(), Some(vec![ROOT]))
-        .await;
+        .await?;
     let sharing_info = peermerge_creator
         .sharing_info(&creator_doc_info.id())
         .await?;
@@ -62,7 +62,7 @@ async fn proxy_disk_encrypted() -> anyhow::Result<()> {
     let proxy_doc_url = sharing_info.proxy_doc_url;
     let document_secret = peermerge_creator
         .document_secret(&creator_doc_info.id())
-        .await
+        .await?
         .unwrap();
     let document_info = get_document_info(&doc_url, Some(document_secret.clone()))?;
     assert_eq!(document_info.encrypted, Some(true));
@@ -89,7 +89,7 @@ async fn proxy_disk_encrypted() -> anyhow::Result<()> {
             .data_root_dir(proxy_dir.clone())
             .build()?,
     )
-    .await;
+    .await?;
     let proxy_peer_id = peermerge_proxy.peer_id();
     peermerge_proxy
         .attach_document_disk(
@@ -140,11 +140,11 @@ async fn proxy_disk_encrypted() -> anyhow::Result<()> {
             .state_event_sender(joiner_state_event_sender)
             .build()?,
     )
-    .await;
+    .await?;
     let joiner_peer_id = peermerge_joiner.peer_id();
     peermerge_proxy
         .set_state_event_sender(Some(proxy_state_event_sender))
-        .await;
+        .await?;
     let joiner_doc_info = peermerge_joiner
         .attach_document_memory(
             AttachDocumentMemoryOptionsBuilder::default()
@@ -156,7 +156,7 @@ async fn proxy_disk_encrypted() -> anyhow::Result<()> {
     let document_id = joiner_doc_info.id();
     let reattach_secrets: HashMap<DocumentId, String> = HashMap::from([(
         document_id,
-        peermerge_joiner.reattach_secret(&document_id).await,
+        peermerge_joiner.reattach_secret(&document_id).await?,
     )]);
     let mut peermerge_joiner_for_task = peermerge_joiner.clone();
     let joiner_connect = task::spawn(async move {
@@ -211,10 +211,10 @@ async fn proxy_disk_encrypted() -> anyhow::Result<()> {
             .state_event_sender(joiner_state_event_sender)
             .build()?,
     )
-    .await;
+    .await?;
     peermerge_proxy
         .set_state_event_sender(Some(proxy_state_event_sender))
-        .await;
+        .await?;
     let _joiner_doc_info = peermerge_joiner
         .attach_document_memory(
             AttachDocumentMemoryOptionsBuilder::default()
@@ -414,7 +414,7 @@ async fn process_joiner_state_events_initial(
             } => {
                 let name = peermerge
                     .peer_header(&event.document_id, &peer_id)
-                    .await
+                    .await?
                     .unwrap()
                     .name;
                 peer_syncs += 1;
@@ -499,7 +499,7 @@ async fn process_proxy_state_event_with_joiner_reopen(
                 }
             }
             _ => {
-                panic!("Unexpected event {:?}", event);
+                panic!("Unexpected event {event:?}");
             }
         }
     }
@@ -519,10 +519,7 @@ async fn process_joiner_state_events_reopen(
     let mut creator_and_joiner_synced = false;
     let mut document_initialized = false;
     while let Some(event) = joiner_state_event_receiver.next().await {
-        info!(
-            "Received event {:?}, document_changes {:?}",
-            event, document_changes
-        );
+        info!("Received event {event:?}, document_changes {document_changes:?}");
         match event.content {
             PeerSynced {
                 peer_id,

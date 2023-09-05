@@ -50,7 +50,7 @@ async fn memory_three_writers() -> anyhow::Result<()> {
             .state_event_sender(creator_state_event_sender)
             .build()?,
     )
-    .await;
+    .await?;
     let (creator_doc_info, _) = peermerge_creator
         .create_new_document_memory(
             CreateNewDocumentMemoryOptionsBuilder::default()
@@ -64,13 +64,13 @@ async fn memory_three_writers() -> anyhow::Result<()> {
     assert_eq!(
         peermerge_creator
             .peer_ids(&creator_doc_info.id())
-            .await
+            .await?
             .len(),
         1
     );
     let document_secret = peermerge_creator
         .document_secret(&creator_doc_info.id())
-        .await
+        .await?
         .unwrap();
 
     // Insert a map with a text field to the document
@@ -97,7 +97,7 @@ async fn memory_three_writers() -> anyhow::Result<()> {
             &creator_doc_info.id(),
             Some(vec![texts_id.clone(), text_id.clone()]),
         )
-        .await;
+        .await?;
 
     let peermerge_creator_for_task = peermerge_creator.clone();
     task::spawn(async move {
@@ -112,7 +112,7 @@ async fn memory_three_writers() -> anyhow::Result<()> {
             .state_event_sender(joiner_state_event_sender)
             .build()?,
     )
-    .await;
+    .await?;
     let document_url = peermerge_creator
         .sharing_info(&creator_doc_info.id())
         .await?
@@ -127,7 +127,7 @@ async fn memory_three_writers() -> anyhow::Result<()> {
         .await?;
     peermerge_joiner
         .watch(&creator_doc_info.id(), Some(vec![]))
-        .await;
+        .await?;
     let peermerge_joiner_for_task = peermerge_joiner.clone();
     task::spawn(async move {
         connect(peermerge_joiner_for_task, proto_initiator)
@@ -200,7 +200,7 @@ async fn process_joiner_state_event(
             } => {
                 let name = peermerge
                     .peer_header(&event.document_id, &peer_id)
-                    .await
+                    .await?
                     .unwrap()
                     .name;
                 if !peer_synced.contains_key("creator") {
@@ -219,7 +219,7 @@ async fn process_joiner_state_event(
                             &doc_id,
                             Some(vec![local_texts_id, text_id.clone().unwrap()]),
                         )
-                        .await;
+                        .await?;
 
                     // It's possible that this already contains "Hello" and the first DocumentChanged
                     // event will never come.
@@ -376,7 +376,7 @@ async fn process_creator_state_events(
             } => {
                 let name = peermerge
                     .peer_header(&event.document_id, &peer_id)
-                    .await
+                    .await?
                     .unwrap()
                     .name;
                 peer_synced.insert(name.clone(), contiguous_length);
@@ -478,7 +478,7 @@ async fn process_creator_state_events(
                                 assert!(merge_result.merge_equals());
                             }
                         }
-                        let document_secret = peermerge.document_secret(&doc_id).await.unwrap();
+                        let document_secret = peermerge.document_secret(&doc_id).await?.unwrap();
 
                         // Now let's join in a latecomer peer to the creator peer
                         latecomer_attached = true;
@@ -494,7 +494,7 @@ async fn process_creator_state_events(
                                 .state_event_sender(latecomer_state_event_sender)
                                 .build()?,
                         )
-                        .await;
+                        .await?;
                         let document_url = peermerge.sharing_info(&doc_id).await?.doc_url;
                         let latecomer_doc_info = peermerge_latecomer
                             .attach_document_memory(
@@ -504,7 +504,7 @@ async fn process_creator_state_events(
                                     .build()?,
                             )
                             .await?;
-                        peermerge_latecomer.watch(&doc_id, Some(vec![])).await;
+                        peermerge_latecomer.watch(&doc_id, Some(vec![])).await?;
                         let peermerge_latecomer_for_task = peermerge_latecomer.clone();
                         let peermerge_creator_for_task = peermerge.clone();
                         task::spawn(async move {
@@ -589,7 +589,7 @@ async fn process_latecomer_state_event(
             } => {
                 let name = peermerge
                     .peer_header(&event.document_id, &peer_id)
-                    .await
+                    .await?
                     .unwrap()
                     .name;
                 assert!(name == "creator" || name == "joiner");
@@ -620,7 +620,7 @@ async fn process_latecomer_state_event(
                             &doc_id,
                             Some(vec![local_texts_id, text_id.clone().unwrap()]),
                         )
-                        .await;
+                        .await?;
                     // Make one final change and see that it propagates through to the creator
                     peermerge
                         .transact_mut(

@@ -43,7 +43,7 @@ async fn tcp_proxy_disk_encrypted() -> anyhow::Result<()> {
             .data_root_dir(creator_dir.clone())
             .build()?,
     )
-    .await;
+    .await?;
     let (creator_doc_info, _) = peermerge_creator
         .create_new_document_disk(
             CreateNewDocumentDiskOptionsBuilder::default()
@@ -57,14 +57,14 @@ async fn tcp_proxy_disk_encrypted() -> anyhow::Result<()> {
 
     peermerge_creator
         .watch(&creator_doc_info.id(), Some(vec![ROOT]))
-        .await;
+        .await?;
     let doc_url = peermerge_creator
         .sharing_info(&creator_doc_info.id())
         .await?
         .doc_url;
     let document_secret = peermerge_creator
         .document_secret(&creator_doc_info.id())
-        .await
+        .await?
         .unwrap();
     assert_eq!(
         get_document_info(&doc_url, Some(document_secret.clone()))?.encrypted,
@@ -83,7 +83,7 @@ async fn tcp_proxy_disk_encrypted() -> anyhow::Result<()> {
             .data_root_dir(proxy_dir.clone())
             .build()?,
     )
-    .await;
+    .await?;
     let peermerge_proxy_for_task = peermerge_proxy.clone();
     task::spawn(async move {
         connect_tcp_server_disk(peermerge_proxy_for_task, host, port)
