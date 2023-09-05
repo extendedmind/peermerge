@@ -2,9 +2,8 @@ use dashmap::DashMap;
 use std::sync::Arc;
 
 use crate::common::utils::{Mutex, YieldNow};
-use crate::feed::{Feed, FeedPersistence};
 
-use super::FeedDiscoveryKey;
+use super::{Feed, FeedDiscoveryKey, FeedPersistence};
 
 pub(crate) async fn get_feed<T>(
     feeds: &Arc<DashMap<[u8; 32], Arc<Mutex<Feed<T>>>>>,

@@ -22,7 +22,7 @@ use crate::{
         FeedEvent,
         FeedEventContent::*,
     },
-    feed::FeedDiscoveryKey,
+    feeds::FeedDiscoveryKey,
     PeerId, PeermergeError,
 };
 

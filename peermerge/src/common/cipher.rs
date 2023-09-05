@@ -10,7 +10,7 @@ use uuid::Uuid;
 
 use crate::{
     common::keys::{discovery_key_from_public_key, document_id_from_discovery_key},
-    feed::{FeedDiscoveryKey, FeedPublicKey},
+    feeds::{FeedDiscoveryKey, FeedPublicKey},
     DocumentId, DocumentInfo, FeedType, NameDescription, PeerId, PeermergeError,
     StaticDocumentInfo,
 };

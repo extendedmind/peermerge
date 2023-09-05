@@ -1,17 +1,17 @@
 use std::fmt::Debug;
 
-use automerge::transaction::Transactable;
 use futures::channel::mpsc::{
     channel, unbounded, Receiver, Sender, UnboundedReceiver, UnboundedSender,
 };
 use futures::stream::StreamExt;
 use hypercore_protocol::{Duplex, Protocol, ProtocolBuilder};
 use peermerge::{
+    automerge::{transaction::Transactable, ROOT},
     AttachDocumentDiskOptionsBuilder, AttachDocumentMemoryOptionsBuilder,
     CreateNewDocumentDiskOptionsBuilder, CreateNewDocumentMemoryOptionsBuilder, DocumentId,
     FeedDiskPersistence, FeedMemoryPersistence, FeedPersistence, NameDescription, Peermerge,
     PeermergeDiskOptionsBuilder, PeermergeMemoryOptionsBuilder, RandomAccess, StateEvent,
-    StateEventContent::*, ROOT,
+    StateEventContent::*,
 };
 use random_access_disk::RandomAccessDisk;
 use random_access_memory::RandomAccessMemory;

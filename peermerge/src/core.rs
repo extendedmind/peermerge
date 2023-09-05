@@ -22,7 +22,6 @@ use tokio::task;
 use wasm_bindgen_futures::spawn_local;
 
 use crate::{
-    automerge::AutomergeDoc,
     common::{
         cipher::{
             decode_doc_url, decode_document_secret, decode_reattach_secret, encode_document_id,
@@ -34,21 +33,21 @@ use crate::{
         FeedEventContent,
     },
     document::{get_document_by_discovery_key, DocumentSettings},
-    feed::{FeedMemoryPersistence, FeedPersistence, Protocol},
+    feeds::{FeedMemoryPersistence, FeedPersistence, Protocol},
     options::PeermergeMemoryOptions,
-    AttachDocumentMemoryOptions, CreateNewDocumentMemoryOptions, DocumentSharingInfo, PeerId,
-    PeermergeError, StateEventContent,
+    AttachDocumentMemoryOptions, AutomergeDoc, CreateNewDocumentMemoryOptions, DocumentSharingInfo,
+    PeerId, PeermergeError, StateEventContent,
 };
 use crate::{
     common::{DocumentInfo, FeedEvent},
     document::{get_document, get_document_ids},
-    feed::on_protocol,
+    feeds::on_protocol,
     DocumentId, NameDescription, IO,
 };
 use crate::{document::Document, StateEvent};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::{
-    feed::FeedDiskPersistence,
+    feeds::FeedDiskPersistence,
     options::{AttachDocumentDiskOptions, CreateNewDocumentDiskOptions, PeermergeDiskOptions},
 };
 

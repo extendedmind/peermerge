@@ -1,8 +1,8 @@
-mod automerge;
+mod autocommit;
 mod common;
 mod core;
 mod document;
-mod feed;
+mod feeds;
 mod options;
 
 #[macro_use]
@@ -16,7 +16,7 @@ pub trait IO: AsyncWrite + AsyncRead + Send + Unpin + 'static {}
 impl<T> IO for T where T: AsyncWrite + AsyncRead + Send + Unpin + 'static {}
 
 // Crate exports
-pub use crate::automerge::AutomergeDoc;
+pub use crate::autocommit::AutomergeDoc;
 pub use crate::common::{
     decode_base64_nopad, encode_base64_nopad, get_document_info, new_uuid_v4, AccessType,
     DocumentInfo, DocumentSharingInfo, DynamicDocumentInfo, FeedType, NameDescription,
@@ -24,13 +24,13 @@ pub use crate::common::{
 };
 pub use crate::core::Peermerge;
 #[cfg(not(target_arch = "wasm32"))]
-pub use feed::FeedDiskPersistence;
-pub use feed::{FeedMemoryPersistence, FeedPersistence};
-pub use feed::{Protocol, ProtocolBuilder};
+pub use feeds::FeedDiskPersistence;
+pub use feeds::{FeedMemoryPersistence, FeedPersistence};
+pub use feeds::{Protocol, ProtocolBuilder};
 pub use options::*;
 
 // Related crates' re-exports
-pub use ::automerge::*; // TODO: Enumerate what's actually needed
+pub use automerge;
 #[cfg(not(target_arch = "wasm32"))]
 pub use random_access_disk::RandomAccessDisk;
 pub use random_access_memory::RandomAccessMemory;

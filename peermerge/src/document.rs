@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::{fmt::Debug, path::PathBuf};
 use tracing::{debug, enabled, instrument, warn, Level};
 
-use crate::automerge::{
+use crate::autocommit::{
     apply_entries_autocommit, apply_unapplied_entries_autocommit,
     bootstrap_automerge_user_doc_from_entries, init_automerge_doc_from_data, init_automerge_docs,
     init_first_peer, init_peer, save_automerge_doc, transact_autocommit, transact_mut_autocommit,
@@ -32,14 +32,14 @@ use crate::common::state::{
 };
 use crate::common::utils::{Mutex, YieldNow};
 use crate::common::{AccessType, DocumentInfo, StateEventContent::*};
-use crate::feed::FeedDiscoveryKey;
+use crate::feeds::FeedDiscoveryKey;
 #[cfg(not(target_arch = "wasm32"))]
-use crate::feed::{create_new_read_disk_feed, create_new_write_disk_feed, open_disk_feed};
+use crate::feeds::{create_new_read_disk_feed, create_new_write_disk_feed, open_disk_feed};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::FeedDiskPersistence;
 use crate::{
     common::{state::DocumentContent, storage::DocStateWrapper},
-    feed::{
+    feeds::{
         create_new_read_memory_feed, create_new_write_memory_feed, get_feed,
         get_feed_discovery_keys, Feed,
     },

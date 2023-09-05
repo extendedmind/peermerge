@@ -1,5 +1,8 @@
 use hypercore_protocol::{Duplex, Protocol, ProtocolBuilder};
-use peermerge::{AutomergeDoc, AutomergeError, ObjId, Prop, ReadDoc, ScalarValue, Value};
+use peermerge::{
+    automerge::{AutomergeError, ObjId, Prop, ReadDoc, ScalarValue, Value},
+    AutomergeDoc,
+};
 use std::sync::Arc;
 
 #[cfg(feature = "async-std")]

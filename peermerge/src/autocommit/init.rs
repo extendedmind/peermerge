@@ -12,7 +12,7 @@ use crate::{
     common::entry::{Entry, EntryContent, ShrunkEntries},
     common::{constants::PEERMERGE_VERSION, entry::split_datas_into_entries},
     encode_base64_nopad,
-    feed::FeedDiscoveryKey,
+    feeds::FeedDiscoveryKey,
     DocumentId, NameDescription, PeerId, PeermergeError,
 };
 

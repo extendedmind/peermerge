@@ -7,7 +7,7 @@ use hypercore_protocol::{
 
 use crate::{
     common::state::{ChildDocumentInfo, DocumentFeedInfo, DocumentFeedsState},
-    feed::FeedDiscoveryKey,
+    feeds::FeedDiscoveryKey,
     PeerId,
 };
 

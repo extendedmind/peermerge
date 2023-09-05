@@ -1,11 +1,11 @@
-use automerge::transaction::Transactable;
-use automerge::{ObjId, ROOT};
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use futures::stream::StreamExt;
 use peermerge::{
+    automerge::{transaction::Transactable, ObjId, Patch, ROOT},
     AttachDocumentMemoryOptionsBuilder, CreateNewDocumentMemoryOptionsBuilder, DocumentId,
-    FeedMemoryPersistence, NameDescription, Patch, PeerId, Peermerge,
-    PeermergeMemoryOptionsBuilder, StateEvent, StateEventContent::*,
+    FeedMemoryPersistence, NameDescription, PeerId, Peermerge, PeermergeMemoryOptionsBuilder,
+    StateEvent,
+    StateEventContent::*,
 };
 use random_access_memory::RandomAccessMemory;
 use std::collections::HashMap;

@@ -7,7 +7,7 @@ pub(crate) use crate::common::entry::Entry;
 pub(crate) use crate::common::message::BroadcastMessage;
 pub(crate) use crate::common::state::{DocumentState, PeermergeState};
 use crate::document::DocumentSettings;
-use crate::feed::FeedPublicKey;
+use crate::feeds::FeedPublicKey;
 
 use super::cipher::{DocUrlAppendix, DocumentSecret};
 use super::constants::PEERMERGE_VERSION;

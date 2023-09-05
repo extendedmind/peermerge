@@ -7,10 +7,10 @@ use random_access_storage::RandomAccess;
 use std::{fmt::Debug, path::PathBuf};
 
 use crate::{
-    automerge::{AutomergeDoc, DocsChangeResult, UnappliedEntries},
+    autocommit::{AutomergeDoc, DocsChangeResult, UnappliedEntries},
     common::state::{DocumentState, PeermergeState},
     document::DocumentSettings,
-    feed::FeedDiscoveryKey,
+    feeds::FeedDiscoveryKey,
     DocumentId, NameDescription, PeerId, PeermergeError,
 };
 

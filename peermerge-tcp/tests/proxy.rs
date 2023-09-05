@@ -2,16 +2,13 @@ use std::collections::HashMap;
 
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use futures::stream::StreamExt;
-use peermerge::transaction::Transactable;
 use peermerge::{
+    automerge::{transaction::Transactable, Patch, ROOT},
     get_document_info, AttachDocumentDiskOptionsBuilder, CreateNewDocumentDiskOptionsBuilder,
-    DocumentId,
+    DocumentId, FeedDiskPersistence, NameDescription, Peermerge, PeermergeDiskOptionsBuilder,
+    RandomAccessDisk, StateEvent,
+    StateEventContent::*,
 };
-use peermerge::{
-    FeedDiskPersistence, Peermerge, RandomAccessDisk, StateEvent, StateEventContent::*,
-};
-use peermerge::{NameDescription, Patch};
-use peermerge::{PeermergeDiskOptionsBuilder, ROOT};
 use peermerge_tcp::{connect_tcp_client_disk, connect_tcp_server_disk};
 use tempfile::Builder;
 use test_log::test;

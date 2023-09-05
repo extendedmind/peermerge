@@ -1,12 +1,13 @@
-use automerge::{transaction::Transactable, ROOT};
 use futures::{
     channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender},
     stream::StreamExt,
 };
 use peermerge::{
+    automerge::{transaction::Transactable, Patch, ROOT},
     get_document_info, AttachDocumentDiskOptionsBuilder, CreateNewDocumentDiskOptionsBuilder,
-    DocumentId, FeedDiskPersistence, NameDescription, Patch, Peermerge,
-    PeermergeDiskOptionsBuilder, StateEvent, StateEventContent::*,
+    DocumentId, FeedDiskPersistence, NameDescription, Peermerge, PeermergeDiskOptionsBuilder,
+    StateEvent,
+    StateEventContent::*,
 };
 use random_access_disk::RandomAccessDisk;
 use std::{collections::HashMap, sync::Arc};

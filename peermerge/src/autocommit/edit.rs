@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use super::AutomergeDoc;
 use crate::{
     common::entry::{split_change_into_entries, Entry, EntryContent, ShrunkEntries},
-    feed::FeedDiscoveryKey,
+    feeds::FeedDiscoveryKey,
     PeermergeError,
 };
 
@@ -364,7 +364,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        automerge::{init_automerge_doc_from_data, init_automerge_docs},
+        autocommit::{init_automerge_doc_from_data, init_automerge_docs},
         common::{
             constants::DEFAULT_MAX_ENTRY_DATA_SIZE_BYTES, entry::shrink_entries,
             keys::generate_keys,

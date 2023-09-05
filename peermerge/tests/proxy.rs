@@ -1,15 +1,14 @@
 use std::collections::HashMap;
 
-use automerge::transaction::Transactable;
-use automerge::ROOT;
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use futures::future::join_all;
 use futures::stream::StreamExt;
 use peermerge::{
+    automerge::{transaction::Transactable, Patch, ROOT},
     get_document_info, AttachDocumentDiskOptionsBuilder, AttachDocumentMemoryOptionsBuilder,
     CreateNewDocumentMemoryOptionsBuilder, DocumentId, FeedMemoryPersistence, NameDescription,
-    Patch, PeerId, Peermerge, PeermergeDiskOptionsBuilder, PeermergeMemoryOptionsBuilder,
-    StateEvent, StateEventContent::*,
+    PeerId, Peermerge, PeermergeDiskOptionsBuilder, PeermergeMemoryOptionsBuilder, StateEvent,
+    StateEventContent::*,
 };
 use random_access_memory::RandomAccessMemory;
 use tempfile::Builder;

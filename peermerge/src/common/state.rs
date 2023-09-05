@@ -9,12 +9,12 @@ use tracing::warn;
 use uuid::Uuid;
 
 use crate::{
-    automerge::{
+    autocommit::{
         read_document_type_and_header, read_peer_header, save_automerge_doc, AutomergeDoc,
         DocsChangeResult,
     },
     document::DocumentSettings,
-    feed::{FeedDiscoveryKey, FeedPublicKey},
+    feeds::{FeedDiscoveryKey, FeedPublicKey},
     AccessType, DocumentId, DocumentInfo, DynamicDocumentInfo, NameDescription, PeerId,
     PeermergeError, StaticDocumentInfo,
 };
