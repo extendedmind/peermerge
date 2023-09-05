@@ -81,6 +81,30 @@ async fn disk_two_peers(encrypted: bool) -> anyhow::Result<()> {
             .encrypted,
         Some(encrypted)
     );
+    peermerge_creator.close().await?;
+
+    // Reopen immediately after create
+
+    let creator_document_infos = Peermerge::document_infos_disk(&creator_dir).await?.unwrap();
+    assert_eq!(creator_document_infos.len(), 1);
+    assert_eq!(creator_document_infos[0].encrypted, Some(encrypted));
+    assert_eq!(
+        creator_document_infos[0]
+            .dynamic_info
+            .clone()
+            .unwrap()
+            .document_header
+            .unwrap()
+            .name,
+        document_name
+    );
+    assert_eq!(creator_document_infos[0].id(), creator_doc_info.id());
+    let mut creator_document_secrets = HashMap::new();
+    creator_document_secrets.insert(creator_doc_info.id(), document_secret.clone());
+    let peermerge_creator =
+        Peermerge::open_disk(creator_document_secrets, &creator_dir, None).await?;
+
+    // Create joinder
 
     let joiner_dir = Builder::new()
         .prefix(&format!(
@@ -126,6 +150,8 @@ async fn disk_two_peers(encrypted: bool) -> anyhow::Result<()> {
         document_name
     );
 
+    // Run synchronize and creation of value
+
     run_disk_two_peers(
         peermerge_creator,
         creator_doc_info.id(),
@@ -137,6 +163,7 @@ async fn disk_two_peers(encrypted: bool) -> anyhow::Result<()> {
     .await?;
 
     // Reopen the disk peermerges from disk, assert that opening works with new scalar
+
     let creator_document_infos = Peermerge::document_infos_disk(&creator_dir).await?.unwrap();
     assert_eq!(creator_document_infos.len(), 1);
     assert_eq!(creator_document_infos[0].encrypted, Some(encrypted));

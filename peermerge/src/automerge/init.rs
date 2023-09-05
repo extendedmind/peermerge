@@ -19,7 +19,6 @@ use crate::{
 pub(crate) struct InitAutomergeDocsResult {
     pub(crate) meta_automerge_doc: AutomergeDoc,
     pub(crate) user_automerge_doc: AutomergeDoc,
-    pub(crate) meta_doc_data: Vec<u8>,
     pub(crate) user_doc_data: Vec<u8>,
 }
 
@@ -58,7 +57,6 @@ where
         InitAutomergeDocsResult {
             meta_automerge_doc,
             user_automerge_doc,
-            meta_doc_data,
             user_doc_data,
         },
         result,

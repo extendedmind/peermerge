@@ -16,7 +16,7 @@ use tracing::{debug, enabled, instrument, warn, Level};
 use crate::automerge::{
     apply_entries_autocommit, apply_unapplied_entries_autocommit,
     bootstrap_automerge_user_doc_from_entries, init_automerge_doc_from_data, init_automerge_docs,
-    init_first_peer, init_peer, transact_autocommit, transact_mut_autocommit,
+    init_first_peer, init_peer, save_automerge_doc, transact_autocommit, transact_mut_autocommit,
     ApplyEntriesFeedChange, AutomergeDoc, DocsChangeResult, UnappliedEntries,
 };
 use crate::common::cipher::{
@@ -1873,6 +1873,7 @@ where
         max_entry_data_size_bytes,
     )?;
     let write_feed_init_data: Vec<Vec<u8>> = serialize_init_entries(write_feed_init_entries)?;
+    let meta_doc_data: Vec<u8> = save_automerge_doc(&mut create_result.meta_automerge_doc);
 
     // Initialize document state
     let content = DocumentContent::new(
@@ -1881,7 +1882,7 @@ where
         doc_feed_init_data.len(),
         &write_discovery_key,
         write_feed_init_data.len(),
-        create_result.meta_doc_data,
+        meta_doc_data,
         Some(create_result.user_doc_data),
         create_result.meta_automerge_doc,
         Some(create_result.user_automerge_doc),
