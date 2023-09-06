@@ -99,6 +99,17 @@ pub(crate) struct DocumentSettings {
     pub(crate) max_write_feed_length: u64,
 }
 
+#[derive(Debug)]
+pub(crate) struct CreateNewDocumentResult<T, U>
+where
+    T: RandomAccess + Debug + Send,
+    U: FeedPersistence,
+{
+    pub(crate) document: Document<T, U>,
+    pub(crate) state_events: Vec<StateEvent>,
+    pub(crate) child_document_info: Option<ChildDocumentInfo>,
+}
+
 impl<T, U> Document<T, U>
 where
     T: RandomAccess + Debug + Send + 'static,
@@ -750,7 +761,13 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
         encrypted: bool,
         settings: DocumentSettings,
         init_cb: F,
-    ) -> Result<(Self, O, Vec<StateEvent>), PeermergeError>
+    ) -> Result<
+        (
+            CreateNewDocumentResult<RandomAccessMemory, FeedMemoryPersistence>,
+            O,
+        ),
+        PeermergeError,
+    >
     where
         F: FnOnce(&mut Transaction) -> Result<O, AutomergeError>,
     {
@@ -799,23 +816,26 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
             )
             .await?;
         Ok((
-            Self::new_memory(
-                peer_id,
-                (prepare_result.doc_discovery_key, doc_feed),
-                PartialKeypair {
-                    public: prepare_result.doc_signature_verifying_key,
-                    secret: Some(prepare_result.doc_signature_signing_key),
-                },
-                Some((prepare_result.write_discovery_key, write_feed)),
-                prepare_result.state,
-                encrypted,
-                doc_encryption_key,
-                None,
-                settings,
-            )
-            .await,
+            CreateNewDocumentResult {
+                document: Self::new_memory(
+                    peer_id,
+                    (prepare_result.doc_discovery_key, doc_feed),
+                    PartialKeypair {
+                        public: prepare_result.doc_signature_verifying_key,
+                        secret: Some(prepare_result.doc_signature_signing_key),
+                    },
+                    Some((prepare_result.write_discovery_key, write_feed)),
+                    prepare_result.state,
+                    encrypted,
+                    doc_encryption_key,
+                    None,
+                    settings,
+                )
+                .await,
+                state_events: prepare_result.state_events,
+                child_document_info: None,
+            },
             init_result,
-            prepare_result.state_events,
         ))
     }
 
@@ -1145,7 +1165,13 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
         settings: DocumentSettings,
         init_cb: F,
         data_root_dir: &PathBuf,
-    ) -> Result<(Self, O, Vec<StateEvent>), PeermergeError>
+    ) -> Result<
+        (
+            CreateNewDocumentResult<RandomAccessDisk, FeedDiskPersistence>,
+            O,
+        ),
+        PeermergeError,
+    >
     where
         F: FnOnce(&mut Transaction) -> Result<O, AutomergeError>,
     {
@@ -1203,23 +1229,26 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
             .await?;
 
         Ok((
-            Self::new_disk(
-                peer_id,
-                (prepare_result.doc_discovery_key, doc_feed),
-                PartialKeypair {
-                    public: prepare_result.doc_signature_verifying_key,
-                    secret: Some(prepare_result.doc_signature_signing_key),
-                },
-                Some((prepare_result.write_discovery_key, write_feed)),
-                prepare_result.state,
-                encrypted,
-                doc_encryption_key,
-                &data_root_dir,
-                settings,
-            )
-            .await,
+            CreateNewDocumentResult {
+                document: Self::new_disk(
+                    peer_id,
+                    (prepare_result.doc_discovery_key, doc_feed),
+                    PartialKeypair {
+                        public: prepare_result.doc_signature_verifying_key,
+                        secret: Some(prepare_result.doc_signature_signing_key),
+                    },
+                    Some((prepare_result.write_discovery_key, write_feed)),
+                    prepare_result.state,
+                    encrypted,
+                    doc_encryption_key,
+                    &data_root_dir,
+                    settings,
+                )
+                .await,
+                state_events: prepare_result.state_events,
+                child_document_info: None,
+            },
             init_result,
-            prepare_result.state_events,
         ))
     }
 

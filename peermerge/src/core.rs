@@ -324,7 +324,7 @@ impl Peermerge<RandomAccessMemory, FeedMemoryPersistence> {
     where
         F: FnOnce(&mut Transaction) -> Result<O, AutomergeError>,
     {
-        let (document, init_result, state_events) = Document::create_new_memory(
+        let (create_result, init_result) = Document::create_new_memory(
             self.peer_id,
             &self.default_peer_header,
             &options.document_type,
@@ -335,9 +335,12 @@ impl Peermerge<RandomAccessMemory, FeedMemoryPersistence> {
         )
         .await?;
         if let Some(state_event_sender) = self.state_event_sender.lock().await.as_mut() {
-            send_state_events(state_event_sender, state_events);
+            send_state_events(state_event_sender, create_result.state_events);
         }
-        Ok((self.add_document(document).await, init_result))
+        if let Some(_child_document_info) = create_result.child_document_info {
+            unimplemented!();
+        }
+        Ok((self.add_document(create_result.document).await, init_result))
     }
 
     pub async fn attach_document_memory(
@@ -583,7 +586,7 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
     where
         F: FnOnce(&mut Transaction) -> Result<O, AutomergeError>,
     {
-        let (document, init_result, state_events) = Document::create_new_disk(
+        let (create_result, init_result) = Document::create_new_disk(
             self.peer_id,
             &self.default_peer_header,
             &options.document_type,
@@ -595,9 +598,9 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
         )
         .await?;
         if let Some(state_event_sender) = self.state_event_sender.lock().await.as_mut() {
-            send_state_events(state_event_sender, state_events);
+            send_state_events(state_event_sender, create_result.state_events);
         }
-        Ok((self.add_document(document).await, init_result))
+        Ok((self.add_document(create_result.document).await, init_result))
     }
 
     pub async fn attach_document_disk(
