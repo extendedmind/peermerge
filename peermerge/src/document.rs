@@ -233,6 +233,23 @@ where
         state.feeds_state.peer_id(discovery_key)
     }
 
+    pub(crate) async fn add_child_document(
+        &self,
+        child_document_info: ChildDocumentInfo,
+        child_document_secret: DocumentSecret,
+    ) {
+        let mut state = self.document_state.lock().await;
+        state
+            .add_child_document(child_document_info, child_document_secret)
+            .await
+    }
+
+    pub(crate) async fn document_header(&self) -> Option<NameDescription> {
+        let mut state = self.document_state.lock().await;
+        let state = state.state_mut();
+        state.document_type_and_header().and_then(|value| value.1)
+    }
+
     #[instrument(skip_all, fields(ctx = self.log_context))]
     pub(crate) async fn watch(&mut self, ids: Option<Vec<ObjId>>) {
         if self.access_type == AccessType::Proxy {
@@ -763,7 +780,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
         document_type: &str,
         document_header: Option<NameDescription>,
         encrypted: bool,
-        parent_doc_signature_signing_key: Option<SigningKey>,
+        parent_id_signing_key_and_header: Option<(DocumentId, SigningKey, NameDescription)>,
         settings: DocumentSettings,
         init_cb: F,
     ) -> Result<
@@ -782,7 +799,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
             document_type,
             &document_header,
             encrypted,
-            parent_doc_signature_signing_key,
+            parent_id_signing_key_and_header,
             settings.max_entry_data_size_bytes,
             init_cb,
         )
@@ -1168,7 +1185,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
         document_type: &str,
         document_header: Option<NameDescription>,
         encrypted: bool,
-        parent_doc_signature_signing_key: Option<SigningKey>,
+        parent_id_signing_key_and_header: Option<(DocumentId, SigningKey, NameDescription)>,
         settings: DocumentSettings,
         init_cb: F,
         data_root_dir: &PathBuf,
@@ -1188,7 +1205,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
             document_type,
             &document_header,
             encrypted,
-            parent_doc_signature_signing_key,
+            parent_id_signing_key_and_header,
             settings.max_entry_data_size_bytes,
             init_cb,
         )
@@ -1852,7 +1869,7 @@ async fn prepare_create<F, O>(
     document_type: &str,
     document_header: &Option<NameDescription>,
     encrypted: bool,
-    parent_doc_signature_signing_key: Option<SigningKey>,
+    parent_id_signing_key_and_header: Option<(DocumentId, SigningKey, NameDescription)>,
     max_entry_data_size_bytes: usize,
     init_cb: F,
 ) -> Result<(PrepareCreateResult, O), PeermergeError>
@@ -1872,21 +1889,28 @@ where
     let doc_signature_verifying_key = doc_signature_signing_key.verifying_key();
 
     // If this is a child document, create the child document info
-    let child_document_info: Option<ChildDocumentInfo> =
-        if let Some(parent_doc_signature_signing_key) = &parent_doc_signature_signing_key {
-            let mut buffer: Vec<u8> = doc_public_key.to_vec();
-            buffer.extend(doc_signature_verifying_key.to_bytes());
-            let signature: Vec<u8> =
-                create_signature(&mut buffer, parent_doc_signature_signing_key).to_vec();
+    let (child_document_info, parent_id_and_header): (
+        Option<ChildDocumentInfo>,
+        Option<(DocumentId, NameDescription)>,
+    ) = if let Some((parent_id, parent_doc_signature_signing_key, parent_header)) =
+        parent_id_signing_key_and_header
+    {
+        let mut buffer: Vec<u8> = doc_public_key.to_vec();
+        buffer.extend(doc_signature_verifying_key.to_bytes());
+        let signature: Vec<u8> =
+            create_signature(&mut buffer, &parent_doc_signature_signing_key).to_vec();
+        (
             Some(ChildDocumentInfo {
                 doc_public_key,
                 doc_signature_verifying_key,
                 signature,
                 creation_pending: false,
-            })
-        } else {
-            None
-        };
+            }),
+            Some((parent_id, parent_header)),
+        )
+    } else {
+        (None, None)
+    };
 
     // Generate a writeable feed key pair, its discovery key and the public key string
     let (write_key_pair, write_discovery_key) = generate_keys();
@@ -1905,7 +1929,7 @@ where
     let (mut create_result, init_result, doc_feed_init_entries) = init_automerge_docs(
         document_id,
         peer_id,
-        false,
+        parent_id_and_header.is_some(),
         max_entry_data_size_bytes,
         init_cb,
     )
@@ -1926,6 +1950,7 @@ where
         peer_header,
         document_type,
         document_header,
+        parent_id_and_header,
         max_entry_data_size_bytes,
     )?;
     let write_feed_init_data: Vec<Vec<u8>> = serialize_init_entries(write_feed_init_entries)?;

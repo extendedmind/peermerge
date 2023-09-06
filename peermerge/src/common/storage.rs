@@ -8,16 +8,18 @@ use std::{fmt::Debug, path::PathBuf};
 
 use crate::{
     common::state::{DocumentState, PeermergeState},
-    crdt::{AutomergeDoc, DocsChangeResult, UnappliedEntries},
+    crdt::{add_child_document, AutomergeDoc, DocsChangeResult, UnappliedEntries},
     document::DocumentSettings,
     feeds::FeedDiscoveryKey,
     DocumentId, NameDescription, PeerId, PeermergeError,
 };
 
 use super::{
-    keys::discovery_key_from_public_key,
+    cipher::{encode_document_secret_to_bytes, DocumentSecret},
+    keys::{discovery_key_from_public_key, document_id_from_discovery_key},
     state::{
-        ChangeDocumentFeedsStateResult, DocumentContent, DocumentFeedInfo, DocumentFeedsState,
+        ChangeDocumentFeedsStateResult, ChildDocumentInfo, DocumentContent, DocumentFeedInfo,
+        DocumentFeedsState,
     },
 };
 #[derive(Debug)]
@@ -194,6 +196,36 @@ where
 
     pub(crate) fn state_mut(&mut self) -> &mut DocumentState {
         &mut self.state
+    }
+
+    pub(crate) async fn add_child_document(
+        &mut self,
+        child_document_info: ChildDocumentInfo,
+        child_document_secret: DocumentSecret,
+    ) {
+        if let Some(content) = self.state.content.as_mut() {
+            if let Some(meta_automerge_doc) = content.meta_automerge_doc.as_mut() {
+                let child_document_secret: Vec<u8> =
+                    encode_document_secret_to_bytes(&child_document_secret).to_vec();
+                let child_document_discovery_key =
+                    discovery_key_from_public_key(&child_document_info.doc_public_key);
+                let child_document_id =
+                    document_id_from_discovery_key(&child_document_discovery_key);
+                let meta_doc_data = add_child_document(
+                    meta_automerge_doc,
+                    child_document_id,
+                    child_document_secret,
+                )
+                .unwrap();
+                content.meta_doc_data = meta_doc_data;
+            } else {
+                panic!("Can not add a child to a document without an initialized meta doc");
+            }
+        } else {
+            panic!("Can not add a child to a document without content");
+        }
+        self.state.child_documents.push(child_document_info);
+        write_document_state(&self.state, &mut self.storage).await;
     }
 
     pub(crate) fn user_automerge_doc(&self) -> Option<&AutomergeDoc> {

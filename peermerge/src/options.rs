@@ -38,6 +38,8 @@ pub struct CreateNewDocumentMemoryOptions {
     pub document_header: Option<NameDescription>,
     #[builder(setter(into, strip_option), default)]
     pub parent_id: Option<DocumentId>,
+    #[builder(setter(into, strip_option), default)]
+    pub parent_header: Option<NameDescription>,
     #[builder(default = "true")]
     pub encrypted: bool,
 }
@@ -50,6 +52,8 @@ pub struct CreateNewDocumentDiskOptions {
     pub document_header: Option<NameDescription>,
     #[builder(setter(into, strip_option), default)]
     pub parent_id: Option<DocumentId>,
+    #[builder(setter(into, strip_option), default)]
+    pub parent_header: Option<NameDescription>,
     #[builder(default = "true")]
     pub encrypted: bool,
 }

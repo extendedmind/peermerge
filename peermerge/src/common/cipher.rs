@@ -263,6 +263,10 @@ pub(crate) fn encode_document_id(document_id: &DocumentId) -> String {
 }
 
 pub(crate) fn encode_document_secret(document_secret: &DocumentSecret) -> String {
+    encode_base64_nopad(&encode_document_secret_to_bytes(document_secret))
+}
+
+pub(crate) fn encode_document_secret_to_bytes(document_secret: &DocumentSecret) -> Box<[u8]> {
     let mut enc_state = State::new();
     enc_state
         .preencode(document_secret)
@@ -271,7 +275,7 @@ pub(crate) fn encode_document_secret(document_secret: &DocumentSecret) -> String
     enc_state
         .encode(document_secret, &mut buffer)
         .expect("Encoding document secret should not fail");
-    encode_base64_nopad(&buffer)
+    buffer
 }
 
 pub(crate) fn encode_reattach_secret(peer_id: &PeerId, key_pair: &[u8]) -> String {
