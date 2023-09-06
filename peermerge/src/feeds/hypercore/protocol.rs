@@ -297,8 +297,8 @@ where
     U: FeedPersistence,
 {
     if let Some(document) = get_document_by_discovery_key(documents, discovery_key).await {
-        let root_feed = document.doc_feed().await;
-        Some((document, root_feed, true))
+        let doc_feed = document.doc_feed().await;
+        Some((document, doc_feed, true))
     } else {
         for opened_document_id in opened_documents {
             let document = get_document_by_discovery_key(documents, opened_document_id)

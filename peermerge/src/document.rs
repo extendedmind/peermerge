@@ -386,11 +386,11 @@ where
 
     #[instrument(skip_all, fields(ctx = self.log_context))]
     pub(crate) async fn close(&mut self) -> Result<(), PeermergeError> {
-        let root_feed = get_feed(&self.feeds, &self.doc_discovery_key)
+        let doc_feed = get_feed(&self.feeds, &self.doc_discovery_key)
             .await
             .unwrap();
-        let mut root_feed = root_feed.lock().await;
-        root_feed.notify_closed().await?;
+        let mut doc_feed = doc_feed.lock().await;
+        doc_feed.notify_closed().await?;
         Ok(())
     }
 
