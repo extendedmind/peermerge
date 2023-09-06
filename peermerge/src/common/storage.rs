@@ -7,8 +7,8 @@ use random_access_storage::RandomAccess;
 use std::{fmt::Debug, path::PathBuf};
 
 use crate::{
-    autocommit::{AutomergeDoc, DocsChangeResult, UnappliedEntries},
     common::state::{DocumentState, PeermergeState},
+    crdt::{AutomergeDoc, DocsChangeResult, UnappliedEntries},
     document::DocumentSettings,
     feeds::FeedDiscoveryKey,
     DocumentId, NameDescription, PeerId, PeermergeError,

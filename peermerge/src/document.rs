@@ -13,12 +13,6 @@ use std::sync::Arc;
 use std::{fmt::Debug, path::PathBuf};
 use tracing::{debug, enabled, instrument, warn, Level};
 
-use crate::autocommit::{
-    apply_entries_autocommit, apply_unapplied_entries_autocommit,
-    bootstrap_automerge_user_doc_from_entries, init_automerge_doc_from_data, init_automerge_docs,
-    init_first_peer, init_peer, save_automerge_doc, transact_autocommit, transact_mut_autocommit,
-    ApplyEntriesFeedChange, AutomergeDoc, DocsChangeResult, UnappliedEntries,
-};
 use crate::common::cipher::{
     encode_document_id, proxy_doc_url_from_doc_url, DecodedDocUrl, DocumentSecret,
 };
@@ -32,6 +26,12 @@ use crate::common::state::{
 };
 use crate::common::utils::{Mutex, YieldNow};
 use crate::common::{AccessType, DocumentInfo, StateEventContent::*};
+use crate::crdt::{
+    apply_entries_autocommit, apply_unapplied_entries_autocommit,
+    bootstrap_automerge_user_doc_from_entries, init_automerge_doc_from_data, init_automerge_docs,
+    init_first_peer, init_peer, save_automerge_doc, transact_autocommit, transact_mut_autocommit,
+    ApplyEntriesFeedChange, AutomergeDoc, DocsChangeResult, UnappliedEntries,
+};
 use crate::feeds::FeedDiscoveryKey;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::feeds::{create_new_read_disk_feed, create_new_write_disk_feed, open_disk_feed};

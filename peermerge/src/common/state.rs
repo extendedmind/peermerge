@@ -9,7 +9,7 @@ use tracing::warn;
 use uuid::Uuid;
 
 use crate::{
-    autocommit::{
+    crdt::{
         read_document_type_and_header, read_peer_header, save_automerge_doc, AutomergeDoc,
         DocsChangeResult,
     },

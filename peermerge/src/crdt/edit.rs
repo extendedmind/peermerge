@@ -364,11 +364,11 @@ mod tests {
 
     use super::*;
     use crate::{
-        autocommit::{init_automerge_doc_from_data, init_automerge_docs},
         common::{
             constants::DEFAULT_MAX_ENTRY_DATA_SIZE_BYTES, entry::shrink_entries,
             keys::generate_keys,
         },
+        crdt::{init_automerge_doc_from_data, init_automerge_docs},
         uuid::Uuid,
     };
 
