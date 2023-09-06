@@ -346,6 +346,13 @@ pub(crate) fn add_signature(data: &mut Vec<u8>, doc_signature_signing_key: &Sign
     data.extend(signature);
 }
 
+pub(crate) fn create_signature(
+    data: &mut Vec<u8>,
+    doc_signature_signing_key: &SigningKey,
+) -> [u8; 64] {
+    sign(doc_signature_signing_key, data).to_bytes()
+}
+
 pub(crate) fn verify_data_signature(
     data: &[u8],
     doc_signature_verifying_key: &VerifyingKey,

@@ -324,12 +324,27 @@ impl Peermerge<RandomAccessMemory, FeedMemoryPersistence> {
     where
         F: FnOnce(&mut Transaction) -> Result<O, AutomergeError>,
     {
+        let (mut parent_document, parent_doc_signature_signing_key): (
+            Option<Document<RandomAccessMemory, FeedMemoryPersistence>>,
+            Option<SigningKey>,
+        ) = if let Some(id) = &options.parent_id {
+            let document = self.get_document(id).await?;
+            let signing_key = document.doc_signature_signing_key().ok_or_else(|| {
+                PeermergeError::BadArgument {
+                    context: "Can not create a child to parent without write access".to_string(),
+                }
+            })?;
+            (Some(document), Some(signing_key))
+        } else {
+            (None, None)
+        };
         let (create_result, init_result) = Document::create_new_memory(
             self.peer_id,
             &self.default_peer_header,
             &options.document_type,
             options.document_header,
             options.encrypted,
+            parent_doc_signature_signing_key,
             self.document_settings.clone(),
             init_cb,
         )
@@ -338,6 +353,7 @@ impl Peermerge<RandomAccessMemory, FeedMemoryPersistence> {
             send_state_events(state_event_sender, create_result.state_events);
         }
         if let Some(_child_document_info) = create_result.child_document_info {
+            let _parent_document = parent_document.take().unwrap();
             unimplemented!();
         }
         Ok((self.add_document(create_result.document).await, init_result))
@@ -586,12 +602,28 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
     where
         F: FnOnce(&mut Transaction) -> Result<O, AutomergeError>,
     {
+        let (mut parent_document, parent_doc_signature_signing_key): (
+            Option<Document<RandomAccessDisk, FeedDiskPersistence>>,
+            Option<SigningKey>,
+        ) = if let Some(id) = &options.parent_id {
+            let document = self.get_document(id).await?;
+            let signing_key = document.doc_signature_signing_key().ok_or_else(|| {
+                PeermergeError::BadArgument {
+                    context: "Can not create a child to parent without write access".to_string(),
+                }
+            })?;
+            (Some(document), Some(signing_key))
+        } else {
+            (None, None)
+        };
+
         let (create_result, init_result) = Document::create_new_disk(
             self.peer_id,
             &self.default_peer_header,
             &options.document_type,
             options.document_header,
             options.encrypted,
+            parent_doc_signature_signing_key,
             self.document_settings.clone(),
             init_cb,
             &self.prefix,
@@ -599,6 +631,10 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
         .await?;
         if let Some(state_event_sender) = self.state_event_sender.lock().await.as_mut() {
             send_state_events(state_event_sender, create_result.state_events);
+        }
+        if let Some(_child_document_info) = create_result.child_document_info {
+            let _parent_document = parent_document.take().unwrap();
+            unimplemented!();
         }
         Ok((self.add_document(create_result.document).await, init_result))
     }

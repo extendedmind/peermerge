@@ -14,7 +14,7 @@ use std::{fmt::Debug, path::PathBuf};
 use tracing::{debug, enabled, instrument, warn, Level};
 
 use crate::common::cipher::{
-    encode_document_id, proxy_doc_url_from_doc_url, DecodedDocUrl, DocumentSecret,
+    create_signature, encode_document_id, proxy_doc_url_from_doc_url, DecodedDocUrl, DocumentSecret,
 };
 use crate::common::encoding::{serialize_entry, serialize_init_entries};
 use crate::common::entry::{EntryContent, ShrunkEntries};
@@ -125,6 +125,10 @@ where
 
     pub(crate) fn doc_signature_verifying_key(&self) -> VerifyingKey {
         self.doc_signature_key_pair.public
+    }
+
+    pub(crate) fn doc_signature_signing_key(&self) -> Option<SigningKey> {
+        self.doc_signature_key_pair.secret.clone()
     }
 
     pub(crate) async fn info(&self) -> DocumentInfo {
@@ -759,6 +763,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
         document_type: &str,
         document_header: Option<NameDescription>,
         encrypted: bool,
+        parent_doc_signature_signing_key: Option<SigningKey>,
         settings: DocumentSettings,
         init_cb: F,
     ) -> Result<
@@ -777,6 +782,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
             document_type,
             &document_header,
             encrypted,
+            parent_doc_signature_signing_key,
             settings.max_entry_data_size_bytes,
             init_cb,
         )
@@ -833,7 +839,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
                 )
                 .await,
                 state_events: prepare_result.state_events,
-                child_document_info: None,
+                child_document_info: prepare_result.child_document_info,
             },
             init_result,
         ))
@@ -1162,6 +1168,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
         document_type: &str,
         document_header: Option<NameDescription>,
         encrypted: bool,
+        parent_doc_signature_signing_key: Option<SigningKey>,
         settings: DocumentSettings,
         init_cb: F,
         data_root_dir: &PathBuf,
@@ -1181,6 +1188,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
             document_type,
             &document_header,
             encrypted,
+            parent_doc_signature_signing_key,
             settings.max_entry_data_size_bytes,
             init_cb,
         )
@@ -1246,7 +1254,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
                 )
                 .await,
                 state_events: prepare_result.state_events,
-                child_document_info: None,
+                child_document_info: prepare_result.child_document_info,
             },
             init_result,
         ))
@@ -1831,6 +1839,7 @@ struct PrepareCreateResult {
     doc_signature_verifying_key: VerifyingKey,
     write_key_pair: SigningKey,
     write_discovery_key: [u8; 32],
+    child_document_info: Option<ChildDocumentInfo>,
     doc_feed_init_data: Vec<Vec<u8>>,
     write_feed_init_data: Vec<Vec<u8>>,
     state: DocumentState,
@@ -1843,6 +1852,7 @@ async fn prepare_create<F, O>(
     document_type: &str,
     document_header: &Option<NameDescription>,
     encrypted: bool,
+    parent_doc_signature_signing_key: Option<SigningKey>,
     max_entry_data_size_bytes: usize,
     init_cb: F,
 ) -> Result<(PrepareCreateResult, O), PeermergeError>
@@ -1860,6 +1870,23 @@ where
     // Generate the doc signature signing key
     let doc_signature_signing_key = generate_signing_key();
     let doc_signature_verifying_key = doc_signature_signing_key.verifying_key();
+
+    // If this is a child document, create the child document info
+    let child_document_info: Option<ChildDocumentInfo> =
+        if let Some(parent_doc_signature_signing_key) = &parent_doc_signature_signing_key {
+            let mut buffer: Vec<u8> = doc_public_key.to_vec();
+            buffer.extend(doc_signature_verifying_key.to_bytes());
+            let signature: Vec<u8> =
+                create_signature(&mut buffer, parent_doc_signature_signing_key).to_vec();
+            Some(ChildDocumentInfo {
+                doc_public_key,
+                doc_signature_verifying_key,
+                signature,
+                creation_pending: false,
+            })
+        } else {
+            None
+        };
 
     // Generate a writeable feed key pair, its discovery key and the public key string
     let (write_key_pair, write_discovery_key) = generate_keys();
@@ -1941,6 +1968,7 @@ where
             doc_signature_verifying_key,
             write_key_pair,
             write_discovery_key,
+            child_document_info,
             doc_feed_init_data,
             write_feed_init_data,
             state,
