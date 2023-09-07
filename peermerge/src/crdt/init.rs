@@ -70,7 +70,8 @@ pub(crate) fn init_first_peer(
     peer_header: &NameDescription,
     document_type: &str,
     document_header: &Option<NameDescription>,
-    parent_id_and_header: Option<(DocumentId, NameDescription)>,
+    parent_id: Option<DocumentId>,
+    parent_header: Option<NameDescription>,
     max_entry_data_size_bytes: usize,
 ) -> Result<Vec<Entry>, PeermergeError> {
     save_first_peer(
@@ -79,7 +80,8 @@ pub(crate) fn init_first_peer(
         peer_header,
         document_type,
         document_header,
-        parent_id_and_header,
+        parent_id,
+        parent_header,
     )?;
     let meta_doc_data = save_automerge_doc(meta_automerge_doc);
     meta_automerge_doc.update_diff_cursor();

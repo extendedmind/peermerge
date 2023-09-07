@@ -87,21 +87,48 @@ pub struct DynamicDocumentInfo {
     pub document_header: Option<NameDescription>,
 }
 
+/// Document information parsed from a document URL. NB: This is a
+/// limited set of information compared to what is received when
+/// manipulating documents in a live peermerge, i.e. DocumentInfo.
+/// Most notably, the URL will not contain a full list of child
+/// documents because that list can grow infinitely and thus cause
+/// the URL to exceed the maximum character limit.
+#[derive(Debug, Clone)]
+pub struct UrlDocumentInfo {
+    /// Access to the document
+    pub access_type: AccessType,
+    /// Is the document encrypted. For access_type Proxy, this is None.
+    pub encrypted: Option<bool>,
+    /// Static information about the document that's always available
+    /// regardless of access_type.
+    pub static_info: StaticDocumentInfo,
+    /// Dynamic information about the document. This changes over time,
+    /// and is None for access_type Proxy, and might contain outdated
+    /// information for
+    pub dynamic_info: Option<DynamicDocumentInfo>,
+}
+
+impl UrlDocumentInfo {
+    pub fn id(&self) -> DocumentId {
+        self.static_info.document_id
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct DocumentInfo {
     /// Access to the document
     pub access_type: AccessType,
     /// Is the document encrypted. For access_type Proxy, this is None.
     pub encrypted: Option<bool>,
-    /// Parent document information. This is dependent on the peermerge
-    /// installation because a document may have a different
-    /// parent document depending on the peer.
-    pub parent_document_id: Option<DocumentId>,
+    /// Child documents of this document. See static_info.child to know
+    /// whether this is a child of some other document.
+    pub child_documents: Vec<DocumentId>,
     /// Static information about the document that's always available
     /// regardless of access_type.
     pub static_info: StaticDocumentInfo,
     /// Dynamic information about the document. This changes over time,
-    /// and is None for access_type Proxy.
+    /// and is None for access_type Proxy, and might contain outdated
+    /// information for
     pub dynamic_info: Option<DynamicDocumentInfo>,
 }
 

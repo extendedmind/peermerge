@@ -19,7 +19,7 @@ impl<T> IO for T where T: AsyncWrite + AsyncRead + Send + Unpin + 'static {}
 pub use crate::common::{
     decode_base64_nopad, encode_base64_nopad, get_document_info, new_uuid_v4, AccessType,
     DocumentInfo, DocumentSharingInfo, DynamicDocumentInfo, FeedType, NameDescription,
-    PeermergeError, StateEvent, StateEventContent, StaticDocumentInfo,
+    PeermergeError, StateEvent, StateEventContent, StaticDocumentInfo, UrlDocumentInfo,
 };
 pub use crate::core::Peermerge;
 pub use crate::crdt::AutomergeDoc;

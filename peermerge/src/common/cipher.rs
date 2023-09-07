@@ -11,8 +11,8 @@ use uuid::Uuid;
 use crate::{
     common::keys::{discovery_key_from_public_key, document_id_from_discovery_key},
     feeds::{FeedDiscoveryKey, FeedPublicKey},
-    DocumentId, DocumentInfo, FeedType, NameDescription, PeerId, PeermergeError,
-    StaticDocumentInfo,
+    DocumentId, FeedType, NameDescription, PeerId, PeermergeError, StaticDocumentInfo,
+    UrlDocumentInfo,
 };
 
 use super::{
@@ -64,7 +64,7 @@ pub fn decode_base64_nopad(value: &str) -> Result<Vec<u8>, PeermergeError> {
 pub fn get_document_info(
     document_url: &str,
     document_secret: Option<String>,
-) -> Result<DocumentInfo, PeermergeError> {
+) -> Result<UrlDocumentInfo, PeermergeError> {
     let document_secret: Option<DocumentSecret> = document_secret
         .map(|secret| decode_document_secret(&secret))
         .transpose()?;
@@ -177,12 +177,11 @@ pub(crate) struct DecodedDocUrl {
     pub(crate) document_secret: DocumentSecret,
 }
 
-impl Into<DocumentInfo> for DecodedDocUrl {
-    fn into(self) -> DocumentInfo {
-        DocumentInfo {
+impl Into<UrlDocumentInfo> for DecodedDocUrl {
+    fn into(self) -> UrlDocumentInfo {
+        UrlDocumentInfo {
             access_type: self.access_type,
             encrypted: self.encrypted,
-            parent_document_id: None,
             static_info: self.static_info,
             dynamic_info: self.doc_url_appendix.map(|appendix| DynamicDocumentInfo {
                 document_type: appendix.document_type,

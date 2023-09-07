@@ -127,7 +127,9 @@ impl CompactEncoding<DocumentState> for State {
         if value.access_type == AccessType::ReadWrite {
             flags |= 16;
         }
-
+        if value.child {
+            flags |= 32;
+        }
         buffer[flags_index] = flags;
         Ok(self.start())
     }
@@ -164,6 +166,7 @@ impl CompactEncoding<DocumentState> for State {
         } else {
             AccessType::ReadOnly
         };
+        let child = flags & 32 != 0;
         Ok(DocumentState::new_with_version(
             version,
             access_type,
@@ -171,6 +174,7 @@ impl CompactEncoding<DocumentState> for State {
             encrypted,
             feeds_state,
             content,
+            child,
             child_documents,
         ))
     }

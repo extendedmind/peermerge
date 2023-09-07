@@ -19,5 +19,5 @@ pub use error::PeermergeError;
 pub use event::{StateEvent, StateEventContent};
 pub use types::{
     AccessType, DocumentInfo, DocumentSharingInfo, DynamicDocumentInfo, FeedType, NameDescription,
-    StaticDocumentInfo,
+    StaticDocumentInfo, UrlDocumentInfo,
 };

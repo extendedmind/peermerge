@@ -83,6 +83,8 @@ pub(crate) struct DocumentState {
     pub(crate) feeds_state: DocumentFeedsState,
     /// Content of the document. None for proxy.
     pub(crate) content: Option<DocumentContent>,
+    /// If this document is a child
+    pub(crate) child: bool,
     /// Child documents of this document
     pub(crate) child_documents: Vec<ChildDocumentInfo>,
 }
@@ -93,6 +95,7 @@ impl DocumentState {
         encrypted: Option<bool>,
         feeds_state: DocumentFeedsState,
         content: Option<DocumentContent>,
+        child: bool,
     ) -> Self {
         Self::new_with_version(
             PEERMERGE_VERSION,
@@ -101,6 +104,7 @@ impl DocumentState {
             encrypted,
             feeds_state,
             content,
+            child,
             vec![],
         )
     }
@@ -112,6 +116,7 @@ impl DocumentState {
         encrypted: Option<bool>,
         feeds_state: DocumentFeedsState,
         content: Option<DocumentContent>,
+        child: bool,
         child_documents: Vec<ChildDocumentInfo>,
     ) -> Self {
         let document_id = document_id_from_discovery_key(&feeds_state.doc_discovery_key);
@@ -123,30 +128,40 @@ impl DocumentState {
             encrypted,
             feeds_state,
             content,
+            child,
             child_documents,
         }
     }
 
     pub(crate) fn info(&mut self) -> DocumentInfo {
         let doc_url_info = self.doc_url_info();
+        let child_documents: Vec<DocumentId> = self
+            .child_documents
+            .iter()
+            .map(|info| {
+                let child_document_discovery_key =
+                    discovery_key_from_public_key(&info.doc_public_key);
+                document_id_from_discovery_key(&child_document_discovery_key)
+            })
+            .collect();
         if let Some((document_type, document_header)) = self.document_type_and_header() {
             DocumentInfo {
-                encrypted: self.encrypted.clone(),
+                encrypted: self.encrypted,
                 access_type: self.access_type,
                 static_info: doc_url_info,
                 dynamic_info: Some(DynamicDocumentInfo {
                     document_type,
                     document_header,
                 }),
-                parent_document_id: None, // TODO: Support for document hierarchies
+                child_documents,
             }
         } else {
             DocumentInfo {
-                encrypted: self.encrypted.clone(),
+                encrypted: self.encrypted,
                 access_type: self.access_type,
                 static_info: doc_url_info,
                 dynamic_info: None,
-                parent_document_id: None, // TODO: Support for document hierarchies
+                child_documents,
             }
         }
     }
@@ -178,7 +193,7 @@ impl DocumentState {
         StaticDocumentInfo::new(
             self.version,
             crate::FeedType::Hypercore,
-            false, // TODO: Child documents
+            self.child,
             self.feeds_state.doc_public_key,
             self.feeds_state.doc_discovery_key,
             self.document_id,

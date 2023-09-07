@@ -64,7 +64,8 @@ pub(super) fn save_first_peer(
     peer_header: &NameDescription,
     document_type: &str,
     document_header: &Option<NameDescription>,
-    parent_id_and_header: Option<(DocumentId, NameDescription)>,
+    parent_id: Option<DocumentId>,
+    parent_header: Option<NameDescription>,
 ) -> Result<(), PeermergeError> {
     let peers_id = meta_automerge_doc
         .get(ROOT, PEERS_MAP_KEY)
@@ -90,7 +91,9 @@ pub(super) fn save_first_peer(
             meta_automerge_doc.put(&document_header_id, DESCRIPTION_KEY, description)?;
         }
     }
-    if let Some((parent_id, parent_header)) = parent_id_and_header {
+    if let Some(parent_id) = parent_id {
+        let parent_header =
+            parent_header.expect("Parent header must always be present when parent id is");
         let parents_id = meta_automerge_doc
             .get(ROOT, PARENTS_MAP_KEY)
             .unwrap()
