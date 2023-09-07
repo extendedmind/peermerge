@@ -32,7 +32,7 @@ use crate::{
         utils::Mutex,
         FeedEventContent,
     },
-    document::{get_document_by_discovery_key, DocumentSettings},
+    document::{get_document_by_discovery_key, DocumentSettings, NewDocumentResult},
     feeds::{FeedMemoryPersistence, FeedPersistence, Protocol},
     options::PeermergeMemoryOptions,
     AttachDocumentMemoryOptions, AutomergeDoc, CreateNewDocumentMemoryOptions, DocumentSharingInfo,
@@ -192,7 +192,8 @@ where
         ids: Option<Vec<ObjId>>,
     ) -> Result<(), PeermergeError> {
         let mut document = self.get_document(document_id).await?;
-        Ok(document.watch(ids).await)
+        document.watch(ids).await;
+        Ok(())
     }
 
     /// Reserve a given object for only local changes, preventing any peers from making changes
@@ -288,6 +289,65 @@ where
         state.add_document_id_to_state(&info.id()).await;
         info
     }
+
+    async fn parent_document_info(
+        &self,
+        parent_id: Option<DocumentId>,
+        parent_header: Option<NameDescription>,
+    ) -> Result<
+        (
+            Option<Document<T, U>>,
+            Option<(DocumentId, SigningKey, NameDescription)>,
+        ),
+        PeermergeError,
+    > {
+        if let Some(parent_id) = parent_id {
+            let document = self.get_document(&parent_id).await?;
+            let signing_key = document.doc_signature_signing_key().ok_or_else(|| {
+                PeermergeError::BadArgument {
+                    context: "Can not create a child to parent without write access".to_string(),
+                }
+            })?;
+            let parent_header: NameDescription = if let Some(parent_header) = parent_header {
+                parent_header
+            } else {
+                document
+                    .document_header()
+                    .await
+                    .ok_or_else(|| PeermergeError::BadArgument {
+                        context: "Without parent_header the parent document needs \
+                                  a header to create a child document"
+                            .to_string(),
+                    })?
+            };
+            Ok((
+                Some(document),
+                Some((parent_id, signing_key, parent_header)),
+            ))
+        } else {
+            Ok((None, None))
+        }
+    }
+
+    async fn process_new_document_result(
+        &self,
+        result: NewDocumentResult<T, U>,
+        mut parent_document: Option<Document<T, U>>,
+    ) -> Result<Document<T, U>, PeermergeError> {
+        if !result.state_events.is_empty() {
+            if let Some(state_event_sender) = self.state_event_sender.lock().await.as_mut() {
+                send_state_events(state_event_sender, result.state_events);
+            }
+        }
+        if let Some(child_document_info) = result.child_document_info {
+            let parent_document = parent_document.take().unwrap();
+            let document_secret = result.document.document_secret().unwrap();
+            parent_document
+                .add_child_document(child_document_info, document_secret)
+                .await;
+        }
+        Ok(result.document)
+    }
 }
 
 //////////////////////////////////////////////////////
@@ -324,36 +384,9 @@ impl Peermerge<RandomAccessMemory, FeedMemoryPersistence> {
     where
         F: FnOnce(&mut Transaction) -> Result<O, AutomergeError>,
     {
-        let (mut parent_document, parent_id_signing_key_and_header): (
-            Option<Document<RandomAccessMemory, FeedMemoryPersistence>>,
-            Option<(DocumentId, SigningKey, NameDescription)>,
-        ) = if let Some(parent_id) = options.parent_id {
-            let document = self.get_document(&parent_id).await?;
-            let signing_key = document.doc_signature_signing_key().ok_or_else(|| {
-                PeermergeError::BadArgument {
-                    context: "Can not create a child to parent without write access".to_string(),
-                }
-            })?;
-            let parent_header: NameDescription = if let Some(parent_header) = options.parent_header
-            {
-                parent_header
-            } else {
-                document
-                    .document_header()
-                    .await
-                    .ok_or_else(|| PeermergeError::BadArgument {
-                        context: "Without parent_header the parent document needs \
-                                  a header to create a child document"
-                            .to_string(),
-                    })?
-            };
-            (
-                Some(document),
-                Some((parent_id, signing_key, parent_header)),
-            )
-        } else {
-            (None, None)
-        };
+        let (parent_document, parent_id_signing_key_and_header) = self
+            .parent_document_info(options.parent_id, options.parent_header)
+            .await?;
         let (create_result, init_result) = Document::create_new_memory(
             self.peer_id,
             &self.default_peer_header,
@@ -365,23 +398,19 @@ impl Peermerge<RandomAccessMemory, FeedMemoryPersistence> {
             init_cb,
         )
         .await?;
-        if let Some(state_event_sender) = self.state_event_sender.lock().await.as_mut() {
-            send_state_events(state_event_sender, create_result.state_events);
-        }
-        if let Some(child_document_info) = create_result.child_document_info {
-            let parent_document = parent_document.take().unwrap();
-            let document_secret = create_result.document.document_secret().unwrap();
-            parent_document
-                .add_child_document(child_document_info, document_secret)
-                .await;
-        }
-        Ok((self.add_document(create_result.document).await, init_result))
+        let document = self
+            .process_new_document_result(create_result, parent_document)
+            .await?;
+        Ok((self.add_document(document).await, init_result))
     }
 
     pub async fn attach_document_memory(
         &mut self,
         options: AttachDocumentMemoryOptions,
     ) -> Result<DocumentInfo, PeermergeError> {
+        let (parent_document, parent_id_signing_key_and_header) = self
+            .parent_document_info(options.parent_id, options.parent_header)
+            .await?;
         let document_secret = options
             .document_secret
             .map(|secret| decode_document_secret(&secret))
@@ -432,20 +461,18 @@ impl Peermerge<RandomAccessMemory, FeedMemoryPersistence> {
         } else {
             None
         };
-        let (document, state_events) = Document::attach_memory(
+        let attach_result = Document::attach_memory(
             self.peer_id,
             &self.default_peer_header,
             decoded_document_url,
             reattach_secrets,
-            options.parent_document_id,
+            parent_id_signing_key_and_header,
             self.document_settings.clone(),
         )
         .await?;
-        if !state_events.is_empty() {
-            if let Some(state_event_sender) = self.state_event_sender.lock().await.as_mut() {
-                send_state_events(state_event_sender, state_events);
-            }
-        }
+        let document = self
+            .process_new_document_result(attach_result, parent_document)
+            .await?;
         Ok(self.add_document(document).await)
     }
 
@@ -621,37 +648,9 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
     where
         F: FnOnce(&mut Transaction) -> Result<O, AutomergeError>,
     {
-        let (mut parent_document, parent_id_signing_key_and_header): (
-            Option<Document<RandomAccessDisk, FeedDiskPersistence>>,
-            Option<(DocumentId, SigningKey, NameDescription)>,
-        ) = if let Some(parent_id) = options.parent_id {
-            let document = self.get_document(&parent_id).await?;
-            let signing_key = document.doc_signature_signing_key().ok_or_else(|| {
-                PeermergeError::BadArgument {
-                    context: "Can not create a child to parent without write access".to_string(),
-                }
-            })?;
-            let parent_header: NameDescription = if let Some(parent_header) = options.parent_header
-            {
-                parent_header
-            } else {
-                document
-                    .document_header()
-                    .await
-                    .ok_or_else(|| PeermergeError::BadArgument {
-                        context: "Without parent_header the parent document needs \
-                                  a header to create a child document"
-                            .to_string(),
-                    })?
-            };
-            (
-                Some(document),
-                Some((parent_id, signing_key, parent_header)),
-            )
-        } else {
-            (None, None)
-        };
-
+        let (parent_document, parent_id_signing_key_and_header) = self
+            .parent_document_info(options.parent_id, options.parent_header)
+            .await?;
         let (create_result, init_result) = Document::create_new_disk(
             self.peer_id,
             &self.default_peer_header,
@@ -664,42 +663,36 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
             &self.prefix,
         )
         .await?;
-        if let Some(state_event_sender) = self.state_event_sender.lock().await.as_mut() {
-            send_state_events(state_event_sender, create_result.state_events);
-        }
-        if let Some(child_document_info) = create_result.child_document_info {
-            let parent_document = parent_document.take().unwrap();
-            let document_secret = create_result.document.document_secret().unwrap();
-            parent_document
-                .add_child_document(child_document_info, document_secret)
-                .await;
-        }
-        Ok((self.add_document(create_result.document).await, init_result))
+        let document = self
+            .process_new_document_result(create_result, parent_document)
+            .await?;
+        Ok((self.add_document(document).await, init_result))
     }
 
     pub async fn attach_document_disk(
         &mut self,
         options: AttachDocumentDiskOptions,
     ) -> Result<DocumentInfo, PeermergeError> {
+        let (parent_document, parent_id_signing_key_and_header) = self
+            .parent_document_info(options.parent_id, options.parent_header)
+            .await?;
         let document_secret = options
             .document_secret
             .map(|secret| decode_document_secret(&secret))
             .transpose()?;
         let decoded_document_url = decode_doc_url(&options.document_url, &document_secret)?;
-        let (document, state_events) = Document::attach_disk(
+        let attach_result = Document::attach_disk(
             self.peer_id,
             &self.default_peer_header,
             decoded_document_url,
-            options.parent_document_id,
+            parent_id_signing_key_and_header,
             &self.prefix,
             self.document_settings.clone(),
         )
         .await?;
-        if !state_events.is_empty() {
-            if let Some(state_event_sender) = self.state_event_sender.lock().await.as_mut() {
-                send_state_events(state_event_sender, state_events);
-            }
-        }
+        let document = self
+            .process_new_document_result(attach_result, parent_document)
+            .await?;
         Ok(self.add_document(document).await)
     }
 

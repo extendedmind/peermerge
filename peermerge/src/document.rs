@@ -100,7 +100,7 @@ pub(crate) struct DocumentSettings {
 }
 
 #[derive(Debug)]
-pub(crate) struct CreateNewDocumentResult<T, U>
+pub(crate) struct NewDocumentResult<T, U>
 where
     T: RandomAccess + Debug + Send,
     U: FeedPersistence,
@@ -785,7 +785,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
         init_cb: F,
     ) -> Result<
         (
-            CreateNewDocumentResult<RandomAccessMemory, FeedMemoryPersistence>,
+            NewDocumentResult<RandomAccessMemory, FeedMemoryPersistence>,
             O,
         ),
         PeermergeError,
@@ -839,7 +839,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
             )
             .await?;
         Ok((
-            CreateNewDocumentResult {
+            NewDocumentResult {
                 document: Self::new_memory(
                     peer_id,
                     (prepare_result.doc_discovery_key, doc_feed),
@@ -867,9 +867,9 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
         peer_header: &NameDescription,
         mut decoded_doc_url: DecodedDocUrl,
         mut reattach_secrets: Option<HashMap<DocumentId, SigningKey>>,
-        parent_document_id: Option<DocumentId>,
+        parent_id_signing_key_and_header: Option<(DocumentId, SigningKey, NameDescription)>,
         settings: DocumentSettings,
-    ) -> Result<(Self, Vec<StateEvent>), PeermergeError> {
+    ) -> Result<NewDocumentResult<RandomAccessMemory, FeedMemoryPersistence>, PeermergeError> {
         let mut state_events: Vec<StateEvent> = vec![];
         let access_type = decoded_doc_url.access_type;
         let document_id = decoded_doc_url.static_info.document_id;
@@ -1042,11 +1042,11 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
             decoded_doc_url.encrypted,
             feeds_state,
             content,
-            parent_document_id.is_some(),
+            parent_id_signing_key_and_header.is_some(),
         );
 
-        Ok((
-            Self::new_memory(
+        Ok(NewDocumentResult {
+            document: Self::new_memory(
                 peer_id,
                 (doc_discovery_key, doc_feed),
                 PartialKeypair {
@@ -1062,7 +1062,8 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
             )
             .await,
             state_events,
-        ))
+            child_document_info: None,
+        })
     }
 
     #[instrument(level = "debug", skip_all, fields(ctx = self.log_context))]
@@ -1190,13 +1191,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
         settings: DocumentSettings,
         init_cb: F,
         data_root_dir: &PathBuf,
-    ) -> Result<
-        (
-            CreateNewDocumentResult<RandomAccessDisk, FeedDiskPersistence>,
-            O,
-        ),
-        PeermergeError,
-    >
+    ) -> Result<(NewDocumentResult<RandomAccessDisk, FeedDiskPersistence>, O), PeermergeError>
     where
         F: FnOnce(&mut Transaction) -> Result<O, AutomergeError>,
     {
@@ -1255,7 +1250,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
             .await?;
 
         Ok((
-            CreateNewDocumentResult {
+            NewDocumentResult {
                 document: Self::new_disk(
                     peer_id,
                     (prepare_result.doc_discovery_key, doc_feed),
@@ -1282,10 +1277,10 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
         peer_id: PeerId,
         peer_header: &NameDescription,
         mut decoded_doc_url: DecodedDocUrl,
-        parent_document_id: Option<DocumentId>,
+        parent_id_signing_key_and_header: Option<(DocumentId, SigningKey, NameDescription)>,
         data_root_dir: &Path,
         settings: DocumentSettings,
-    ) -> Result<(Self, Vec<StateEvent>), PeermergeError> {
+    ) -> Result<NewDocumentResult<RandomAccessDisk, FeedDiskPersistence>, PeermergeError> {
         let access_type = decoded_doc_url.access_type;
         let mut state_events: Vec<StateEvent> = vec![];
 
@@ -1423,11 +1418,11 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
             Some(feeds_encrypted),
             feeds_state,
             content,
-            parent_document_id.is_some(),
+            parent_id_signing_key_and_header.is_some(),
         );
 
-        Ok((
-            Self::new_disk(
+        Ok(NewDocumentResult {
+            document: Self::new_disk(
                 peer_id,
                 (doc_discovery_key, doc_feed),
                 PartialKeypair {
@@ -1443,7 +1438,8 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
             )
             .await,
             state_events,
-        ))
+            child_document_info: None,
+        })
     }
 
     pub(crate) async fn info_disk(data_root_dir: &PathBuf) -> Result<DocumentInfo, PeermergeError> {

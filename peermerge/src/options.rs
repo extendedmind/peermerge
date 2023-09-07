@@ -66,7 +66,9 @@ pub struct AttachDocumentMemoryOptions {
     #[builder(setter(into, strip_option), default)]
     pub reattach_secrets: Option<HashMap<DocumentId, String>>,
     #[builder(setter(into, strip_option), default)]
-    pub parent_document_id: Option<DocumentId>,
+    pub parent_id: Option<DocumentId>,
+    #[builder(setter(into, strip_option), default)]
+    pub parent_header: Option<NameDescription>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -76,5 +78,7 @@ pub struct AttachDocumentDiskOptions {
     #[builder(setter(into, strip_option), default)]
     pub document_secret: Option<String>,
     #[builder(setter(into, strip_option), default)]
-    pub parent_document_id: Option<DocumentId>,
+    pub parent_id: Option<DocumentId>,
+    #[builder(setter(into, strip_option), default)]
+    pub parent_header: Option<NameDescription>,
 }
