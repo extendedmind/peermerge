@@ -1,17 +1,16 @@
 use automerge::{
-    transaction::{CommitOptions, Transactable, Transaction},
-    ActorId, AutoCommit, Automerge, AutomergeError, ReadDoc, ROOT,
+    transaction::{CommitOptions, Transaction},
+    ActorId, AutoCommit, Automerge, AutomergeError,
 };
 use std::collections::HashMap;
 
 use super::{
     apply_entries_autocommit, init_meta_automerge_doc, meta::save_child_document, save_first_peer,
-    ApplyEntriesFeedChange, AutomergeDoc, UnappliedEntries,
+    save_peer, ApplyEntriesFeedChange, AutomergeDoc, UnappliedEntries,
 };
 use crate::{
     common::entry::{Entry, EntryContent, ShrunkEntries},
     common::{constants::PEERMERGE_VERSION, entry::split_datas_into_entries},
-    encode_base64_nopad,
     feeds::FeedDiscoveryKey,
     DocumentId, NameDescription, PeerId, PeermergeError,
 };
@@ -94,28 +93,17 @@ pub(crate) fn init_peer(
     user_automerge_doc: Option<&mut AutomergeDoc>,
     peer_id: &PeerId,
     peer_header: &Option<NameDescription>,
+    parent_id: Option<DocumentId>,
+    parent_header: Option<NameDescription>,
     max_entry_data_size_bytes: usize,
 ) -> Result<Vec<Entry>, PeermergeError> {
-    let peers_id = meta_automerge_doc
-        .get(ROOT, "p")
-        .unwrap()
-        .map(|result| result.1)
-        .unwrap();
-    let peer_key = encode_base64_nopad(peer_id);
-    let mut peer_id_keys = meta_automerge_doc.keys(&peers_id);
-    if !peer_id_keys.any(|key| key == peer_key) {
-        if let Some(peer_header) = peer_header {
-            let peer_header_id =
-                meta_automerge_doc.put_object(&peers_id, peer_key, automerge::ObjType::Map)?;
-            meta_automerge_doc.put(&peer_header_id, "n", &peer_header.name)?;
-            if let Some(description) = &peer_header.description {
-                meta_automerge_doc.put(&peer_header_id, "d", description)?;
-            }
-            meta_automerge_doc.update_diff_cursor();
-        } else {
-            panic!("Need to be able to set a name to missing peer");
-        }
-    }
+    save_peer(
+        meta_automerge_doc,
+        peer_id,
+        peer_header,
+        parent_id,
+        parent_header,
+    )?;
     let meta_doc_data = save_automerge_doc(meta_automerge_doc);
     let user_doc_data: Option<Vec<u8>> = user_automerge_doc.map(save_automerge_doc);
     meta_automerge_doc.update_diff_cursor();

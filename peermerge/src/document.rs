@@ -32,9 +32,9 @@ use crate::crdt::{
     init_first_peer, init_peer, save_automerge_doc, transact_autocommit, transact_mut_autocommit,
     ApplyEntriesFeedChange, AutomergeDoc, DocsChangeResult, UnappliedEntries,
 };
-use crate::feeds::FeedDiscoveryKey;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::feeds::{create_new_read_disk_feed, create_new_write_disk_feed, open_disk_feed};
+use crate::feeds::{FeedDiscoveryKey, FeedPublicKey};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::FeedDiskPersistence;
 use crate::{
@@ -873,6 +873,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
         let mut state_events: Vec<StateEvent> = vec![];
         let access_type = decoded_doc_url.access_type;
         let document_id = decoded_doc_url.static_info.document_id;
+        let doc_public_key = decoded_doc_url.static_info.document_public_key;
         let doc_discovery_key = decoded_doc_url.static_info.document_discovery_key;
         let encryption_key = decoded_doc_url.document_secret.encryption_key.take();
         let feeds_encrypted = if let Some(encrypted) = &decoded_doc_url.encrypted {
@@ -903,6 +904,13 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
             &encryption_key,
         )
         .await;
+
+        // If this is a child document, create the child document info
+        let (child_document_info, parent_id, parent_header) = get_child_document_info(
+            parent_id_signing_key_and_header,
+            doc_public_key,
+            doc_signature_verifying_key,
+        );
 
         let (content, feeds_state, write_discovery_key_and_feed, reattach_secrets) =
             match access_type {
@@ -964,6 +972,8 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
                             None,
                             &peer_id,
                             &Some(peer_header.clone()),
+                            parent_id,
+                            parent_header,
                             settings.max_entry_data_size_bytes,
                         )?;
                         let (mut write_feed, _) = create_new_write_memory_feed(
@@ -1043,7 +1053,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
             decoded_doc_url.encrypted,
             feeds_state,
             content,
-            parent_id_signing_key_and_header.is_some(),
+            parent_id.is_some(),
         );
 
         Ok(NewDocumentResult {
@@ -1063,7 +1073,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
             )
             .await,
             state_events,
-            child_document_info: None,
+            child_document_info,
         })
     }
 
@@ -1286,6 +1296,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
         let mut state_events: Vec<StateEvent> = vec![];
 
         // Process keys from doc URL and document secret
+        let doc_public_key = decoded_doc_url.static_info.document_public_key;
         let doc_discovery_key = decoded_doc_url.static_info.document_discovery_key;
         let document_id = decoded_doc_url.static_info.document_id;
         let encryption_key = decoded_doc_url.document_secret.encryption_key.take();
@@ -1321,6 +1332,13 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
         )
         .await;
 
+        // If this is a child document, create the child document info
+        let (child_document_info, parent_id, parent_header) = get_child_document_info(
+            parent_id_signing_key_and_header,
+            doc_public_key,
+            doc_signature_verifying_key,
+        );
+
         let (content, feeds_state, write_discovery_key_and_feed) = match access_type {
             AccessType::ReadWrite => {
                 let doc_signature_signing_key = if let Some(key) = &doc_signature_signing_key {
@@ -1348,6 +1366,8 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
                     None,
                     &peer_id,
                     &Some(peer_header.clone()),
+                    parent_id,
+                    parent_header,
                     settings.max_entry_data_size_bytes,
                 )?;
                 let write_feed_init_data: Vec<Vec<u8>> = serialize_init_entries(init_peer_entries)?;
@@ -1420,7 +1440,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
             Some(feeds_encrypted),
             feeds_state,
             content,
-            parent_id_signing_key_and_header.is_some(),
+            parent_id.is_some(),
         );
 
         Ok(NewDocumentResult {
@@ -1440,7 +1460,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
             )
             .await,
             state_events,
-            child_document_info: None,
+            child_document_info,
         })
     }
 
@@ -1848,6 +1868,37 @@ where
     documents.iter().map(|multi| *multi.key()).collect()
 }
 
+fn get_child_document_info(
+    parent_id_signing_key_and_header: Option<(DocumentId, SigningKey, NameDescription)>,
+    doc_public_key: FeedPublicKey,
+    doc_signature_verifying_key: VerifyingKey,
+) -> (
+    Option<ChildDocumentInfo>,
+    Option<DocumentId>,
+    Option<NameDescription>,
+) {
+    if let Some((parent_id, parent_doc_signature_signing_key, parent_header)) =
+        parent_id_signing_key_and_header
+    {
+        let mut buffer: Vec<u8> = doc_public_key.to_vec();
+        buffer.extend(doc_signature_verifying_key.to_bytes());
+        let signature: Vec<u8> =
+            create_signature(&mut buffer, &parent_doc_signature_signing_key).to_vec();
+        (
+            Some(ChildDocumentInfo {
+                doc_public_key,
+                doc_signature_verifying_key,
+                signature,
+                creation_pending: false,
+            }),
+            Some(parent_id),
+            Some(parent_header),
+        )
+    } else {
+        (None, None, None)
+    }
+}
+
 struct PrepareCreateResult {
     document_id: DocumentId,
     doc_signing_key: SigningKey,
@@ -1889,30 +1940,11 @@ where
     let doc_signature_verifying_key = doc_signature_signing_key.verifying_key();
 
     // If this is a child document, create the child document info
-    let (child_document_info, parent_id, parent_header): (
-        Option<ChildDocumentInfo>,
-        Option<DocumentId>,
-        Option<NameDescription>,
-    ) = if let Some((parent_id, parent_doc_signature_signing_key, parent_header)) =
-        parent_id_signing_key_and_header
-    {
-        let mut buffer: Vec<u8> = doc_public_key.to_vec();
-        buffer.extend(doc_signature_verifying_key.to_bytes());
-        let signature: Vec<u8> =
-            create_signature(&mut buffer, &parent_doc_signature_signing_key).to_vec();
-        (
-            Some(ChildDocumentInfo {
-                doc_public_key,
-                doc_signature_verifying_key,
-                signature,
-                creation_pending: false,
-            }),
-            Some(parent_id),
-            Some(parent_header),
-        )
-    } else {
-        (None, None, None)
-    };
+    let (child_document_info, parent_id, parent_header) = get_child_document_info(
+        parent_id_signing_key_and_header,
+        doc_public_key,
+        doc_signature_verifying_key,
+    );
 
     // Generate a writeable feed key pair, its discovery key and the public key string
     let (write_key_pair, write_discovery_key) = generate_keys();
