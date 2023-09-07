@@ -50,7 +50,7 @@ async fn disk_two_peers(encrypted: bool) -> anyhow::Result<()> {
     // std::fs::create_dir_all(&debug).unwrap();
     // let creator_dir = std::path::Path::new(&debug).to_path_buf();
 
-    let mut peermerge_creator = Peermerge::create_new_disk(
+    let mut peermerge_creator = Peermerge::new_disk(
         PeermergeDiskOptionsBuilder::default()
             .default_peer_header(NameDescription::new("creator"))
             .data_root_dir(creator_dir.clone())
@@ -120,7 +120,7 @@ async fn disk_two_peers(encrypted: bool) -> anyhow::Result<()> {
     // std::fs::create_dir_all(&debug).unwrap();
     // let joiner_dir = std::path::Path::new(&debug).to_path_buf();
 
-    let mut peermerge_joiner = Peermerge::create_new_disk(
+    let mut peermerge_joiner = Peermerge::new_disk(
         PeermergeDiskOptionsBuilder::default()
             .default_peer_header(NameDescription::new("joiner"))
             .data_root_dir(joiner_dir.clone())

@@ -205,7 +205,8 @@ pub(crate) fn decode_doc_url(
         get_static_document_info_and_appendix_position(doc_url, document_secret)?;
     let document_secret = document_secret.unwrap_or_else(|| DocumentSecret::empty());
     if let Some(doc_signature_signing_key) = &document_secret.doc_signature_signing_key {
-        if static_info.doc_signature_verifying_key != doc_signature_signing_key.verifying_key() {
+        if static_info.document_signature_verifying_key != doc_signature_signing_key.verifying_key()
+        {
             return Err(PeermergeError::BadArgument {
                 context: "Verifying key in doc URL does not match that given as document secret"
                     .to_string(),
@@ -222,7 +223,7 @@ pub(crate) fn decode_doc_url(
         let appendix_buffer: Option<Vec<u8>> = if encrypted {
             // The url indicates that its encrypted. If an encryption key is given, use it to unwrap the header
             if let Some(encryption_key) = &document_secret.encryption_key {
-                let nonce = generate_nonce(&static_info.doc_public_key, 0);
+                let nonce = generate_nonce(&static_info.document_public_key, 0);
                 let cipher = XChaCha20Poly1305::new_from_slice(encryption_key).unwrap();
                 Some(cipher.decrypt(&nonce, &*buffer).unwrap())
             } else {
@@ -496,10 +497,10 @@ fn decode_domain_and_document_secret(
             version,
             child,
             feed_type,
-            doc_public_key,
-            doc_discovery_key,
+            document_public_key: doc_public_key,
+            document_discovery_key: doc_discovery_key,
             document_id,
-            doc_signature_verifying_key,
+            document_signature_verifying_key: doc_signature_verifying_key,
         },
         document_secret,
     ))

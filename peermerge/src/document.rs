@@ -873,7 +873,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
         let mut state_events: Vec<StateEvent> = vec![];
         let access_type = decoded_doc_url.access_type;
         let document_id = decoded_doc_url.static_info.document_id;
-        let doc_discovery_key = decoded_doc_url.static_info.doc_discovery_key;
+        let doc_discovery_key = decoded_doc_url.static_info.document_discovery_key;
         let encryption_key = decoded_doc_url.document_secret.encryption_key.take();
         let feeds_encrypted = if let Some(encrypted) = &decoded_doc_url.encrypted {
             if *encrypted && encryption_key.is_none() {
@@ -892,11 +892,12 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
         };
 
         let doc_signature_signing_key = decoded_doc_url.document_secret.doc_signature_signing_key;
-        let doc_signature_verifying_key = decoded_doc_url.static_info.doc_signature_verifying_key;
+        let doc_signature_verifying_key =
+            decoded_doc_url.static_info.document_signature_verifying_key;
 
         // Create the doc feed
         let doc_feed = create_new_read_memory_feed(
-            &decoded_doc_url.static_info.doc_public_key,
+            &decoded_doc_url.static_info.document_public_key,
             AccessType::ReadOnly,
             feeds_encrypted,
             &encryption_key,
@@ -998,7 +999,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
                     };
                     let content = DocumentContent::new(
                         peer_id,
-                        &decoded_doc_url.static_info.doc_discovery_key,
+                        &decoded_doc_url.static_info.document_discovery_key,
                         0,
                         &write_discovery_key,
                         write_feed_init_data_len,
@@ -1011,7 +1012,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
                     );
                     let feeds_state = DocumentFeedsState::new_writer(
                         peer_id,
-                        decoded_doc_url.static_info.doc_public_key,
+                        decoded_doc_url.static_info.document_public_key,
                         false,
                         &write_public_key,
                         doc_signature_signing_key,
@@ -1029,7 +1030,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
                 AccessType::Proxy => {
                     let feeds_state = DocumentFeedsState::new(
                         peer_id,
-                        decoded_doc_url.static_info.doc_public_key,
+                        decoded_doc_url.static_info.document_public_key,
                         false,
                     );
                     (None, feeds_state, None, None)
@@ -1285,7 +1286,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
         let mut state_events: Vec<StateEvent> = vec![];
 
         // Process keys from doc URL and document secret
-        let doc_discovery_key = decoded_doc_url.static_info.doc_discovery_key;
+        let doc_discovery_key = decoded_doc_url.static_info.document_discovery_key;
         let document_id = decoded_doc_url.static_info.document_id;
         let encryption_key = decoded_doc_url.document_secret.encryption_key.take();
         let feeds_encrypted = if let Some(encrypted) = decoded_doc_url.encrypted {
@@ -1304,15 +1305,16 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
             false
         };
         let doc_signature_signing_key = decoded_doc_url.document_secret.doc_signature_signing_key;
-        let doc_signature_verifying_key = decoded_doc_url.static_info.doc_signature_verifying_key;
+        let doc_signature_verifying_key =
+            decoded_doc_url.static_info.document_signature_verifying_key;
 
         // Create the doc feed
         let postfix = encode_document_id(&decoded_doc_url.static_info.document_id);
         let data_root_dir = data_root_dir.join(postfix);
         let doc_feed = create_new_read_disk_feed(
             &data_root_dir,
-            &decoded_doc_url.static_info.doc_public_key,
-            &decoded_doc_url.static_info.doc_discovery_key,
+            &decoded_doc_url.static_info.document_public_key,
+            &decoded_doc_url.static_info.document_discovery_key,
             AccessType::ReadOnly,
             feeds_encrypted,
             &encryption_key,
@@ -1375,7 +1377,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
                 // Initialize document state
                 let content = DocumentContent::new(
                     peer_id,
-                    &decoded_doc_url.static_info.doc_discovery_key,
+                    &decoded_doc_url.static_info.document_discovery_key,
                     0,
                     &write_discovery_key,
                     write_feed_init_data_len,
@@ -1388,7 +1390,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
                 );
                 let feeds_state = DocumentFeedsState::new_writer(
                     peer_id,
-                    decoded_doc_url.static_info.doc_public_key,
+                    decoded_doc_url.static_info.document_public_key,
                     false,
                     &write_public_key,
                     doc_signature_signing_key,
@@ -1405,7 +1407,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
             AccessType::Proxy => {
                 let feeds_state = DocumentFeedsState::new(
                     peer_id,
-                    decoded_doc_url.static_info.doc_public_key,
+                    decoded_doc_url.static_info.document_public_key,
                     false,
                 );
                 (None, feeds_state, None)

@@ -82,7 +82,7 @@ async fn proxy_disk_encrypted() -> anyhow::Result<()> {
         .unwrap()
         .into_path();
 
-    let mut peermerge_proxy = Peermerge::create_new_disk(
+    let mut peermerge_proxy = Peermerge::new_disk(
         PeermergeDiskOptionsBuilder::default()
             .default_peer_header(NameDescription::new("proxy"))
             .state_event_sender(proxy_state_event_sender)

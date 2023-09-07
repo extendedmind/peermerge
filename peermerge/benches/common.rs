@@ -146,7 +146,7 @@ pub async fn setup_peermerge_mesh_disk(
         UnboundedReceiver<StateEvent>,
     ) = unbounded();
     let mut peermerge_creator: Peermerge<RandomAccessDisk, FeedDiskPersistence> =
-        Peermerge::create_new_disk(
+        Peermerge::new_disk(
             PeermergeDiskOptionsBuilder::default()
                 .default_peer_header(NameDescription::new(creator_name))
                 .state_event_sender(state_event_sender.clone())
@@ -202,7 +202,7 @@ pub async fn setup_peermerge_mesh_disk(
             .tempdir()
             .unwrap()
             .into_path();
-        let mut peermerge_peer = Peermerge::create_new_disk(
+        let mut peermerge_peer = Peermerge::new_disk(
             PeermergeDiskOptionsBuilder::default()
                 .default_peer_header(NameDescription::new(&peer_name))
                 .state_event_sender(state_event_sender.clone())

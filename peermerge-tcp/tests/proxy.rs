@@ -36,7 +36,7 @@ async fn tcp_proxy_disk_encrypted() -> anyhow::Result<()> {
         .tempdir()
         .unwrap()
         .into_path();
-    let mut peermerge_creator = Peermerge::create_new_disk(
+    let mut peermerge_creator = Peermerge::new_disk(
         PeermergeDiskOptionsBuilder::default()
             .default_peer_header(NameDescription::new("creator"))
             .state_event_sender(creator_state_event_sender)
@@ -76,7 +76,7 @@ async fn tcp_proxy_disk_encrypted() -> anyhow::Result<()> {
         .unwrap()
         .into_path();
 
-    let mut peermerge_proxy = Peermerge::create_new_disk(
+    let mut peermerge_proxy = Peermerge::new_disk(
         PeermergeDiskOptionsBuilder::default()
             .default_peer_header(NameDescription::new("proxy"))
             .state_event_sender(proxy_state_event_sender)

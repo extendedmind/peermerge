@@ -555,7 +555,7 @@ async fn on_feed_event_memory(
 
 #[cfg(not(target_arch = "wasm32"))]
 impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
-    pub async fn create_new_disk(options: PeermergeDiskOptions) -> Result<Self, PeermergeError> {
+    pub async fn new_disk(options: PeermergeDiskOptions) -> Result<Self, PeermergeError> {
         let document_settings = DocumentSettings {
             max_entry_data_size_bytes: options.max_entry_data_size_bytes,
             max_write_feed_length: options.max_write_feed_length,

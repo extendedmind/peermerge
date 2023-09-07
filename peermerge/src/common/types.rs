@@ -53,10 +53,10 @@ pub struct StaticDocumentInfo {
     pub version: u8,
     pub feed_type: FeedType,
     pub child: bool,
-    pub doc_public_key: [u8; 32],
-    pub doc_discovery_key: [u8; 32],
+    pub document_public_key: [u8; 32],
+    pub document_discovery_key: [u8; 32],
     pub document_id: DocumentId,
-    pub doc_signature_verifying_key: VerifyingKey,
+    pub document_signature_verifying_key: VerifyingKey,
 }
 
 impl StaticDocumentInfo {
@@ -64,19 +64,19 @@ impl StaticDocumentInfo {
         version: u8,
         feed_type: FeedType,
         child: bool,
-        doc_public_key: [u8; 32],
-        doc_discovery_key: [u8; 32],
+        document_public_key: [u8; 32],
+        document_discovery_key: [u8; 32],
         document_id: DocumentId,
-        doc_signature_verifying_key: VerifyingKey,
+        document_signature_verifying_key: VerifyingKey,
     ) -> Self {
         Self {
             version,
             feed_type,
             child,
-            doc_public_key,
-            doc_discovery_key,
+            document_public_key,
+            document_discovery_key,
             document_id,
-            doc_signature_verifying_key,
+            document_signature_verifying_key,
         }
     }
 }
