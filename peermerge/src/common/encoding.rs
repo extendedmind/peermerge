@@ -14,7 +14,8 @@ use super::constants::PEERMERGE_VERSION;
 use super::entry::EntryContent;
 use super::message::{FeedSyncedMessage, FeedVerificationMessage, FeedsChangedMessage};
 use super::state::{
-    ChildDocumentInfo, DocumentContent, DocumentCursor, DocumentFeedInfo, DocumentFeedsState,
+    ChildDocumentInfo, ChildDocumentStatus, DocumentContent, DocumentCursor, DocumentFeedInfo,
+    DocumentFeedsState,
 };
 use crate::{AccessType, NameDescription, PeerId, PeermergeError};
 
@@ -260,8 +261,11 @@ impl CompactEncoding<ChildDocumentInfo> for State {
         let flags_index = self.start();
         let mut flags: u8 = 0;
         self.add_start(1)?;
-        if value.creation_pending {
+        if value.status == ChildDocumentStatus::Created {
             flags |= 1;
+        }
+        if value.status == ChildDocumentStatus::Creating {
+            flags |= 2;
         }
         buffer[flags_index] = flags;
         Ok(self.start())
@@ -274,11 +278,21 @@ impl CompactEncoding<ChildDocumentInfo> for State {
             self.decode_fixed_32(buffer)?.to_vec().try_into().unwrap();
         let signature: Vec<u8> = self.decode(buffer)?;
         let flags: u8 = self.decode(buffer)?;
+        let created = flags & 1 != 0;
+        let creating = flags & 2 != 0;
+
+        let status = if created {
+            ChildDocumentStatus::Created
+        } else if creating {
+            ChildDocumentStatus::Creating
+        } else {
+            ChildDocumentStatus::NotCreated
+        };
         Ok(ChildDocumentInfo::new_from_data(
             doc_public_key,
             doc_signature_verifying_key,
             signature,
-            flags & 1 != 0,
+            status,
         ))
     }
 }
@@ -764,8 +778,8 @@ impl CompactEncoding<FeedVerificationMessage> for State {
 impl CompactEncoding<FeedSyncedMessage> for State {
     fn preencode(&mut self, value: &FeedSyncedMessage) -> Result<usize, EncodingError> {
         self.preencode(&value.contiguous_length)?;
-        let len = value.pending_child_documents.len();
-        for child_document in &value.pending_child_documents {
+        let len = value.not_created_child_documents.len();
+        for child_document in &value.not_created_child_documents {
             self.preencode(child_document)?;
         }
         self.preencode(&len)?;
@@ -778,9 +792,9 @@ impl CompactEncoding<FeedSyncedMessage> for State {
         buffer: &mut [u8],
     ) -> Result<usize, EncodingError> {
         self.encode(&value.contiguous_length, buffer)?;
-        let len = value.pending_child_documents.len();
+        let len = value.not_created_child_documents.len();
         self.encode(&len, buffer)?;
-        for child_document in &value.pending_child_documents {
+        for child_document in &value.not_created_child_documents {
             self.encode(child_document, buffer)?;
         }
         Ok(self.start())
@@ -789,14 +803,14 @@ impl CompactEncoding<FeedSyncedMessage> for State {
     fn decode(&mut self, buffer: &[u8]) -> Result<FeedSyncedMessage, EncodingError> {
         let contiguous_length: u64 = self.decode(buffer)?;
         let len: usize = self.decode(buffer)?;
-        let mut pending_child_documents: Vec<ChildDocumentInfo> = Vec::with_capacity(len);
+        let mut not_created_child_documents: Vec<ChildDocumentInfo> = Vec::with_capacity(len);
         for _ in 0..len {
             let doc: ChildDocumentInfo = self.decode(buffer)?;
-            pending_child_documents.push(doc);
+            not_created_child_documents.push(doc);
         }
         Ok(FeedSyncedMessage {
             contiguous_length,
-            pending_child_documents,
+            not_created_child_documents,
         })
     }
 }

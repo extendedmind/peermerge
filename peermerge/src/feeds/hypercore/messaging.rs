@@ -91,9 +91,9 @@ pub(super) fn create_append_local_signal(length: u64) -> Message {
 
 pub(super) fn create_feed_synced_local_signal(
     contiguous_length: u64,
-    pending_child_documents: Vec<ChildDocumentInfo>,
+    not_created_child_documents: Vec<ChildDocumentInfo>,
 ) -> Message {
-    let message = FeedSyncedMessage::new(contiguous_length, pending_child_documents);
+    let message = FeedSyncedMessage::new(contiguous_length, not_created_child_documents);
     let mut enc_state = State::new();
     enc_state
         .preencode(&message)
@@ -576,12 +576,12 @@ where
                     peer_state.contiguous_range_sent = contiguous_length;
                     channel.send(Message::Range(range_msg)).await?;
                 }
-                if !message.pending_child_documents.is_empty() {
+                if !message.not_created_child_documents.is_empty() {
                     // Let's just try again to create the documents now that we have more info.
                     return Ok(vec![FeedEvent::new(
                         peer_state.doc_discovery_key,
                         NewChildDocumentsBroadcasted {
-                            new_child_documents: message.pending_child_documents,
+                            new_child_documents: message.not_created_child_documents,
                         },
                     )]);
                 }

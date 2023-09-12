@@ -164,11 +164,11 @@ where
     pub(crate) async fn notify_feed_synced(
         &mut self,
         contiguous_length: u64,
-        pending_child_documents: Vec<ChildDocumentInfo>,
+        not_created_child_documents: Vec<ChildDocumentInfo>,
     ) -> Result<(), PeermergeError> {
         if !self.channel_senders.is_empty() {
             let message =
-                create_feed_synced_local_signal(contiguous_length, pending_child_documents);
+                create_feed_synced_local_signal(contiguous_length, not_created_child_documents);
             self.notify_listeners(&message).await?;
         }
         Ok(())

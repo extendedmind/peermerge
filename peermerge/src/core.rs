@@ -343,7 +343,7 @@ where
             let mut parent_document = parent_document.take().unwrap();
             let document_secret = result.document.document_secret().unwrap();
             parent_document
-                .add_child_document(child_document_info, document_secret)
+                .add_created_child_document(child_document_info, document_secret)
                 .await?;
         }
         Ok(result.document)

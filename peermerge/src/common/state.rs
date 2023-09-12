@@ -260,12 +260,36 @@ impl DocumentState {
         }
     }
 
-    pub(crate) fn pending_child_documents(&self) -> Vec<ChildDocumentInfo> {
+    pub(crate) fn not_created_child_documents(&self) -> Vec<ChildDocumentInfo> {
         self.child_documents
             .iter()
-            .filter(|info| info.creation_pending)
+            .filter(|info| info.status == ChildDocumentStatus::NotCreated)
             .cloned()
             .collect()
+    }
+}
+
+/// Status of the child document.
+#[derive(Copy, Clone, Debug, PartialEq)]
+#[repr(u8)]
+pub enum ChildDocumentStatus {
+    /// Not yet created
+    NotCreated = 0,
+    /// Currently creating document
+    Creating = 1,
+    /// Created
+    Created = 2,
+}
+
+impl TryFrom<u8> for ChildDocumentStatus {
+    type Error = ();
+    fn try_from(input: u8) -> Result<Self, <Self as TryFrom<u8>>::Error> {
+        match input {
+            0u8 => Ok(Self::NotCreated),
+            1u8 => Ok(Self::Creating),
+            2u8 => Ok(Self::Created),
+            _ => Err(()),
+        }
     }
 }
 
@@ -280,9 +304,8 @@ pub(crate) struct ChildDocumentInfo {
     /// to prevent rogue proxies or read-only peers from announcing bogus
     /// documents with the broadcast message.
     pub(crate) signature: Vec<u8>,
-    /// Whether or not the document creation is pending metadoc to
-    /// contain the encryption and/or signing key.
-    pub(crate) creation_pending: bool,
+    /// Status of the child document in this peermerge.
+    pub(crate) status: ChildDocumentStatus,
 }
 
 impl PartialEq for ChildDocumentInfo {
@@ -307,7 +330,7 @@ impl ChildDocumentInfo {
         doc_public_key: FeedPublicKey,
         doc_signature_verifying_key: [u8; 32],
         signature: Vec<u8>,
-        creation_pending: bool,
+        status: ChildDocumentStatus,
     ) -> Self {
         Self {
             doc_public_key,
@@ -316,7 +339,7 @@ impl ChildDocumentInfo {
                     "It should never be possible an invalid verifying key is stored to the state",
                 ),
             signature,
-            creation_pending,
+            status,
         }
     }
 

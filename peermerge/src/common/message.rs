@@ -65,16 +65,16 @@ pub(crate) struct FeedVerificationMessage {
 #[derive(Debug)]
 pub(crate) struct FeedSyncedMessage {
     pub(crate) contiguous_length: u64,
-    pub(crate) pending_child_documents: Vec<ChildDocumentInfo>,
+    pub(crate) not_created_child_documents: Vec<ChildDocumentInfo>,
 }
 impl FeedSyncedMessage {
     pub(crate) fn new(
         contiguous_length: u64,
-        pending_child_documents: Vec<ChildDocumentInfo>,
+        not_created_child_documents: Vec<ChildDocumentInfo>,
     ) -> Self {
         Self {
             contiguous_length,
-            pending_child_documents,
+            not_created_child_documents,
         }
     }
 }

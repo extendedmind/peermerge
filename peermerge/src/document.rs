@@ -22,7 +22,7 @@ use crate::common::keys::{
     discovery_key_from_public_key, document_id_from_discovery_key, generate_keys, SigningKey,
 };
 use crate::common::state::{
-    ChildDocumentInfo, DocumentFeedInfo, DocumentFeedsState, DocumentState,
+    ChildDocumentInfo, ChildDocumentStatus, DocumentFeedInfo, DocumentFeedsState, DocumentState,
 };
 use crate::common::utils::{Mutex, YieldNow};
 use crate::common::{AccessType, DocumentInfo, StateEventContent::*};
@@ -239,50 +239,51 @@ where
     ) -> Result<Option<DocumentSecret>, PeermergeError> {
         let mut document_state = self.document_state.lock().await;
         Ok(document_state
-            .merge_child_document(remote_child_document_info)
+            .merge_child_document_and_persist(remote_child_document_info)
             .await)
     }
 
-    pub(crate) async fn add_child_document(
+    pub(crate) async fn add_created_child_document(
         &mut self,
         child_document_info: ChildDocumentInfo,
         child_document_secret: DocumentSecret,
     ) -> Result<(), PeermergeError> {
+        if self.access_type != AccessType::ReadWrite {
+            panic!("Can not add created child to Proxy or ReadOnly peer");
+        }
         let mut document_state = self.document_state.lock().await;
         let entries = document_state
-            .add_child_document(
+            .add_created_child_document(
                 child_document_info,
                 child_document_secret,
                 self.settings.max_entry_data_size_bytes,
             )
             .await?;
-        if !entries.is_empty() && self.access_type == AccessType::ReadWrite {
-            let write_discovery_key = document_state.write_discovery_key();
-            let length = {
-                let write_feed = get_feed(&self.feeds, &write_discovery_key).await.unwrap();
-                let mut write_feed = write_feed.lock().await;
-                let entry_data_batch: Vec<Vec<u8>> = entries
-                    .into_iter()
-                    .map(|entry| serialize_entry(&entry))
-                    .collect::<Result<Vec<Vec<u8>>, PeermergeError>>()?;
-                write_feed
-                    .append_batch(
-                        entry_data_batch,
-                        self.doc_signature_key_pair.secret.as_ref().unwrap(),
-                    )
-                    .await?
-            };
-            document_state
-                .set_cursor_and_save_data(
-                    &write_discovery_key,
-                    length,
-                    DocsChangeResult {
-                        meta_changed: true,
-                        user_changed: false,
-                    },
+        let write_discovery_key = document_state.write_discovery_key();
+        let length = {
+            let write_feed = get_feed(&self.feeds, &write_discovery_key).await.unwrap();
+            let mut write_feed = write_feed.lock().await;
+            let entry_data_batch: Vec<Vec<u8>> = entries
+                .into_iter()
+                .map(|entry| serialize_entry(&entry))
+                .collect::<Result<Vec<Vec<u8>>, PeermergeError>>()?;
+            write_feed
+                .append_batch(
+                    entry_data_batch,
+                    self.doc_signature_key_pair.secret.as_ref().unwrap(),
                 )
-                .await;
-        }
+                .await?
+        };
+        document_state
+            .set_cursor_and_save_data(
+                &write_discovery_key,
+                length,
+                DocsChangeResult {
+                    meta_changed: true,
+                    user_changed: false,
+                },
+            )
+            .await;
         Ok(())
     }
 
@@ -583,10 +584,10 @@ where
                 return vec![];
             }
         }
-        let (state_events, pending_child_documents): (Vec<StateEvent>, Vec<ChildDocumentInfo>) = {
+        let (state_events, not_created_child_documents): (Vec<StateEvent>, Vec<ChildDocumentInfo>) = {
             // Sync doc state exclusively...
             let mut document_state = self.document_state.lock().await;
-            let pending_child_documents = document_state.state().pending_child_documents();
+            let not_created_child_documents = document_state.state().not_created_child_documents();
             let (document_initialized, patches, peer_syncs) =
                 if let Some((content, feeds_state, unapplied_entries)) =
                     document_state.content_feeds_state_and_unapplied_entries_mut()
@@ -647,7 +648,7 @@ where
                     patches,
                     peer_syncs,
                 ),
-                pending_child_documents,
+                not_created_child_documents,
             )
             // ..doc state sync ready, release lock
         };
@@ -657,7 +658,7 @@ where
         {
             let feed = get_feed(&self.feeds, &discovery_key).await.unwrap();
             let mut feed = feed.lock().await;
-            feed.notify_feed_synced(synced_contiguous_length, pending_child_documents)
+            feed.notify_feed_synced(synced_contiguous_length, not_created_child_documents)
                 .await
                 .unwrap();
         }
@@ -1935,7 +1936,7 @@ fn get_child_document_info(
                 doc_public_key,
                 doc_signature_verifying_key,
                 signature,
-                creation_pending: false,
+                status: ChildDocumentStatus::NotCreated,
             }),
             Some(parent_id),
             Some(parent_header),
