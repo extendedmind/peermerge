@@ -9,7 +9,7 @@ use std::{fmt::Debug, path::PathBuf};
 use crate::{
     common::state::{DocumentState, PeermergeState},
     crdt::{
-        add_child_document, get_child_document_secret, AutomergeDoc, DocsChangeResult,
+        add_child_document, get_child_document_decoded_url, AutomergeDoc, DocsChangeResult,
         UnappliedEntries,
     },
     document::DocumentSettings,
@@ -18,7 +18,7 @@ use crate::{
 };
 
 use super::{
-    cipher::{encode_document_secret_to_bytes, DocumentSecret},
+    cipher::{encode_document_secret_to_bytes, DecodedDocUrl, DocumentSecret},
     entry::Entry,
     keys::{discovery_key_from_public_key, document_id_from_discovery_key},
     state::{
@@ -204,11 +204,11 @@ where
 
     pub(crate) async fn add_created_child_document(
         &mut self,
-        mut child_document_info: ChildDocumentInfo,
+        child_document_info: ChildDocumentInfo,
+        child_document_url: &str,
         child_document_secret: DocumentSecret,
         max_entry_data_size_bytes: usize,
     ) -> Result<Vec<Entry>, PeermergeError> {
-        child_document_info.status = ChildDocumentStatus::Created;
         let entries = if let Some(content) = self.state.content.as_mut() {
             if let Some(meta_automerge_doc) = content.meta_automerge_doc.as_mut() {
                 let child_document_secret: Vec<u8> =
@@ -220,6 +220,7 @@ where
                 add_child_document(
                     meta_automerge_doc,
                     child_document_id,
+                    child_document_url,
                     child_document_secret,
                     max_entry_data_size_bytes,
                 )?
@@ -241,14 +242,14 @@ where
     /// None.
     pub(crate) async fn merge_child_document_and_persist(
         &mut self,
-        mut child_document_info: ChildDocumentInfo,
-    ) -> Option<DocumentSecret> {
+        child_document_info: &mut ChildDocumentInfo,
+    ) -> Option<DecodedDocUrl> {
         // First check that creation isn't ongoing already from some other protocol
         let already_stored = if let Some(info) = self
             .state
             .child_documents
             .iter()
-            .find(|info| *info == &child_document_info)
+            .find(|info| *info == child_document_info)
         {
             if info.status == ChildDocumentStatus::Created
                 || info.status == ChildDocumentStatus::Creating
@@ -267,7 +268,7 @@ where
             self.state
                 .child_documents
                 .iter_mut()
-                .find(|info| *info == &child_document_info)
+                .find(|info| *info == child_document_info)
         } else {
             None
         };
@@ -275,15 +276,16 @@ where
         // Reset status so that value from remote isn't carried over here
         child_document_info.status = ChildDocumentStatus::NotCreated;
 
-        // Search for the secret from the meta doc
-        let stored_document_secret = if let Some(content) = self.state.content.as_ref() {
+        // Search for the URL and secret from the meta doc
+        let stored_decoded_url = if let Some(content) = self.state.content.as_ref() {
             if let Some(meta_automerge_doc) = content.meta_automerge_doc.as_ref() {
                 let child_document_discovery_key =
                     discovery_key_from_public_key(&child_document_info.doc_public_key);
                 let child_document_id =
                     document_id_from_discovery_key(&child_document_discovery_key);
-                let stored = get_child_document_secret(meta_automerge_doc, child_document_id);
-                if stored.is_some() {
+                let stored_decoded_url =
+                    get_child_document_decoded_url(meta_automerge_doc, child_document_id);
+                if stored_decoded_url.is_some() {
                     // Found the secret immediately, mark this as creating
                     if let Some(info) = stored_child_document_info {
                         info.status = ChildDocumentStatus::Creating;
@@ -291,7 +293,7 @@ where
                         child_document_info.status = ChildDocumentStatus::Creating;
                     }
                 }
-                stored
+                stored_decoded_url
             } else {
                 None
             }
@@ -299,12 +301,29 @@ where
             None
         };
         if !already_stored {
-            self.state.child_documents.push(child_document_info);
+            self.state.child_documents.push(child_document_info.clone());
         }
-        if !already_stored || stored_document_secret.is_some() {
+        if !already_stored || stored_decoded_url.is_some() {
             write_document_state(&self.state, &mut self.storage).await;
         }
-        stored_document_secret
+        stored_decoded_url
+    }
+
+    pub(crate) async fn set_child_document_created_and_persist(
+        &mut self,
+        child_document_info: &ChildDocumentInfo,
+    ) -> ChildDocumentInfo {
+        // Get a mutable reference
+        let stored_child_document_info = self
+            .state
+            .child_documents
+            .iter_mut()
+            .find(|info| *info == child_document_info)
+            .expect("Child document must be set to Creating before persisting");
+        stored_child_document_info.status = ChildDocumentStatus::Created;
+        let return_info = stored_child_document_info.clone();
+        write_document_state(&self.state, &mut self.storage).await;
+        return_info
     }
 
     pub(crate) fn user_automerge_doc(&self) -> Option<&AutomergeDoc> {

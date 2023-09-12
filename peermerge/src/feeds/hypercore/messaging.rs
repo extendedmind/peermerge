@@ -34,6 +34,7 @@ const APPEND_LOCAL_SIGNAL_NAME: &str = "append";
 const FEED_SYNCED_LOCAL_SIGNAL_NAME: &str = "feed_synced";
 pub(super) const FEEDS_CHANGED_LOCAL_SIGNAL_NAME: &str = "feeds_changed";
 pub(super) const FEED_VERIFICATION_LOCAL_SIGNAL_NAME: &str = "feed_verification";
+pub(super) const CHILD_DOCUMENT_CREATED_LOCAL_SIGNAL_NAME: &str = "child_document_created";
 const CLOSED_LOCAL_SIGNAL_NAME: &str = "closed";
 
 pub(super) fn create_broadcast_message(
@@ -148,6 +149,23 @@ pub(super) fn create_feed_verification_local_signal(
         .expect("Encoding feed verification local signal should not fail");
     Message::LocalSignal((
         FEED_VERIFICATION_LOCAL_SIGNAL_NAME.to_string(),
+        buffer.to_vec(),
+    ))
+}
+
+pub(super) fn create_child_document_created_local_signal(
+    child_document_info: ChildDocumentInfo,
+) -> Message {
+    let mut enc_state = State::new();
+    enc_state
+        .preencode(&child_document_info)
+        .expect("Pre-encoding child document created local signal should not fail");
+    let mut buffer = enc_state.create_buffer();
+    enc_state
+        .encode(&child_document_info, &mut buffer)
+        .expect("Encoding child document created  local signal should not fail");
+    Message::LocalSignal((
+        CHILD_DOCUMENT_CREATED_LOCAL_SIGNAL_NAME.to_string(),
         buffer.to_vec(),
     ))
 }
@@ -651,10 +669,33 @@ where
                     }
                 }
             }
+            CHILD_DOCUMENT_CREATED_LOCAL_SIGNAL_NAME => {
+                assert!(
+                    peer_state.is_doc,
+                    "Only doc feed should ever get child document created messages"
+                );
+                let mut dec_state = State::from_buffer(&data);
+                let child_document_info: ChildDocumentInfo = dec_state.decode(&data)?;
+                peer_state.child_documents.push(child_document_info);
+                let feeds_state = peer_state.feeds_state.as_ref().unwrap();
+                let message = create_broadcast_message(
+                    feeds_state,
+                    &peer_state.child_documents,
+                    &peer_state.broadcast_new_feeds,
+                    None,
+                );
+                channel.send(message).await?;
+
+                // Transmit this event forward to the protocol so that the new document can
+                // be advertised
+                channel
+                    .signal_local_protocol(CHILD_DOCUMENT_CREATED_LOCAL_SIGNAL_NAME, data)
+                    .await?;
+            }
             CLOSED_LOCAL_SIGNAL_NAME => {
                 assert!(
                     peer_state.is_doc,
-                    "Only doc feed should ever get closed message"
+                    "Only doc feed should ever get closed messages"
                 );
                 channel.close().await?;
             }

@@ -21,7 +21,8 @@ use wasm_bindgen_futures::spawn_local;
 
 use super::{
     messaging::{
-        create_append_local_signal, create_closed_local_signal, create_feed_synced_local_signal,
+        create_append_local_signal, create_child_document_created_local_signal,
+        create_closed_local_signal, create_feed_synced_local_signal,
         create_feed_verification_local_signal, create_feeds_changed_local_signal,
     },
     on_doc_feed, on_feed, PeerState,
@@ -186,6 +187,17 @@ where
                 replaced_feeds,
                 feeds_to_create,
             );
+            self.notify_listeners(&message).await?;
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn notify_child_document_created(
+        &mut self,
+        child_document_info: ChildDocumentInfo,
+    ) -> Result<(), PeermergeError> {
+        if !self.channel_senders.is_empty() {
+            let message = create_child_document_created_local_signal(child_document_info);
             self.notify_listeners(&message).await?;
         }
         Ok(())

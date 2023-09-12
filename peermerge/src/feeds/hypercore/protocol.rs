@@ -10,7 +10,10 @@ use std::sync::Arc;
 use tracing::{debug, instrument};
 
 use super::{
-    messaging::{FEEDS_CHANGED_LOCAL_SIGNAL_NAME, FEED_VERIFICATION_LOCAL_SIGNAL_NAME},
+    messaging::{
+        CHILD_DOCUMENT_CREATED_LOCAL_SIGNAL_NAME, FEEDS_CHANGED_LOCAL_SIGNAL_NAME,
+        FEED_VERIFICATION_LOCAL_SIGNAL_NAME,
+    },
     HypercoreWrapper,
 };
 use crate::common::state::DocumentFeedsState;
@@ -249,6 +252,33 @@ where
                                 }
                             } else {
                                 unimplemented!("TODO: Invalid feed deletion");
+                            }
+                        }
+                        CHILD_DOCUMENT_CREATED_LOCAL_SIGNAL_NAME => {
+                            let mut dec_state = State::from_buffer(&data);
+                            let child_document_info: ChildDocumentInfo = dec_state.decode(&data)?;
+                            let child_discovery_key =
+                                discovery_key_from_public_key(&child_document_info.doc_public_key);
+                            let document =
+                                get_document_by_discovery_key(&documents, &child_discovery_key)
+                                    .await
+                                    .unwrap();
+                            let doc_hypercore = document.doc_feed().await;
+                            let doc_hypercore = doc_hypercore.lock().await;
+                            let doc_public_key = *doc_hypercore.public_key();
+                            if is_initiator {
+                                debug!(
+                                    "Event:ChildDocumentCreated: opening doc channel as initiator"
+                                );
+                                protocol.open(doc_public_key).await?;
+                            } else if unbound_discovery_keys.contains(&child_discovery_key) {
+                                // This has already been announced by the other side, open now that
+                                // we have the document.
+                                unbound_discovery_keys.retain(|key| key != &child_discovery_key);
+                                debug!(
+                                    "Event:ChildDocumentCreated: opening doc channel as responder"
+                                );
+                                protocol.open(doc_public_key).await?;
                             }
                         }
                         _ => panic!("Unknown local signal: {name}"),

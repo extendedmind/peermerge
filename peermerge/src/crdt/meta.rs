@@ -19,6 +19,7 @@ const NAME_KEY: &str = "n";
 const DESCRIPTION_KEY: &str = "d";
 const DOCUMENTS_MAP_KEY: &str = "o";
 const DOCUMENT_SECRET_KEY: &str = "s";
+const DOCUMENT_URL_KEY: &str = "u";
 
 pub(super) fn init_meta_automerge_doc(
     actor_id: &ActorId,
@@ -129,6 +130,7 @@ pub(super) fn save_peer(
 pub(crate) fn save_child_document(
     meta_automerge_doc: &mut AutomergeDoc,
     child_document_id: DocumentId,
+    child_document_url: &str,
     child_document_secret: Vec<u8>,
 ) -> Result<(), PeermergeError> {
     let child_documents_id = meta_automerge_doc
@@ -139,6 +141,7 @@ pub(crate) fn save_child_document(
     let child_key = encode_base64_nopad(&child_document_id);
     let child_document_id =
         meta_automerge_doc.put_object(&child_documents_id, child_key, automerge::ObjType::Map)?;
+    meta_automerge_doc.put(&child_document_id, DOCUMENT_URL_KEY, child_document_url)?;
     meta_automerge_doc.put(
         &child_document_id,
         DOCUMENT_SECRET_KEY,
@@ -147,10 +150,10 @@ pub(crate) fn save_child_document(
     Ok(())
 }
 
-pub(crate) fn read_child_document_secret(
+pub(crate) fn read_child_document_url_and_secret(
     meta_automerge_doc: &AutomergeDoc,
     child_document_id: DocumentId,
-) -> Option<Vec<u8>> {
+) -> Option<(String, Vec<u8>)> {
     let child_documents_id = meta_automerge_doc
         .get(ROOT, DOCUMENTS_MAP_KEY)
         .unwrap()
@@ -162,11 +165,25 @@ pub(crate) fn read_child_document_secret(
         .unwrap()
         .map(|result| result.1);
     if let Some(child_document_id) = child_document_id {
-        meta_automerge_doc
+        let document_url = meta_automerge_doc
+            .get(&child_document_id, DOCUMENT_URL_KEY)
+            .unwrap()
+            .and_then(|result| result.0.to_scalar().cloned())
+            .map(|description_scalar_value| description_scalar_value.into_string().unwrap());
+        let document_secret_bytes = meta_automerge_doc
             .get(&child_document_id, DOCUMENT_SECRET_KEY)
             .unwrap()
             .and_then(|result| result.0.to_scalar().cloned())
-            .map(|description_scalar_value| description_scalar_value.into_bytes().unwrap())
+            .map(|description_scalar_value| description_scalar_value.into_bytes().unwrap());
+        if let Some(url) = document_url {
+            if let Some(secret) = document_secret_bytes {
+                Some((url, secret))
+            } else {
+                None
+            }
+        } else {
+            None
+        }
     } else {
         None
     }
@@ -258,27 +275,27 @@ fn save_parent(
     parent_header: Option<NameDescription>,
 ) -> Result<(), PeermergeError> {
     if let Some(parent_id) = parent_id {
-        let parent_header =
-            parent_header.expect("Parent header must always be present when parent id is");
         let parents_id = meta_automerge_doc
             .get(ROOT, PARENTS_MAP_KEY)
             .unwrap()
             .map(|result| result.1)
             .unwrap();
-        let parents_documents_id = meta_automerge_doc
-            .get(&parents_id, DOCUMENTS_MAP_KEY)
-            .unwrap()
-            .map(|result| result.1)
-            .unwrap();
-        let parent_key = encode_base64_nopad(&parent_id);
-        let parent_document_id = meta_automerge_doc.put_object(
-            &parents_documents_id,
-            parent_key,
-            automerge::ObjType::Map,
-        )?;
-        meta_automerge_doc.put(&parent_document_id, NAME_KEY, &parent_header.name)?;
-        if let Some(description) = &parent_header.description {
-            meta_automerge_doc.put(&parent_document_id, DESCRIPTION_KEY, description)?;
+        if let Some(parent_header) = parent_header {
+            let parents_documents_id = meta_automerge_doc
+                .get(&parents_id, DOCUMENTS_MAP_KEY)
+                .unwrap()
+                .map(|result| result.1)
+                .unwrap();
+            let parent_key = encode_base64_nopad(&parent_id);
+            let parent_document_id = meta_automerge_doc.put_object(
+                &parents_documents_id,
+                parent_key,
+                automerge::ObjType::Map,
+            )?;
+            meta_automerge_doc.put(&parent_document_id, NAME_KEY, &parent_header.name)?;
+            if let Some(description) = &parent_header.description {
+                meta_automerge_doc.put(&parent_document_id, DESCRIPTION_KEY, description)?;
+            }
         }
         let parents_peers_id = meta_automerge_doc
             .get(&parents_id, PEERS_MAP_KEY)

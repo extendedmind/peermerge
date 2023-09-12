@@ -110,6 +110,22 @@ where
     pub(crate) child_document_info: Option<ChildDocumentInfo>,
 }
 
+#[derive(Debug)]
+pub(crate) enum DocumentParent {
+    /// A parent that has already been registered to the
+    /// document.
+    Registered {
+        child_document_info: ChildDocumentInfo,
+        parent_id: DocumentId,
+    },
+    /// A parent that is new to this document.
+    New {
+        parent_id: DocumentId,
+        signing_key: SigningKey,
+        parent_header: NameDescription,
+    },
+}
+
 impl<T, U> Document<T, U>
 where
     T: RandomAccess + Debug + Send + 'static,
@@ -235,8 +251,8 @@ where
 
     pub(crate) async fn merge_remote_child_document(
         &mut self,
-        remote_child_document_info: ChildDocumentInfo,
-    ) -> Result<Option<DocumentSecret>, PeermergeError> {
+        remote_child_document_info: &mut ChildDocumentInfo,
+    ) -> Result<Option<DecodedDocUrl>, PeermergeError> {
         let mut document_state = self.document_state.lock().await;
         Ok(document_state
             .merge_child_document_and_persist(remote_child_document_info)
@@ -245,16 +261,19 @@ where
 
     pub(crate) async fn add_created_child_document(
         &mut self,
-        child_document_info: ChildDocumentInfo,
+        mut child_document_info: ChildDocumentInfo,
+        child_document_url: &str,
         child_document_secret: DocumentSecret,
     ) -> Result<(), PeermergeError> {
         if self.access_type != AccessType::ReadWrite {
             panic!("Can not add created child to Proxy or ReadOnly peer");
         }
         let mut document_state = self.document_state.lock().await;
+        child_document_info.status = ChildDocumentStatus::Created;
         let entries = document_state
             .add_created_child_document(
-                child_document_info,
+                child_document_info.clone(),
+                child_document_url,
                 child_document_secret,
                 self.settings.max_entry_data_size_bytes,
             )
@@ -284,6 +303,37 @@ where
                 },
             )
             .await;
+
+        // Finally, notify the doc peer that there is a new child document, so that peers connected
+        // to this document get the info via broadcasting.
+        let doc_feed = get_feed(&self.feeds, &self.doc_discovery_key)
+            .await
+            .unwrap();
+        let mut doc_feed = doc_feed.lock().await;
+        doc_feed
+            .notify_child_document_created(child_document_info)
+            .await?;
+        Ok(())
+    }
+
+    pub(crate) async fn set_child_document_created(
+        &mut self,
+        child_document_info: &ChildDocumentInfo,
+    ) -> Result<(), PeermergeError> {
+        let mut document_state = self.document_state.lock().await;
+        let created_child_document = document_state
+            .set_child_document_created_and_persist(child_document_info)
+            .await;
+
+        // Finally, notify the doc peer that there is a new child document, so that peers connected
+        // to this document get the info via broadcasting.
+        let doc_feed = get_feed(&self.feeds, &self.doc_discovery_key)
+            .await
+            .unwrap();
+        let mut doc_feed = doc_feed.lock().await;
+        doc_feed
+            .notify_child_document_created(created_child_document)
+            .await?;
         Ok(())
     }
 
@@ -914,7 +964,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
         peer_header: &NameDescription,
         mut decoded_doc_url: DecodedDocUrl,
         mut reattach_secrets: Option<HashMap<DocumentId, SigningKey>>,
-        parent_id_signing_key_and_header: Option<(DocumentId, SigningKey, NameDescription)>,
+        document_parent: Option<DocumentParent>,
         settings: DocumentSettings,
     ) -> Result<NewDocumentResult<RandomAccessMemory, FeedMemoryPersistence>, PeermergeError> {
         let mut state_events: Vec<StateEvent> = vec![];
@@ -953,11 +1003,8 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
         .await;
 
         // If this is a child document, create the child document info
-        let (child_document_info, parent_id, parent_header) = get_child_document_info(
-            parent_id_signing_key_and_header,
-            doc_public_key,
-            doc_signature_verifying_key,
-        );
+        let (child_document_info, parent_id, parent_header) =
+            get_child_document_info(document_parent, doc_public_key, doc_signature_verifying_key);
 
         let (content, feeds_state, write_discovery_key_and_feed, reattach_secrets) =
             match access_type {
@@ -1335,7 +1382,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
         peer_id: PeerId,
         peer_header: &NameDescription,
         mut decoded_doc_url: DecodedDocUrl,
-        parent_id_signing_key_and_header: Option<(DocumentId, SigningKey, NameDescription)>,
+        document_parent: Option<DocumentParent>,
         data_root_dir: &Path,
         settings: DocumentSettings,
     ) -> Result<NewDocumentResult<RandomAccessDisk, FeedDiskPersistence>, PeermergeError> {
@@ -1380,11 +1427,8 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
         .await;
 
         // If this is a child document, create the child document info
-        let (child_document_info, parent_id, parent_header) = get_child_document_info(
-            parent_id_signing_key_and_header,
-            doc_public_key,
-            doc_signature_verifying_key,
-        );
+        let (child_document_info, parent_id, parent_header) =
+            get_child_document_info(document_parent, doc_public_key, doc_signature_verifying_key);
 
         let (content, feeds_state, write_discovery_key_and_feed) = match access_type {
             AccessType::ReadWrite => {
@@ -1916,7 +1960,7 @@ where
 }
 
 fn get_child_document_info(
-    parent_id_signing_key_and_header: Option<(DocumentId, SigningKey, NameDescription)>,
+    document_parent: Option<DocumentParent>,
     doc_public_key: FeedPublicKey,
     doc_signature_verifying_key: VerifyingKey,
 ) -> (
@@ -1924,23 +1968,32 @@ fn get_child_document_info(
     Option<DocumentId>,
     Option<NameDescription>,
 ) {
-    if let Some((parent_id, parent_doc_signature_signing_key, parent_header)) =
-        parent_id_signing_key_and_header
-    {
-        let mut buffer: Vec<u8> = doc_public_key.to_vec();
-        buffer.extend(doc_signature_verifying_key.to_bytes());
-        let signature: Vec<u8> =
-            create_signature(&mut buffer, &parent_doc_signature_signing_key).to_vec();
-        (
-            Some(ChildDocumentInfo {
-                doc_public_key,
-                doc_signature_verifying_key,
-                signature,
-                status: ChildDocumentStatus::NotCreated,
-            }),
-            Some(parent_id),
-            Some(parent_header),
-        )
+    if let Some(document_parent) = document_parent {
+        match document_parent {
+            DocumentParent::New {
+                parent_id,
+                signing_key,
+                parent_header,
+            } => {
+                let mut buffer: Vec<u8> = doc_public_key.to_vec();
+                buffer.extend(doc_signature_verifying_key.to_bytes());
+                let signature: Vec<u8> = create_signature(&mut buffer, &signing_key).to_vec();
+                (
+                    Some(ChildDocumentInfo {
+                        doc_public_key,
+                        doc_signature_verifying_key,
+                        signature,
+                        status: ChildDocumentStatus::NotCreated,
+                    }),
+                    Some(parent_id),
+                    Some(parent_header),
+                )
+            }
+            DocumentParent::Registered {
+                child_document_info,
+                parent_id,
+            } => (Some(child_document_info), Some(parent_id), None),
+        }
     } else {
         (None, None, None)
     }
@@ -1988,7 +2041,11 @@ where
 
     // If this is a child document, create the child document info
     let (child_document_info, parent_id, parent_header) = get_child_document_info(
-        parent_id_signing_key_and_header,
+        parent_id_signing_key_and_header.map(|value| DocumentParent::New {
+            parent_id: value.0,
+            signing_key: value.1,
+            parent_header: value.2,
+        }),
         doc_public_key,
         doc_signature_verifying_key,
     );

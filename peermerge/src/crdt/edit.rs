@@ -1,10 +1,10 @@
 use automerge::{AutomergeError, Change, ChangeHash, ObjId};
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use super::{read_child_document_secret, save_child_document, AutomergeDoc};
+use super::{read_child_document_url_and_secret, save_child_document, AutomergeDoc};
 use crate::{
     common::{
-        cipher::{decode_document_secret_bytes, DocumentSecret},
+        cipher::{decode_doc_url, decode_document_secret_bytes, DecodedDocUrl},
         entry::{split_change_into_entries, Entry, EntryContent, ShrunkEntries},
     },
     feeds::FeedDiscoveryKey,
@@ -364,10 +364,16 @@ where
 pub(crate) fn add_child_document(
     meta_automerge_doc: &mut AutomergeDoc,
     child_document_id: DocumentId,
+    child_document_url: &str,
     child_document_secret: Vec<u8>,
     max_entry_data_size_bytes: usize,
 ) -> Result<Vec<Entry>, PeermergeError> {
-    save_child_document(meta_automerge_doc, child_document_id, child_document_secret)?;
+    save_child_document(
+        meta_automerge_doc,
+        child_document_id,
+        child_document_url,
+        child_document_secret,
+    )?;
     let entries: Vec<Entry> = meta_automerge_doc
         .get_last_local_change()
         .map(|change| split_change_into_entries(true, change.clone(), max_entry_data_size_bytes))
@@ -376,14 +382,18 @@ pub(crate) fn add_child_document(
     Ok(entries)
 }
 
-pub(crate) fn get_child_document_secret(
+pub(crate) fn get_child_document_decoded_url(
     meta_automerge_doc: &AutomergeDoc,
     child_document_id: DocumentId,
-) -> Option<DocumentSecret> {
-    read_child_document_secret(meta_automerge_doc, child_document_id).map(|document_secret_bytes| {
-        decode_document_secret_bytes(&document_secret_bytes)
-            .expect("Stored document secret should not be invalid")
-    })
+) -> Option<DecodedDocUrl> {
+    read_child_document_url_and_secret(meta_automerge_doc, child_document_id).map(
+        |(document_url, document_secret_bytes)| {
+            let document_secret = decode_document_secret_bytes(&document_secret_bytes)
+                .expect("Stored document secret should not be invalid");
+            decode_doc_url(&document_url, &Some(document_secret))
+                .expect("Stored document URL should not be invalid")
+        },
+    )
 }
 
 #[cfg(test)]
