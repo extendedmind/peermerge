@@ -60,13 +60,21 @@ pub(crate) struct FeedVerificationMessage {
 }
 
 /// An FeedSyncedMessage is an internal message that contains new length
-/// of a hypercore for inter-protocol signaling.
+/// of a hypercore for inter-protocol signaling, and also the pending
+/// child documents that could not yet be created.
 #[derive(Debug)]
 pub(crate) struct FeedSyncedMessage {
     pub(crate) contiguous_length: u64,
+    pub(crate) pending_child_documents: Vec<ChildDocumentInfo>,
 }
 impl FeedSyncedMessage {
-    pub(crate) fn new(contiguous_length: u64) -> Self {
-        Self { contiguous_length }
+    pub(crate) fn new(
+        contiguous_length: u64,
+        pending_child_documents: Vec<ChildDocumentInfo>,
+    ) -> Self {
+        Self {
+            contiguous_length,
+            pending_child_documents,
+        }
     }
 }

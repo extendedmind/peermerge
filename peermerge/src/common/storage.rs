@@ -8,7 +8,10 @@ use std::{fmt::Debug, path::PathBuf};
 
 use crate::{
     common::state::{DocumentState, PeermergeState},
-    crdt::{add_child_document, AutomergeDoc, DocsChangeResult, UnappliedEntries},
+    crdt::{
+        add_child_document, get_child_document_secret, AutomergeDoc, DocsChangeResult,
+        UnappliedEntries,
+    },
     document::DocumentSettings,
     feeds::FeedDiscoveryKey,
     DocumentId, NameDescription, PeerId, PeermergeError,
@@ -16,6 +19,7 @@ use crate::{
 
 use super::{
     cipher::{encode_document_secret_to_bytes, DocumentSecret},
+    entry::Entry,
     keys::{discovery_key_from_public_key, document_id_from_discovery_key},
     state::{
         ChangeDocumentFeedsStateResult, ChildDocumentInfo, DocumentContent, DocumentFeedInfo,
@@ -200,10 +204,12 @@ where
 
     pub(crate) async fn add_child_document(
         &mut self,
-        child_document_info: ChildDocumentInfo,
+        mut child_document_info: ChildDocumentInfo,
         child_document_secret: DocumentSecret,
-    ) {
-        if let Some(content) = self.state.content.as_mut() {
+        max_entry_data_size_bytes: usize,
+    ) -> Result<Vec<Entry>, PeermergeError> {
+        child_document_info.creation_pending = false;
+        let entries = if let Some(content) = self.state.content.as_mut() {
             if let Some(meta_automerge_doc) = content.meta_automerge_doc.as_mut() {
                 let child_document_secret: Vec<u8> =
                     encode_document_secret_to_bytes(&child_document_secret).to_vec();
@@ -211,21 +217,67 @@ where
                     discovery_key_from_public_key(&child_document_info.doc_public_key);
                 let child_document_id =
                     document_id_from_discovery_key(&child_document_discovery_key);
-                let meta_doc_data = add_child_document(
+                add_child_document(
                     meta_automerge_doc,
                     child_document_id,
                     child_document_secret,
-                )
-                .unwrap();
-                content.meta_doc_data = meta_doc_data;
+                    max_entry_data_size_bytes,
+                )?
             } else {
                 panic!("Can not add a child to a document without an initialized meta doc");
             }
         } else {
             panic!("Can not add a child to a document without content");
-        }
+        };
+
         self.state.child_documents.push(child_document_info);
-        write_document_state(&self.state, &mut self.storage).await;
+        Ok(entries)
+    }
+
+    pub(crate) async fn merge_child_document(
+        &mut self,
+        mut child_document_info: ChildDocumentInfo,
+    ) -> Option<DocumentSecret> {
+        child_document_info.creation_pending = true;
+        let stored_document_secret = if let Some(content) = self.state.content.as_ref() {
+            if let Some(meta_automerge_doc) = content.meta_automerge_doc.as_ref() {
+                let child_document_discovery_key =
+                    discovery_key_from_public_key(&child_document_info.doc_public_key);
+                let child_document_id =
+                    document_id_from_discovery_key(&child_document_discovery_key);
+                let stored = get_child_document_secret(meta_automerge_doc, child_document_id);
+                if stored.is_some() {
+                    // Found the secret immediately, mark this as not pending
+                    child_document_info.creation_pending = false;
+                }
+                stored
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let changed = if let Some(stored_child_document_info) = self
+            .state
+            .child_documents
+            .iter_mut()
+            .find(|info| *info == &child_document_info)
+        {
+            if stored_child_document_info.creation_pending != child_document_info.creation_pending {
+                stored_child_document_info.creation_pending = child_document_info.creation_pending;
+                true
+            } else {
+                false
+            }
+        } else {
+            self.state.child_documents.push(child_document_info);
+            true
+        };
+        if changed {
+            write_document_state(&self.state, &mut self.storage).await;
+        }
+        stored_document_secret
     }
 
     pub(crate) fn user_automerge_doc(&self) -> Option<&AutomergeDoc> {

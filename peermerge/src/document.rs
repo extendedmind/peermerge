@@ -233,15 +233,57 @@ where
         state.feeds_state.peer_id(discovery_key)
     }
 
+    pub(crate) async fn merge_remote_child_document(
+        &mut self,
+        remote_child_document_info: ChildDocumentInfo,
+    ) -> Result<Option<DocumentSecret>, PeermergeError> {
+        let mut document_state = self.document_state.lock().await;
+        Ok(document_state
+            .merge_child_document(remote_child_document_info)
+            .await)
+    }
+
     pub(crate) async fn add_child_document(
-        &self,
+        &mut self,
         child_document_info: ChildDocumentInfo,
         child_document_secret: DocumentSecret,
-    ) {
-        let mut state = self.document_state.lock().await;
-        state
-            .add_child_document(child_document_info, child_document_secret)
-            .await
+    ) -> Result<(), PeermergeError> {
+        let mut document_state = self.document_state.lock().await;
+        let entries = document_state
+            .add_child_document(
+                child_document_info,
+                child_document_secret,
+                self.settings.max_entry_data_size_bytes,
+            )
+            .await?;
+        if !entries.is_empty() && self.access_type == AccessType::ReadWrite {
+            let write_discovery_key = document_state.write_discovery_key();
+            let length = {
+                let write_feed = get_feed(&self.feeds, &write_discovery_key).await.unwrap();
+                let mut write_feed = write_feed.lock().await;
+                let entry_data_batch: Vec<Vec<u8>> = entries
+                    .into_iter()
+                    .map(|entry| serialize_entry(&entry))
+                    .collect::<Result<Vec<Vec<u8>>, PeermergeError>>()?;
+                write_feed
+                    .append_batch(
+                        entry_data_batch,
+                        self.doc_signature_key_pair.secret.as_ref().unwrap(),
+                    )
+                    .await?
+            };
+            document_state
+                .set_cursor_and_save_data(
+                    &write_discovery_key,
+                    length,
+                    DocsChangeResult {
+                        meta_changed: true,
+                        user_changed: false,
+                    },
+                )
+                .await;
+        }
+        Ok(())
     }
 
     pub(crate) async fn document_header(&self) -> Option<NameDescription> {
@@ -541,9 +583,10 @@ where
                 return vec![];
             }
         }
-        let state_events: Vec<StateEvent> = {
+        let (state_events, pending_child_documents): (Vec<StateEvent>, Vec<ChildDocumentInfo>) = {
             // Sync doc state exclusively...
             let mut document_state = self.document_state.lock().await;
+            let pending_child_documents = document_state.state().pending_child_documents();
             let (document_initialized, patches, peer_syncs) =
                 if let Some((content, feeds_state, unapplied_entries)) =
                     document_state.content_feeds_state_and_unapplied_entries_mut()
@@ -597,11 +640,14 @@ where
                     panic!("Content needs to exist for non-proxy documents");
                 };
 
-            self.state_events_from_update_content_result(
-                &document_state,
-                document_initialized,
-                patches,
-                peer_syncs,
+            (
+                self.state_events_from_update_content_result(
+                    &document_state,
+                    document_initialized,
+                    patches,
+                    peer_syncs,
+                ),
+                pending_child_documents,
             )
             // ..doc state sync ready, release lock
         };
@@ -611,7 +657,7 @@ where
         {
             let feed = get_feed(&self.feeds, &discovery_key).await.unwrap();
             let mut feed = feed.lock().await;
-            feed.notify_feed_synced(synced_contiguous_length)
+            feed.notify_feed_synced(synced_contiguous_length, pending_child_documents)
                 .await
                 .unwrap();
         }

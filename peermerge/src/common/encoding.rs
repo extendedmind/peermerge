@@ -763,7 +763,13 @@ impl CompactEncoding<FeedVerificationMessage> for State {
 
 impl CompactEncoding<FeedSyncedMessage> for State {
     fn preencode(&mut self, value: &FeedSyncedMessage) -> Result<usize, EncodingError> {
-        self.preencode(&value.contiguous_length)
+        self.preencode(&value.contiguous_length)?;
+        let len = value.pending_child_documents.len();
+        for child_document in &value.pending_child_documents {
+            self.preencode(child_document)?;
+        }
+        self.preencode(&len)?;
+        Ok(self.end())
     }
 
     fn encode(
@@ -771,12 +777,27 @@ impl CompactEncoding<FeedSyncedMessage> for State {
         value: &FeedSyncedMessage,
         buffer: &mut [u8],
     ) -> Result<usize, EncodingError> {
-        self.encode(&value.contiguous_length, buffer)
+        self.encode(&value.contiguous_length, buffer)?;
+        let len = value.pending_child_documents.len();
+        self.encode(&len, buffer)?;
+        for child_document in &value.pending_child_documents {
+            self.encode(child_document, buffer)?;
+        }
+        Ok(self.start())
     }
 
     fn decode(&mut self, buffer: &[u8]) -> Result<FeedSyncedMessage, EncodingError> {
         let contiguous_length: u64 = self.decode(buffer)?;
-        Ok(FeedSyncedMessage { contiguous_length })
+        let len: usize = self.decode(buffer)?;
+        let mut pending_child_documents: Vec<ChildDocumentInfo> = Vec::with_capacity(len);
+        for _ in 0..len {
+            let doc: ChildDocumentInfo = self.decode(buffer)?;
+            pending_child_documents.push(doc);
+        }
+        Ok(FeedSyncedMessage {
+            contiguous_length,
+            pending_child_documents,
+        })
     }
 }
 

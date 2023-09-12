@@ -340,11 +340,11 @@ where
             }
         }
         if let Some(child_document_info) = result.child_document_info {
-            let parent_document = parent_document.take().unwrap();
+            let mut parent_document = parent_document.take().unwrap();
             let document_secret = result.document.document_secret().unwrap();
             parent_document
                 .add_child_document(child_document_info, document_secret)
-                .await;
+                .await?;
         }
         Ok(result.document)
     }
@@ -542,6 +542,23 @@ async fn on_feed_event_memory(
                 document
                     .process_new_feeds_broadcasted_memory(new_feeds)
                     .await;
+            }
+            FeedEventContent::NewChildDocumentsBroadcasted {
+                new_child_documents,
+            } => {
+                let mut parent_document =
+                    get_document_by_discovery_key(&documents, &event.doc_discovery_key)
+                        .await
+                        .unwrap();
+                for new_child_document in new_child_documents {
+                    if let Some(_stored_document_secret) = parent_document
+                        .merge_remote_child_document(new_child_document)
+                        .await
+                        .unwrap()
+                    {
+                        // TODO: create, then mark as created
+                    }
+                }
             }
             _ => process_feed_event(event, &mut state_event_sender, &mut documents).await,
         }
@@ -751,6 +768,24 @@ async fn on_feed_event_disk(
                         .unwrap();
                 document.process_new_feeds_broadcasted_disk(new_feeds).await;
             }
+            FeedEventContent::NewChildDocumentsBroadcasted {
+                new_child_documents,
+            } => {
+                let mut parent_document =
+                    get_document_by_discovery_key(&documents, &event.doc_discovery_key)
+                        .await
+                        .unwrap();
+                for new_child_document in new_child_documents {
+                    if let Some(_stored_document_secret) = parent_document
+                        .merge_remote_child_document(new_child_document)
+                        .await
+                        .unwrap()
+                    {
+                        // TODO: create, then mark as created
+                    }
+                }
+            }
+
             _ => process_feed_event(event, &mut state_event_sender, &mut documents).await,
         }
     }
@@ -785,6 +820,9 @@ async fn process_feed_event<T, U>(
         FeedEventContent::NewFeedsBroadcasted { .. } => {
             unreachable!("Implemented by concrete type")
         }
+        FeedEventContent::NewChildDocumentsBroadcasted { .. } => {
+            unreachable!("Implemented by concrete type")
+        }
         FeedEventContent::FeedDisconnected { .. } => {
             // This is an FYI message, just continue for now
         }
@@ -813,8 +851,10 @@ async fn process_feed_event<T, U>(
             let state_events = document
                 .process_remote_feed_synced(peer_id, discovery_key, contiguous_length)
                 .await;
-            for state_event in state_events {
-                state_event_sender.unbounded_send(state_event).unwrap();
+            if !state_event_sender.is_closed() {
+                for state_event in state_events {
+                    state_event_sender.unbounded_send(state_event).unwrap();
+                }
             }
         }
         FeedEventContent::FeedSynced {
@@ -828,8 +868,11 @@ async fn process_feed_event<T, U>(
             let state_events = document
                 .process_feed_synced(peer_id, discovery_key, contiguous_length)
                 .await;
-            for state_event in state_events {
-                state_event_sender.unbounded_send(state_event).unwrap();
+
+            if !state_event_sender.is_closed() {
+                for state_event in state_events {
+                    state_event_sender.unbounded_send(state_event).unwrap();
+                }
             }
         }
     }

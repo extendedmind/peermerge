@@ -5,8 +5,8 @@ use automerge::{
 use std::collections::HashMap;
 
 use super::{
-    apply_entries_autocommit, init_meta_automerge_doc, meta::save_child_document, save_first_peer,
-    save_peer, ApplyEntriesFeedChange, AutomergeDoc, UnappliedEntries,
+    apply_entries_autocommit, init_meta_automerge_doc, save_first_peer, save_peer,
+    ApplyEntriesFeedChange, AutomergeDoc, UnappliedEntries,
 };
 use crate::{
     common::entry::{Entry, EntryContent, ShrunkEntries},
@@ -114,16 +114,6 @@ pub(crate) fn init_peer(
         max_entry_data_size_bytes,
     );
     Ok(entries)
-}
-
-pub(crate) fn add_child_document(
-    meta_automerge_doc: &mut AutomergeDoc,
-    child_document_id: DocumentId,
-    child_document_secret: Vec<u8>,
-) -> Result<Vec<u8>, PeermergeError> {
-    save_child_document(meta_automerge_doc, child_document_id, child_document_secret)?;
-    let meta_doc_data = save_automerge_doc(meta_automerge_doc);
-    Ok(meta_doc_data)
 }
 
 pub(crate) struct BootstrapAutomergeUserDocResult {

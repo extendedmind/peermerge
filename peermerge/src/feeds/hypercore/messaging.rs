@@ -38,7 +38,7 @@ const CLOSED_LOCAL_SIGNAL_NAME: &str = "closed";
 
 pub(super) fn create_broadcast_message(
     feeds_state: &DocumentFeedsState,
-    child_documents: &Vec<ChildDocumentInfo>,
+    child_documents: &[ChildDocumentInfo],
     active_feeds_to_include: &Vec<DocumentFeedInfo>,
     inactive_feeds: Option<Vec<DocumentFeedInfo>>,
 ) -> Message {
@@ -61,7 +61,7 @@ pub(super) fn create_broadcast_message(
         write_feed: feeds_state.write_feed.clone(),
         active_feeds: all_active_feeds,
         inactive_feeds,
-        child_documents: child_documents.clone(),
+        child_documents: child_documents.to_vec(),
     };
     let mut enc_state = State::new();
     enc_state
@@ -89,8 +89,11 @@ pub(super) fn create_append_local_signal(length: u64) -> Message {
     Message::LocalSignal((APPEND_LOCAL_SIGNAL_NAME.to_string(), buffer.to_vec()))
 }
 
-pub(super) fn create_feed_synced_local_signal(contiguous_length: u64) -> Message {
-    let message = FeedSyncedMessage::new(contiguous_length);
+pub(super) fn create_feed_synced_local_signal(
+    contiguous_length: u64,
+    pending_child_documents: Vec<ChildDocumentInfo>,
+) -> Message {
+    let message = FeedSyncedMessage::new(contiguous_length, pending_child_documents);
     let mut enc_state = State::new();
     enc_state
         .preencode(&message)
@@ -457,9 +460,29 @@ where
                     peer_state.is_doc,
                     "Only doc feed should ever get broadcast messages"
                 );
+                let mut feed_events: Vec<FeedEvent> = vec![];
                 let feeds_state = peer_state.feeds_state.as_mut().unwrap();
                 let mut dec_state = State::from_buffer(&message.message);
                 let broadcast_message: BroadcastMessage = dec_state.decode(&message.message)?;
+                if !broadcast_message.child_documents.is_empty() {
+                    // Check if there are brand new documents broadcasted
+                    let new_child_documents: Vec<ChildDocumentInfo> = broadcast_message
+                        .child_documents
+                        .into_iter()
+                        .filter(|document| !peer_state.child_documents.contains(document))
+                        .collect();
+                    if !new_child_documents.is_empty() {
+                        for new_child_document in &new_child_documents {
+                            new_child_document.verify(&peer_state.doc_signature_verifying_key)?;
+                        }
+                        feed_events.push(FeedEvent::new(
+                            peer_state.doc_discovery_key,
+                            NewChildDocumentsBroadcasted {
+                                new_child_documents,
+                            },
+                        ));
+                    }
+                }
                 let compare_result = feeds_state.compare_broadcasted_feeds(
                     broadcast_message.write_feed,
                     broadcast_message.active_feeds,
@@ -497,14 +520,15 @@ where
                     peer_state
                         .broadcast_new_feeds
                         .extend(compare_result.new_feeds.clone());
-                    // New remote feeds found, return a feed event
-                    return Ok(vec![FeedEvent::new(
+                    // New remote feeds found
+                    feed_events.push(FeedEvent::new(
                         peer_state.doc_discovery_key,
                         NewFeedsBroadcasted {
                             new_feeds: compare_result.new_feeds,
                         },
-                    )]);
+                    ));
                 }
+                return Ok(feed_events);
             }
             _ => {
                 panic!("Received unexpected extension message {message:?}");
@@ -551,6 +575,15 @@ where
                     };
                     peer_state.contiguous_range_sent = contiguous_length;
                     channel.send(Message::Range(range_msg)).await?;
+                }
+                if !message.pending_child_documents.is_empty() {
+                    // Let's just try again to create the documents now that we have more info.
+                    return Ok(vec![FeedEvent::new(
+                        peer_state.doc_discovery_key,
+                        NewChildDocumentsBroadcasted {
+                            new_child_documents: message.pending_child_documents,
+                        },
+                    )]);
                 }
             }
             FEEDS_CHANGED_LOCAL_SIGNAL_NAME => {

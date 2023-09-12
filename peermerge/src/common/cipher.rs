@@ -316,8 +316,14 @@ pub(crate) fn decode_document_secret(
     document_secret: &str,
 ) -> Result<DocumentSecret, PeermergeError> {
     let document_secret = decode_base64_nopad(document_secret)?;
-    let mut dec_state = State::from_buffer(&document_secret);
-    let document_secret: DocumentSecret = dec_state.decode(&document_secret)?;
+    decode_document_secret_bytes(&document_secret)
+}
+
+pub(crate) fn decode_document_secret_bytes(
+    document_secret: &[u8],
+) -> Result<DocumentSecret, PeermergeError> {
+    let mut dec_state = State::from_buffer(document_secret);
+    let document_secret: DocumentSecret = dec_state.decode(document_secret)?;
     if document_secret.version != PEERMERGE_VERSION {
         return Err(PeermergeError::BadArgument {
             context: format!(

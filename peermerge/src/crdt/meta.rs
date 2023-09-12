@@ -147,6 +147,31 @@ pub(crate) fn save_child_document(
     Ok(())
 }
 
+pub(crate) fn read_child_document_secret(
+    meta_automerge_doc: &AutomergeDoc,
+    child_document_id: DocumentId,
+) -> Option<Vec<u8>> {
+    let child_documents_id = meta_automerge_doc
+        .get(ROOT, DOCUMENTS_MAP_KEY)
+        .unwrap()
+        .map(|result| result.1)
+        .unwrap();
+    let child_key = encode_base64_nopad(&child_document_id);
+    let child_document_id = meta_automerge_doc
+        .get(&child_documents_id, child_key)
+        .unwrap()
+        .map(|result| result.1);
+    if let Some(child_document_id) = child_document_id {
+        meta_automerge_doc
+            .get(&child_document_id, DOCUMENT_SECRET_KEY)
+            .unwrap()
+            .and_then(|result| result.0.to_scalar().cloned())
+            .map(|description_scalar_value| description_scalar_value.into_bytes().unwrap())
+    } else {
+        None
+    }
+}
+
 pub(crate) fn read_document_type_and_header(
     meta_automerge_doc: &AutomergeDoc,
 ) -> Option<(String, Option<NameDescription>)> {

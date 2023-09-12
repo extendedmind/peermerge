@@ -259,6 +259,14 @@ impl DocumentState {
             None
         }
     }
+
+    pub(crate) fn pending_child_documents(&self) -> Vec<ChildDocumentInfo> {
+        self.child_documents
+            .iter()
+            .filter(|info| info.creation_pending)
+            .cloned()
+            .collect()
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -310,6 +318,17 @@ impl ChildDocumentInfo {
             signature,
             creation_pending,
         }
+    }
+
+    pub(crate) fn verify(
+        &self,
+        parent_doc_signature_verifying_key: &VerifyingKey,
+    ) -> Result<(), PeermergeError> {
+        let mut buffer = self.doc_public_key.to_vec();
+        buffer.extend(self.doc_signature_verifying_key.to_bytes());
+        buffer.extend(&self.signature);
+        verify_data_signature(&buffer, parent_doc_signature_verifying_key)?;
+        Ok(())
     }
 }
 
