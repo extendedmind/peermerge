@@ -168,24 +168,30 @@ impl DocumentState {
 
     pub(crate) fn doc_url(
         &mut self,
-        initial_meta_doc_data: Vec<u8>,
         doc_signature_signing_key: &SigningKey,
         encryption_key: &Option<Vec<u8>>,
     ) -> String {
-        if let Some((document_type, document_header)) = self.document_type_and_header() {
-            encode_doc_url(
-                &self.feeds_state.doc_public_key,
-                doc_signature_signing_key,
-                false,
-                &Some(DocUrlAppendix {
-                    meta_doc_data: initial_meta_doc_data,
-                    document_type,
-                    document_header,
-                }),
-                encryption_key,
-            )
+        if let Some(content) = self.content.as_mut() {
+            let initial_meta_doc_data = content.initial_meta_doc_data.clone();
+            if let Some((document_type, document_header)) =
+                document_type_and_header_from_content(content)
+            {
+                encode_doc_url(
+                    &self.feeds_state.doc_public_key,
+                    doc_signature_signing_key,
+                    false,
+                    &Some(DocUrlAppendix {
+                        meta_doc_data: initial_meta_doc_data,
+                        document_type,
+                        document_header,
+                    }),
+                    encryption_key,
+                )
+            } else {
+                panic!("Can't encode doc url as there is no document type or header info");
+            }
         } else {
-            panic!("Can't encode doc url as there is no document type or header info");
+            panic!("Can't get document URL without content");
         }
     }
 
@@ -205,28 +211,7 @@ impl DocumentState {
 
     pub(crate) fn document_type_and_header(&mut self) -> Option<(String, Option<NameDescription>)> {
         if let Some(content) = self.content.as_mut() {
-            if let Some(meta_automerge_doc) = &content.meta_automerge_doc {
-                let stored_type_and_header = read_document_type_and_header(meta_automerge_doc);
-                if stored_type_and_header.is_some() {
-                    if content.temporary_document_type.is_some() {
-                        // Remove temporary values when dynamic values are found
-                        content.temporary_document_type = None;
-                        content.temporary_document_header = None;
-                    }
-                    stored_type_and_header
-                } else {
-                    // Return temporarily stored values
-                    Some((
-                        content
-                            .temporary_document_type
-                            .clone()
-                            .expect("Temporary document type should always have a value when meta document doesn't"),
-                        content.temporary_document_header.clone(),
-                    ))
-                }
-            } else {
-                panic!("Meta automerge doc should always be initialized");
-            }
+            document_type_and_header_from_content(content)
         } else {
             None
         }
@@ -266,6 +251,32 @@ impl DocumentState {
             .filter(|info| info.status == ChildDocumentStatus::NotCreated)
             .cloned()
             .collect()
+    }
+}
+
+fn document_type_and_header_from_content(
+    content: &mut DocumentContent,
+) -> Option<(String, Option<NameDescription>)> {
+    let meta_automerge_doc = content
+        .meta_automerge_doc
+        .as_ref()
+        .expect("Meta automerge doc should always be initialized");
+    let stored_type_and_header = read_document_type_and_header(meta_automerge_doc);
+    if stored_type_and_header.is_some() {
+        if content.temporary_document_type.is_some() {
+            // Remove temporary values when dynamic values are found
+            content.temporary_document_type = None;
+            content.temporary_document_header = None;
+        }
+        stored_type_and_header
+    } else {
+        // Return temporarily stored values
+        Some((
+            content.temporary_document_type.clone().expect(
+                "Temporary document type should always have a value when meta document doesn't",
+            ),
+            content.temporary_document_header.clone(),
+        ))
     }
 }
 
@@ -1150,6 +1161,12 @@ pub(crate) struct DocumentContent {
     /// Cursors of feeds which have been read to get the below fields.
     /// Can also be empty when meta_doc_data is read from a doc URL.
     pub(crate) cursors: Vec<DocumentCursor>,
+    /// Static data blob containing initial meta doc data sent in the
+    /// doc URL as seed to other peers. This is also in the doc feed's
+    /// first entry, but reading it from there needs the doc feed to be
+    /// synced. Storing this here makes it possible to attach a child
+    /// document. This is always small in size.
+    pub(crate) initial_meta_doc_data: Vec<u8>,
     /// Data blob containing meta_automerge_doc.
     pub(crate) meta_doc_data: Vec<u8>,
     /// Data blob containing user_doc_data. Is missing on
@@ -1183,6 +1200,7 @@ impl DocumentContent {
         doc_feed_length: usize,
         write_discovery_key: &FeedDiscoveryKey,
         write_feed_length: usize,
+        initial_meta_doc_data: Vec<u8>,
         meta_doc_data: Vec<u8>,
         user_doc_data: Option<Vec<u8>>,
         meta_automerge_doc: AutomergeDoc,
@@ -1197,6 +1215,7 @@ impl DocumentContent {
         Self {
             peer_id,
             cursors,
+            initial_meta_doc_data,
             meta_doc_data,
             user_doc_data,
             meta_automerge_doc: Some(meta_automerge_doc),

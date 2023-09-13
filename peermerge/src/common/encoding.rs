@@ -392,6 +392,7 @@ impl CompactEncoding<DocumentContent> for State {
     fn preencode(&mut self, value: &DocumentContent) -> Result<usize, EncodingError> {
         self.add_end(1)?; // flags
         self.preencode_fixed_16()?; // peer_id
+        self.preencode(&value.initial_meta_doc_data)?;
         self.preencode(&value.meta_doc_data)?;
         let len = value.cursors.len();
         if len > 0 {
@@ -421,6 +422,7 @@ impl CompactEncoding<DocumentContent> for State {
         let mut flags: u8 = 0;
         self.add_start(1)?;
         self.encode_fixed_16(&value.peer_id, buffer)?;
+        self.encode(&value.initial_meta_doc_data, buffer)?;
         self.encode(&value.meta_doc_data, buffer)?;
         let len = value.cursors.len();
         if len > 0 {
@@ -449,6 +451,7 @@ impl CompactEncoding<DocumentContent> for State {
     fn decode(&mut self, buffer: &[u8]) -> Result<DocumentContent, EncodingError> {
         let flags: u8 = self.decode(buffer)?;
         let peer_id: PeerId = self.decode_fixed_16(buffer)?.to_vec().try_into().unwrap();
+        let initial_meta_doc_data: Vec<u8> = self.decode(buffer)?;
         let meta_doc_data: Vec<u8> = self.decode(buffer)?;
         let cursors: Vec<DocumentCursor> = if flags & 1 != 0 {
             let len: usize = self.decode(buffer)?;
@@ -480,6 +483,7 @@ impl CompactEncoding<DocumentContent> for State {
         Ok(DocumentContent {
             peer_id,
             cursors,
+            initial_meta_doc_data,
             meta_doc_data,
             user_doc_data,
             meta_automerge_doc: None,

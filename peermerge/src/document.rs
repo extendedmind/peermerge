@@ -17,7 +17,7 @@ use crate::common::cipher::{
     create_signature, encode_document_id, proxy_doc_url_from_doc_url, DecodedDocUrl, DocumentSecret,
 };
 use crate::common::encoding::{serialize_entry, serialize_init_entries};
-use crate::common::entry::{EntryContent, ShrunkEntries};
+use crate::common::entry::ShrunkEntries;
 use crate::common::keys::{
     discovery_key_from_public_key, document_id_from_discovery_key, generate_keys, SigningKey,
 };
@@ -522,22 +522,10 @@ where
     #[instrument(skip_all, fields(ctx = self.log_context))]
     pub(crate) async fn sharing_info(&self) -> Result<DocumentSharingInfo, PeermergeError> {
         if let Some(doc_signature_signing_key) = &self.doc_signature_key_pair.secret {
-            let doc_feed = get_feed(&self.feeds, &self.doc_discovery_key)
-                .await
-                .unwrap();
-            let mut doc_feed = doc_feed.lock().await;
-            let init_doc_entry = &doc_feed.entries(0, 1).await?.entries[0];
-            let meta_doc_data = match &init_doc_entry.content {
-                EntryContent::InitDoc { meta_doc_data, .. } => meta_doc_data,
-                _ => panic!("Invalid doc feed"),
-            };
-
             let mut document_state = self.document_state.lock().await;
-            let doc_url = document_state.state_mut().doc_url(
-                meta_doc_data.to_vec(),
-                doc_signature_signing_key,
-                &self.encryption_key,
-            );
+            let doc_url = document_state
+                .state_mut()
+                .doc_url(doc_signature_signing_key, &self.encryption_key);
 
             Ok(DocumentSharingInfo {
                 proxy: false,
@@ -1020,7 +1008,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
                     let doc_url_appendix = decoded_doc_url
                         .doc_url_appendix
                         .expect("Writer needs to have an appendix");
-                    let meta_doc_data = doc_url_appendix.meta_doc_data;
+                    let initial_meta_doc_data = doc_url_appendix.meta_doc_data;
 
                     // (Re)create the write feed
                     let (
@@ -1029,6 +1017,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
                         write_feed,
                         write_feed_init_data_len,
                         meta_automerge_doc,
+                        meta_doc_data,
                         reattach_secrets,
                     ) = if let Some(mut reattach_secrets) = reattach_secrets.take() {
                         let write_feed_signing_key =
@@ -1037,7 +1026,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
                         let write_public_key = write_verifying_key.to_bytes();
                         let write_discovery_key = discovery_key_from_public_key(&write_public_key);
                         let meta_automerge_doc =
-                            init_automerge_doc_from_data(&peer_id, &meta_doc_data);
+                            init_automerge_doc_from_data(&peer_id, &initial_meta_doc_data);
                         let (write_feed, _) = create_new_write_memory_feed(
                             write_feed_signing_key,
                             feeds_encrypted,
@@ -1051,6 +1040,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
                             write_feed,
                             0,
                             meta_automerge_doc,
+                            initial_meta_doc_data.clone(),
                             Some(reattach_secrets),
                         )
                     } else {
@@ -1060,8 +1050,8 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
 
                         // Init the meta document from the URL
                         let mut meta_automerge_doc =
-                            init_automerge_doc_from_data(&peer_id, &meta_doc_data);
-                        let init_peer_entries = init_peer(
+                            init_automerge_doc_from_data(&peer_id, &initial_meta_doc_data);
+                        let (init_peer_entries, meta_doc_data) = init_peer(
                             &mut meta_automerge_doc,
                             None,
                             &peer_id,
@@ -1098,6 +1088,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
                             write_feed,
                             write_feed_init_data_len,
                             meta_automerge_doc,
+                            meta_doc_data,
                             None,
                         )
                     };
@@ -1107,6 +1098,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
                         0,
                         &write_discovery_key,
                         write_feed_init_data_len,
+                        initial_meta_doc_data,
                         meta_doc_data,
                         None,
                         meta_automerge_doc,
@@ -1443,7 +1435,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
                 let doc_url_appendix = decoded_doc_url
                     .doc_url_appendix
                     .expect("Writer needs to have an appendix");
-                let meta_doc_data = doc_url_appendix.meta_doc_data;
+                let initial_meta_doc_data = doc_url_appendix.meta_doc_data;
 
                 // Create the write feed keys
                 let (write_key_pair, write_discovery_key) = generate_keys();
@@ -1451,8 +1443,9 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
                 let write_public_key = write_verifying_key.to_bytes();
 
                 // Init the meta document from the URL
-                let mut meta_automerge_doc = init_automerge_doc_from_data(&peer_id, &meta_doc_data);
-                let init_peer_entries = init_peer(
+                let mut meta_automerge_doc =
+                    init_automerge_doc_from_data(&peer_id, &initial_meta_doc_data);
+                let (init_peer_entries, meta_doc_data) = init_peer(
                     &mut meta_automerge_doc,
                     None,
                     &peer_id,
@@ -1492,6 +1485,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
                     0,
                     &write_discovery_key,
                     write_feed_init_data_len,
+                    initial_meta_doc_data,
                     meta_doc_data,
                     None,
                     meta_automerge_doc,
@@ -2102,6 +2096,7 @@ where
         doc_feed_init_data.len(),
         &write_discovery_key,
         write_feed_init_data.len(),
+        create_result.initial_meta_doc_data,
         meta_doc_data,
         Some(create_result.user_doc_data),
         create_result.meta_automerge_doc,

@@ -18,6 +18,7 @@ use crate::{
 pub(crate) struct InitAutomergeDocsResult {
     pub(crate) meta_automerge_doc: AutomergeDoc,
     pub(crate) user_automerge_doc: AutomergeDoc,
+    pub(crate) initial_meta_doc_data: Vec<u8>,
     pub(crate) user_doc_data: Vec<u8>,
 }
 
@@ -32,7 +33,7 @@ where
     F: FnOnce(&mut Transaction) -> Result<O, AutomergeError>,
 {
     let actor_id = generate_actor_id(write_peer_id);
-    let (meta_automerge_doc, meta_doc_data) =
+    let (meta_automerge_doc, initial_meta_doc_data) =
         init_meta_automerge_doc(&actor_id, document_id, child);
 
     let mut user_automerge_doc = Automerge::new().with_actor(actor_id);
@@ -47,7 +48,7 @@ where
     let user_automerge_doc: AutoCommit = AutoCommit::load(&user_doc_data).unwrap();
 
     let entries = split_datas_into_entries(
-        &meta_doc_data,
+        &initial_meta_doc_data,
         &Some(user_doc_data.clone()),
         true,
         max_entry_data_size_bytes,
@@ -56,6 +57,7 @@ where
         InitAutomergeDocsResult {
             meta_automerge_doc,
             user_automerge_doc,
+            initial_meta_doc_data,
             user_doc_data,
         },
         result,
@@ -96,7 +98,7 @@ pub(crate) fn init_peer(
     parent_id: Option<DocumentId>,
     parent_header: Option<NameDescription>,
     max_entry_data_size_bytes: usize,
-) -> Result<Vec<Entry>, PeermergeError> {
+) -> Result<(Vec<Entry>, Vec<u8>), PeermergeError> {
     save_peer(
         meta_automerge_doc,
         peer_id,
@@ -113,7 +115,7 @@ pub(crate) fn init_peer(
         false,
         max_entry_data_size_bytes,
     );
-    Ok(entries)
+    Ok((entries, meta_doc_data))
 }
 
 pub(crate) struct BootstrapAutomergeUserDocResult {
