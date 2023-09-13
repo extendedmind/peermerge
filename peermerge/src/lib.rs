@@ -9,6 +9,11 @@ mod options;
 extern crate derive_builder;
 
 // Custom types and traits
+/// Public key of the feed.
+pub type FeedPublicKey = [u8; 32];
+/// Discovery key of the feed. Derived by hashing from FeedPublicKey.
+pub type FeedDiscoveryKey = [u8; 32];
+/// Id of a document. Derived by hashing from FeedDiscoveryKey.
 pub type DocumentId = [u8; 32];
 pub type PeerId = [u8; 16];
 use futures::{AsyncRead, AsyncWrite};

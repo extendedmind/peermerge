@@ -1,6 +1,6 @@
 use automerge::Patch;
 
-use crate::{feeds::FeedDiscoveryKey, DocumentId, PeerId};
+use crate::{DocumentId, FeedDiscoveryKey, PeerId};
 
 use super::state::{ChildDocumentInfo, DocumentFeedInfo};
 

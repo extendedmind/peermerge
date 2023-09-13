@@ -7,8 +7,7 @@ use crate::{
         cipher::{decode_doc_url, decode_document_secret_bytes, DecodedDocUrl},
         entry::{split_change_into_entries, Entry, EntryContent, ShrunkEntries},
     },
-    feeds::FeedDiscoveryKey,
-    DocumentId, PeermergeError,
+    DocumentId, FeedDiscoveryKey, PeermergeError,
 };
 
 #[derive(Debug)]

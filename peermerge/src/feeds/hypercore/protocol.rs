@@ -16,13 +16,13 @@ use super::{
     },
     HypercoreWrapper,
 };
+use crate::common::keys::discovery_key_from_public_key;
 use crate::common::state::DocumentFeedsState;
 use crate::common::utils::Mutex;
 use crate::common::{message::FeedVerificationMessage, state::ChildDocumentInfo};
 use crate::common::{message::FeedsChangedMessage, FeedEvent};
 use crate::document::{get_document, get_document_by_discovery_key, get_document_ids, Document};
-use crate::{common::keys::discovery_key_from_public_key, feeds::FeedDiscoveryKey};
-use crate::{DocumentId, FeedPersistence, PeerId, PeermergeError, IO};
+use crate::{DocumentId, FeedDiscoveryKey, FeedPersistence, PeerId, PeermergeError, IO};
 
 #[instrument(level = "debug", skip_all, fields(is_initiator = protocol.is_initiator()))]
 pub(crate) async fn on_protocol<T, U, V>(

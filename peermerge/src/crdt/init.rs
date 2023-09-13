@@ -11,8 +11,7 @@ use super::{
 use crate::{
     common::entry::{Entry, EntryContent, ShrunkEntries},
     common::{constants::PEERMERGE_VERSION, entry::split_datas_into_entries},
-    feeds::FeedDiscoveryKey,
-    DocumentId, NameDescription, PeerId, PeermergeError,
+    DocumentId, FeedDiscoveryKey, NameDescription, PeerId, PeermergeError,
 };
 
 pub(crate) struct InitAutomergeDocsResult {

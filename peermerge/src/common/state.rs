@@ -14,9 +14,8 @@ use crate::{
         DocsChangeResult,
     },
     document::DocumentSettings,
-    feeds::{FeedDiscoveryKey, FeedPublicKey},
-    AccessType, DocumentId, DocumentInfo, DynamicDocumentInfo, NameDescription, PeerId,
-    PeermergeError, StaticDocumentInfo,
+    AccessType, DocumentId, DocumentInfo, DynamicDocumentInfo, FeedDiscoveryKey, FeedPublicKey,
+    NameDescription, PeerId, PeermergeError, StaticDocumentInfo,
 };
 
 use super::{

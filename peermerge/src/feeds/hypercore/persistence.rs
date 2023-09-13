@@ -8,13 +8,13 @@ use random_access_memory::RandomAccessMemory;
 use std::path::PathBuf;
 
 use super::HypercoreWrapper;
-use crate::AccessType;
+use crate::{AccessType, FeedDiscoveryKey, FeedPublicKey};
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) async fn create_new_write_disk_hypercore(
     prefix: &PathBuf,
     signing_key: SigningKey,
-    discovery_key: &[u8; 32],
+    discovery_key: &FeedDiscoveryKey,
     encrypted: bool,
     encryption_key: &Option<Vec<u8>>,
 ) -> (HypercoreWrapper<RandomAccessDisk>, Option<Vec<u8>>) {
@@ -42,8 +42,8 @@ pub(crate) async fn create_new_write_disk_hypercore(
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) async fn create_new_read_disk_hypercore(
     prefix: &PathBuf,
-    public_key: &[u8; 32],
-    discovery_key: &[u8; 32],
+    public_key: &FeedPublicKey,
+    discovery_key: &FeedDiscoveryKey,
     access_type: AccessType,
     encrypted: bool,
     encryption_key: &Option<Vec<u8>>,
@@ -66,7 +66,7 @@ pub(crate) async fn create_new_read_disk_hypercore(
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) async fn open_disk_hypercore(
     prefix: &PathBuf,
-    discovery_key: &[u8; 32],
+    discovery_key: &FeedDiscoveryKey,
     access_type: AccessType,
     encrypted: bool,
     encryption_key: &Option<Vec<u8>>,
@@ -112,7 +112,7 @@ pub(crate) async fn create_new_write_memory_hypercore(
 }
 
 pub(crate) async fn create_new_read_memory_hypercore(
-    public_key: &[u8; 32],
+    public_key: &FeedPublicKey,
     access_type: AccessType,
     encrypted: bool,
     encryption_key: &Option<Vec<u8>>,
@@ -156,7 +156,7 @@ async fn create_new_memory_hypercore(
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn get_path_from_discovery_key(prefix: &PathBuf, discovery_key: &[u8; 32]) -> PathBuf {
+fn get_path_from_discovery_key(prefix: &PathBuf, discovery_key: &FeedDiscoveryKey) -> PathBuf {
     let encoded = data_encoding::BASE32_NOPAD.encode(discovery_key);
     prefix.join(PathBuf::from(encoded))
 }

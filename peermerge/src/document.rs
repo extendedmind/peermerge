@@ -34,7 +34,6 @@ use crate::crdt::{
 };
 #[cfg(not(target_arch = "wasm32"))]
 use crate::feeds::{create_new_read_disk_feed, create_new_write_disk_feed, open_disk_feed};
-use crate::feeds::{FeedDiscoveryKey, FeedPublicKey};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::FeedDiskPersistence;
 use crate::{
@@ -46,7 +45,8 @@ use crate::{
     FeedMemoryPersistence, FeedPersistence, StateEvent,
 };
 use crate::{
-    DocumentId, DocumentSharingInfo, NameDescription, PeerId, PeermergeError, StateEventContent,
+    DocumentId, DocumentSharingInfo, FeedDiscoveryKey, FeedPublicKey, NameDescription, PeerId,
+    PeermergeError, StateEventContent,
 };
 
 /// Document represents a single Automerge doc shared via feeds.
@@ -255,7 +255,10 @@ where
     ) -> Result<Option<DecodedDocUrl>, PeermergeError> {
         let mut document_state = self.document_state.lock().await;
         Ok(document_state
-            .merge_child_document_and_persist(remote_child_document_info)
+            .merge_child_document_and_persist(
+                remote_child_document_info,
+                self.access_type == AccessType::Proxy,
+            )
             .await)
     }
 

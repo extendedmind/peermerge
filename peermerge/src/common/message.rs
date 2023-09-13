@@ -1,4 +1,4 @@
-use crate::{feeds::FeedDiscoveryKey, PeerId};
+use crate::{FeedDiscoveryKey, PeerId};
 
 use super::state::{ChildDocumentInfo, DocumentFeedInfo};
 

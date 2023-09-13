@@ -35,8 +35,7 @@ use crate::{
         utils::Mutex,
         FeedEvent,
     },
-    feeds::FeedDiscoveryKey,
-    AccessType, PeerId, PeermergeError,
+    AccessType, FeedDiscoveryKey, PeerId, PeermergeError,
 };
 
 #[derive(Debug)]

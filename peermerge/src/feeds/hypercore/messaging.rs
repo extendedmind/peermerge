@@ -22,8 +22,7 @@ use crate::{
         FeedEvent,
         FeedEventContent::*,
     },
-    feeds::FeedDiscoveryKey,
-    PeerId, PeermergeError,
+    FeedDiscoveryKey, PeerId, PeermergeError,
 };
 
 // Messages sent over-the-wire

@@ -10,9 +10,8 @@ use uuid::Uuid;
 
 use crate::{
     common::keys::{discovery_key_from_public_key, document_id_from_discovery_key},
-    feeds::{FeedDiscoveryKey, FeedPublicKey},
-    DocumentId, FeedType, NameDescription, PeerId, PeermergeError, StaticDocumentInfo,
-    UrlDocumentInfo,
+    DocumentId, FeedDiscoveryKey, FeedPublicKey, FeedType, NameDescription, PeerId, PeermergeError,
+    StaticDocumentInfo, UrlDocumentInfo,
 };
 
 use super::{
@@ -175,6 +174,31 @@ pub(crate) struct DecodedDocUrl {
     pub(crate) static_info: StaticDocumentInfo,
     pub(crate) doc_url_appendix: Option<DocUrlAppendix>,
     pub(crate) document_secret: DocumentSecret,
+}
+
+impl DecodedDocUrl {
+    pub(crate) fn new_proxy(
+        document_public_key: FeedPublicKey,
+        document_discovery_key: FeedDiscoveryKey,
+        document_id: DocumentId,
+        document_signature_verifying_key: VerifyingKey,
+        child: bool,
+    ) -> Self {
+        let static_info = StaticDocumentInfo::from_keys(
+            document_public_key,
+            document_discovery_key,
+            document_id,
+            document_signature_verifying_key,
+            child,
+        );
+        Self {
+            access_type: AccessType::Proxy,
+            encrypted: None,
+            static_info,
+            doc_url_appendix: None,
+            document_secret: DocumentSecret::empty(),
+        }
+    }
 }
 
 impl Into<UrlDocumentInfo> for DecodedDocUrl {

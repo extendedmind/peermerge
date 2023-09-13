@@ -1,6 +1,7 @@
 use hypercore_protocol::hypercore::VerifyingKey;
 
-use crate::DocumentId;
+use super::constants::PEERMERGE_VERSION;
+use crate::{DocumentId, FeedDiscoveryKey, FeedPublicKey};
 
 /// Type of feed.
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -53,13 +54,31 @@ pub struct StaticDocumentInfo {
     pub version: u8,
     pub feed_type: FeedType,
     pub child: bool,
-    pub document_public_key: [u8; 32],
-    pub document_discovery_key: [u8; 32],
+    pub document_public_key: FeedPublicKey,
+    pub document_discovery_key: FeedDiscoveryKey,
     pub document_id: DocumentId,
     pub document_signature_verifying_key: VerifyingKey,
 }
 
 impl StaticDocumentInfo {
+    pub(crate) fn from_keys(
+        document_public_key: FeedPublicKey,
+        document_discovery_key: FeedDiscoveryKey,
+        document_id: DocumentId,
+        document_signature_verifying_key: VerifyingKey,
+        child: bool,
+    ) -> Self {
+        Self::new(
+            PEERMERGE_VERSION,
+            FeedType::Hypercore,
+            child,
+            document_public_key,
+            document_discovery_key,
+            document_id,
+            document_signature_verifying_key,
+        )
+    }
+
     pub(crate) fn new(
         version: u8,
         feed_type: FeedType,

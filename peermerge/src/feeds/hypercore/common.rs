@@ -7,8 +7,7 @@ use hypercore_protocol::{
 
 use crate::{
     common::state::{ChildDocumentInfo, DocumentFeedInfo, DocumentFeedsState},
-    feeds::FeedDiscoveryKey,
-    PeerId,
+    FeedDiscoveryKey, PeerId,
 };
 
 /// A PeerState stores information about a connected peer.

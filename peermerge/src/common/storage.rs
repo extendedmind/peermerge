@@ -13,8 +13,7 @@ use crate::{
         UnappliedEntries,
     },
     document::DocumentSettings,
-    feeds::FeedDiscoveryKey,
-    DocumentId, NameDescription, PeerId, PeermergeError,
+    DocumentId, FeedDiscoveryKey, NameDescription, PeerId, PeermergeError,
 };
 
 use super::{
@@ -243,6 +242,7 @@ where
     pub(crate) async fn merge_child_document_and_persist(
         &mut self,
         child_document_info: &mut ChildDocumentInfo,
+        is_proxy: bool,
     ) -> Option<DecodedDocUrl> {
         // First check that creation isn't ongoing already from some other protocol
         let already_stored = if let Some(info) = self
@@ -276,37 +276,49 @@ where
         // Reset status so that value from remote isn't carried over here
         child_document_info.status = ChildDocumentStatus::NotCreated;
 
-        // Search for the URL and secret from the meta doc
-        let stored_decoded_url = if let Some(content) = self.state.content.as_ref() {
+        let decoded_url = if is_proxy {
+            // Create a proxy url
+            let child_document_discovery_key =
+                discovery_key_from_public_key(&child_document_info.doc_public_key);
+            let child_document_id = document_id_from_discovery_key(&child_document_discovery_key);
+            Some(DecodedDocUrl::new_proxy(
+                child_document_info.doc_public_key,
+                child_document_discovery_key,
+                child_document_id,
+                child_document_info.doc_signature_verifying_key,
+                true,
+            ))
+        } else if let Some(content) = self.state.content.as_ref() {
+            // Search for the URL and secret from the meta doc
             if let Some(meta_automerge_doc) = content.meta_automerge_doc.as_ref() {
                 let child_document_discovery_key =
                     discovery_key_from_public_key(&child_document_info.doc_public_key);
                 let child_document_id =
                     document_id_from_discovery_key(&child_document_discovery_key);
-                let stored_decoded_url =
-                    get_child_document_decoded_url(meta_automerge_doc, child_document_id);
-                if stored_decoded_url.is_some() {
-                    // Found the secret immediately, mark this as creating
-                    if let Some(info) = stored_child_document_info {
-                        info.status = ChildDocumentStatus::Creating;
-                    } else {
-                        child_document_info.status = ChildDocumentStatus::Creating;
-                    }
-                }
-                stored_decoded_url
+                get_child_document_decoded_url(meta_automerge_doc, child_document_id)
             } else {
                 None
             }
         } else {
             None
         };
+
+        if decoded_url.is_some() {
+            // Was able to create the url, mark this as creating
+            if let Some(info) = stored_child_document_info {
+                info.status = ChildDocumentStatus::Creating;
+            } else {
+                child_document_info.status = ChildDocumentStatus::Creating;
+            }
+        }
+
         if !already_stored {
             self.state.child_documents.push(child_document_info.clone());
         }
-        if !already_stored || stored_decoded_url.is_some() {
+        if !already_stored || decoded_url.is_some() {
             write_document_state(&self.state, &mut self.storage).await;
         }
-        stored_decoded_url
+        decoded_url
     }
 
     pub(crate) async fn set_child_document_created_and_persist(
