@@ -581,29 +581,35 @@ async fn on_feed_event_memory(
                         .await
                         .unwrap()
                     {
-                        let attach_result = Document::attach_memory(
-                            peer_id,
-                            &default_peer_header,
-                            decoded_document_url,
-                            None,
-                            Some(DocumentParent::Registered {
-                                child_document_info: new_child_document.clone(),
-                                parent_id,
-                            }),
-                            document_settings.clone(),
-                        )
-                        .await
-                        .unwrap();
-                        let document_id = attach_result.document.id();
-                        if !attach_result.state_events.is_empty() {
-                            send_state_events(&mut state_event_sender, attach_result.state_events);
+                        // It is possible that this child document has multiple parents, and is already
+                        // attached by another parent.
+                        if !documents.contains_key(&decoded_document_url.static_info.document_id) {
+                            let attach_result = Document::attach_memory(
+                                peer_id,
+                                &default_peer_header,
+                                decoded_document_url,
+                                None,
+                                Some(DocumentParent::Registered {
+                                    child_document_info: new_child_document.clone(),
+                                    parent_id,
+                                }),
+                                document_settings.clone(),
+                            )
+                            .await
+                            .unwrap();
+                            let document_id = attach_result.document.id();
+                            if !attach_result.state_events.is_empty() {
+                                send_state_events(
+                                    &mut state_event_sender,
+                                    attach_result.state_events,
+                                );
+                            }
+                            {
+                                documents.insert(document_id, attach_result.document);
+                                let mut state = peermerge_state.lock().await;
+                                state.add_document_id_to_state(&document_id).await;
+                            }
                         }
-                        {
-                            documents.insert(document_id, attach_result.document);
-                            let mut state = peermerge_state.lock().await;
-                            state.add_document_id_to_state(&document_id).await;
-                        }
-
                         // Finally, set child document to created to parent
                         parent_document
                             .set_child_document_created(&new_child_document)
@@ -853,28 +859,35 @@ async fn on_feed_event_disk(
                         .await
                         .unwrap()
                     {
-                        let attach_result = Document::attach_disk(
-                            peer_id,
-                            &default_peer_header,
-                            decoded_document_url,
-                            Some(DocumentParent::Registered {
-                                child_document_info: new_child_document.clone(),
-                                parent_id,
-                            }),
-                            prefix,
-                            document_settings.clone(),
-                        )
-                        .await
-                        .unwrap();
+                        // It is possible that this child document has multiple parents, and is already
+                        // attached by another parent.
+                        if !documents.contains_key(&decoded_document_url.static_info.document_id) {
+                            let attach_result = Document::attach_disk(
+                                peer_id,
+                                &default_peer_header,
+                                decoded_document_url,
+                                Some(DocumentParent::Registered {
+                                    child_document_info: new_child_document.clone(),
+                                    parent_id,
+                                }),
+                                prefix,
+                                document_settings.clone(),
+                            )
+                            .await
+                            .unwrap();
 
-                        let document_id = attach_result.document.id();
-                        if !attach_result.state_events.is_empty() {
-                            send_state_events(&mut state_event_sender, attach_result.state_events);
-                        }
-                        {
-                            documents.insert(document_id, attach_result.document);
-                            let mut state = peermerge_state.lock().await;
-                            state.add_document_id_to_state(&document_id).await;
+                            let document_id = attach_result.document.id();
+                            if !attach_result.state_events.is_empty() {
+                                send_state_events(
+                                    &mut state_event_sender,
+                                    attach_result.state_events,
+                                );
+                            }
+                            {
+                                documents.insert(document_id, attach_result.document);
+                                let mut state = peermerge_state.lock().await;
+                                state.add_document_id_to_state(&document_id).await;
+                            }
                         }
 
                         // Finally, set child document to created to parent

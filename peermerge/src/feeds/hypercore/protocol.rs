@@ -65,6 +65,8 @@ where
                         if is_initiator {
                             // On handshake, we can only open the doc hypercores, because
                             // it is not known which of our documents the other side knowns about.
+                            // Only one side needs to reveal what document ids they have, i.e.
+                            // the initiator.
                             for document_id in get_document_ids(&documents).await {
                                 let document =
                                     get_document(&documents, &document_id).await.unwrap();
@@ -266,20 +268,8 @@ where
                             let doc_hypercore = document.doc_feed().await;
                             let doc_hypercore = doc_hypercore.lock().await;
                             let doc_public_key = *doc_hypercore.public_key();
-                            if is_initiator {
-                                debug!(
-                                    "Event:ChildDocumentCreated: opening doc channel as initiator"
-                                );
-                                protocol.open(doc_public_key).await?;
-                            } else if unbound_discovery_keys.contains(&child_discovery_key) {
-                                // This has already been announced by the other side, open now that
-                                // we have the document.
-                                unbound_discovery_keys.retain(|key| key != &child_discovery_key);
-                                debug!(
-                                    "Event:ChildDocumentCreated: opening doc channel as responder"
-                                );
-                                protocol.open(doc_public_key).await?;
-                            }
+                            debug!("Event:ChildDocumentCreated: opening doc channel");
+                            protocol.open(doc_public_key).await?;
                         }
                         _ => panic!("Unknown local signal: {name}"),
                     },

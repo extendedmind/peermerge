@@ -251,9 +251,7 @@ where
             .iter()
             .find(|info| *info == child_document_info)
         {
-            if info.status == ChildDocumentStatus::Created
-                || info.status == ChildDocumentStatus::Creating
-            {
+            if info.status != ChildDocumentStatus::NotCreated {
                 // NB: if the status is NotCreated, we want to recheck if secret can be
                 // found now, and not return.
                 return None;
