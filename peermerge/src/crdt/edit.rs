@@ -100,15 +100,30 @@ impl UnappliedEntries {
                         EntryContent::Change { meta, change, .. } => {
                             let change = change.as_ref().unwrap();
                             if change.deps().iter().all(|dep| {
-                                if user_hashes.contains(dep) {
-                                    true
-                                } else if user_automerge_doc.get_change_by_hash(dep).is_some() {
-                                    // For the next rounds to be faster, let's push this
-                                    // to the hashes array to avoid searching the doc again
-                                    user_hashes.insert(*dep);
-                                    true
+                                if *meta {
+                                    // Meta doc
+                                    if meta_hashes.contains(dep) {
+                                        true
+                                    } else if meta_automerge_doc.get_change_by_hash(dep).is_some() {
+                                        // For the next rounds to be faster, let's push this
+                                        // to the hashes array to avoid searching the doc again
+                                        meta_hashes.insert(*dep);
+                                        true
+                                    } else {
+                                        false
+                                    }
                                 } else {
-                                    false
+                                    // User doc
+                                    if user_hashes.contains(dep) {
+                                        true
+                                    } else if user_automerge_doc.get_change_by_hash(dep).is_some() {
+                                        // For the next rounds to be faster, let's push this
+                                        // to the hashes array to avoid searching the doc again
+                                        user_hashes.insert(*dep);
+                                        true
+                                    } else {
+                                        false
+                                    }
                                 }
                             }) {
                                 new_length += 1;
@@ -237,10 +252,13 @@ pub(crate) fn apply_entries_autocommit(
                     vec![]
                 };
                 if reserved.is_empty()
-                    && change
-                        .deps()
-                        .iter()
-                        .all(|dep| user_automerge_doc.get_change_by_hash(dep).is_some())
+                    && change.deps().iter().all(|dep| {
+                        if meta {
+                            meta_automerge_doc.get_change_by_hash(dep).is_some()
+                        } else {
+                            user_automerge_doc.get_change_by_hash(dep).is_some()
+                        }
+                    })
                 {
                     if meta {
                         meta_changes_to_apply.push(*change.clone());
@@ -300,6 +318,9 @@ pub(crate) fn apply_entries_autocommit(
         &mut result,
     );
 
+    if !meta_changes_to_apply.is_empty() {
+        meta_automerge_doc.apply_changes(meta_changes_to_apply)?;
+    }
     if !user_changes_to_apply.is_empty() {
         user_automerge_doc.apply_changes(user_changes_to_apply)?;
     }
