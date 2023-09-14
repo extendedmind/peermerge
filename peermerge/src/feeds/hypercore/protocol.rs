@@ -4,9 +4,9 @@ use futures::channel::mpsc::UnboundedSender;
 use futures::StreamExt;
 use hypercore_protocol::{Event, Protocol};
 use random_access_storage::RandomAccess;
-use std::fmt::Debug;
 use std::io::ErrorKind;
 use std::sync::Arc;
+use std::{collections::HashMap, fmt::Debug};
 use tracing::{debug, instrument};
 
 use super::{
@@ -42,9 +42,11 @@ where
     // Event::DiscoveryKey, but which haven't yet been broadcasted and thus
     // hypercores not yet created either.
     let mut unbound_discovery_keys: Vec<FeedDiscoveryKey> = vec![];
-    // Stores discovery keys have been broadcasted and hypercores created but
-    // which are not yet opened because doc feed has not been verified yet.
-    let mut discovery_keys_to_open: Vec<FeedDiscoveryKey> = vec![];
+    // Stores discovery keys per doc feed discovery key, that have been broadcasted and
+    // hypercores created but which are not yet opened because doc feed has not been
+    // verified yet.
+    let mut discovery_keys_to_open: HashMap<FeedDiscoveryKey, Vec<FeedDiscoveryKey>> =
+        HashMap::new();
     let mut opened_documents: Vec<DocumentId> = vec![];
     while let Some(event) = protocol.next().await {
         debug!("Got protocol event {:?}", event);
@@ -118,9 +120,19 @@ where
                                 } else {
                                     // Doc feed is not verified, need to wait for the others,
                                     // tolerate unverified.
+                                    let doc_discovery_key = document.doc_discovery_key();
                                     let active_peer_feeds_discovery_keys =
                                         document.active_feeds_discovery_keys().await;
-                                    discovery_keys_to_open.extend(active_peer_feeds_discovery_keys);
+                                    if let Some(existing_keys) =
+                                        discovery_keys_to_open.get_mut(&doc_discovery_key).as_mut()
+                                    {
+                                        existing_keys.extend(active_peer_feeds_discovery_keys);
+                                    } else {
+                                        discovery_keys_to_open.insert(
+                                            doc_discovery_key,
+                                            active_peer_feeds_discovery_keys,
+                                        );
+                                    }
                                 }
                             }
                             let (feeds_state, child_documents, peer_id): (
@@ -204,23 +216,35 @@ where
                                     }
                                 })
                                 .collect();
-                            discovery_keys_to_open.extend(new_discovery_keys_to_open);
+                            if let Some(existing_keys) = discovery_keys_to_open
+                                .get_mut(&message.doc_discovery_key)
+                                .as_mut()
+                            {
+                                existing_keys.extend(new_discovery_keys_to_open);
+                            } else {
+                                discovery_keys_to_open
+                                    .insert(message.doc_discovery_key, new_discovery_keys_to_open);
+                            }
                             if document.doc_feed_verified().await {
-                                for discovery_key in discovery_keys_to_open
-                                    .drain(..discovery_keys_to_open.len())
-                                    .into_iter()
-                                    .collect::<Vec<FeedDiscoveryKey>>()
+                                if let Some(document_discovery_keys_to_open) =
+                                    discovery_keys_to_open.get_mut(&message.doc_discovery_key)
                                 {
-                                    if let Some(hypercore) =
-                                        document.active_feed(&discovery_key).await
+                                    for discovery_key in document_discovery_keys_to_open
+                                        .drain(..document_discovery_keys_to_open.len())
+                                        .into_iter()
+                                        .collect::<Vec<FeedDiscoveryKey>>()
                                     {
-                                        let hypercore = hypercore.lock().await;
-                                        protocol.open(*hypercore.public_key()).await?;
-                                    } else {
-                                        panic!(
+                                        if let Some(hypercore) =
+                                            document.active_feed(&discovery_key).await
+                                        {
+                                            let hypercore = hypercore.lock().await;
+                                            protocol.open(*hypercore.public_key()).await?;
+                                        } else {
+                                            panic!(
                                             "Could not find new hypercore with discovery key {discovery_key:02X?}",
                                         );
-                                    };
+                                        };
+                                    }
                                 }
                             }
                         }
@@ -236,21 +260,25 @@ where
                                 )
                                 .await
                                 .unwrap();
-                                for discovery_key in discovery_keys_to_open
-                                    .drain(..discovery_keys_to_open.len())
-                                    .into_iter()
-                                    .collect::<Vec<FeedDiscoveryKey>>()
+                                if let Some(document_discovery_keys_to_open) =
+                                    discovery_keys_to_open.get_mut(&message.doc_discovery_key)
                                 {
-                                    if let Some(hypercore) =
-                                        document.active_feed(&discovery_key).await
+                                    for discovery_key in document_discovery_keys_to_open
+                                        .drain(..document_discovery_keys_to_open.len())
+                                        .into_iter()
+                                        .collect::<Vec<FeedDiscoveryKey>>()
                                     {
-                                        let hypercore = hypercore.lock().await;
-                                        protocol.open(*hypercore.public_key()).await?;
-                                    } else {
-                                        panic!(
+                                        if let Some(hypercore) =
+                                            document.active_feed(&discovery_key).await
+                                        {
+                                            let hypercore = hypercore.lock().await;
+                                            protocol.open(*hypercore.public_key()).await?;
+                                        } else {
+                                            panic!(
                                             "Could not find new hypercore with discovery key {discovery_key:02X?}",
                                         );
-                                    };
+                                        };
+                                    }
                                 }
                             } else {
                                 unimplemented!("TODO: Invalid feed deletion");
@@ -261,15 +289,15 @@ where
                             let child_document_info: ChildDocumentInfo = dec_state.decode(&data)?;
                             let child_discovery_key =
                                 discovery_key_from_public_key(&child_document_info.doc_public_key);
-                            let document =
+                            let child_document =
                                 get_document_by_discovery_key(&documents, &child_discovery_key)
                                     .await
                                     .unwrap();
-                            let doc_hypercore = document.doc_feed().await;
-                            let doc_hypercore = doc_hypercore.lock().await;
-                            let doc_public_key = *doc_hypercore.public_key();
+                            let child_doc_hypercore = child_document.doc_feed().await;
+                            let child_doc_hypercore = child_doc_hypercore.lock().await;
+                            let child_doc_public_key = *child_doc_hypercore.public_key();
                             debug!("Event:ChildDocumentCreated: opening doc channel");
-                            protocol.open(doc_public_key).await?;
+                            protocol.open(child_doc_public_key).await?;
                         }
                         _ => panic!("Unknown local signal: {name}"),
                     },
