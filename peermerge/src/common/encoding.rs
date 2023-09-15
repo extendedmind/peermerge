@@ -7,7 +7,7 @@ pub(crate) use crate::common::entry::Entry;
 pub(crate) use crate::common::message::BroadcastMessage;
 pub(crate) use crate::common::state::{DocumentState, PeermergeState};
 use crate::document::DocumentSettings;
-use crate::FeedPublicKey;
+use crate::{DocumentId, FeedPublicKey};
 
 use super::cipher::{DocUrlAppendix, DocumentSecret};
 use super::constants::PEERMERGE_VERSION;
@@ -15,7 +15,7 @@ use super::entry::EntryContent;
 use super::message::{FeedSyncedMessage, FeedVerificationMessage, FeedsChangedMessage};
 use super::state::{
     ChildDocumentInfo, ChildDocumentStatus, DocumentContent, DocumentCursor, DocumentFeedInfo,
-    DocumentFeedsState,
+    DocumentFeedsState, DocumentIdWithParents,
 };
 use crate::{AccessType, NameDescription, PeerId, PeermergeError};
 
@@ -24,7 +24,10 @@ impl CompactEncoding<PeermergeState> for State {
         self.preencode(&value.version)?;
         self.preencode_fixed_16()?; // peer_id
         self.preencode(&value.default_peer_header)?;
-        self.preencode(&value.document_ids)?;
+        self.preencode(&value.document_ids.len())?;
+        for document_id in &value.document_ids {
+            self.preencode(document_id)?;
+        }
         self.preencode(&value.document_settings)
     }
 
@@ -36,7 +39,10 @@ impl CompactEncoding<PeermergeState> for State {
         self.encode(&value.version, buffer)?;
         self.encode_fixed_16(&value.peer_id, buffer)?;
         self.encode(&value.default_peer_header, buffer)?;
-        self.encode(&value.document_ids, buffer)?;
+        self.encode(&value.document_ids.len(), buffer)?;
+        for document_id in &value.document_ids {
+            self.encode(document_id, buffer)?;
+        }
         self.encode(&value.document_settings, buffer)
     }
 
@@ -44,7 +50,12 @@ impl CompactEncoding<PeermergeState> for State {
         let version: u8 = self.decode(buffer)?;
         let peer_id: PeerId = self.decode_fixed_16(buffer)?.to_vec().try_into().unwrap();
         let peer_header: NameDescription = self.decode(buffer)?;
-        let document_ids: Vec<[u8; 32]> = self.decode(buffer)?;
+        let len: usize = self.decode(buffer)?;
+        let mut document_ids: Vec<DocumentIdWithParents> = Vec::with_capacity(len);
+        for _ in 0..len {
+            let document_id: DocumentIdWithParents = self.decode(buffer)?;
+            document_ids.push(document_id);
+        }
         let document_settings: DocumentSettings = self.decode(buffer)?;
         Ok(PeermergeState::new_with_version(
             version,
@@ -53,6 +64,31 @@ impl CompactEncoding<PeermergeState> for State {
             document_ids,
             document_settings,
         ))
+    }
+}
+
+impl CompactEncoding<DocumentIdWithParents> for State {
+    fn preencode(&mut self, value: &DocumentIdWithParents) -> Result<usize, EncodingError> {
+        self.preencode_fixed_32()?;
+        self.preencode(&value.parent_document_ids)
+    }
+
+    fn encode(
+        &mut self,
+        value: &DocumentIdWithParents,
+        buffer: &mut [u8],
+    ) -> Result<usize, EncodingError> {
+        self.encode_fixed_32(&value.document_id, buffer)?;
+        self.encode(&value.parent_document_ids, buffer)
+    }
+
+    fn decode(&mut self, buffer: &[u8]) -> Result<DocumentIdWithParents, EncodingError> {
+        let document_id: DocumentId = self.decode_fixed_32(buffer)?.to_vec().try_into().unwrap();
+        let parent_document_ids: Vec<DocumentId> = self.decode(buffer)?;
+        Ok(DocumentIdWithParents {
+            document_id,
+            parent_document_ids,
+        })
     }
 }
 

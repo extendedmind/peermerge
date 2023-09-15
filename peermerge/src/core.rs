@@ -284,11 +284,15 @@ where
             })
     }
 
-    async fn add_document(&mut self, document: Document<T, U>) -> DocumentInfo {
+    async fn add_document(
+        &mut self,
+        document: Document<T, U>,
+        parent_id: Option<DocumentId>,
+    ) -> DocumentInfo {
         let mut state = self.peermerge_state.lock().await;
         let info = document.info().await;
         self.documents.insert(info.id(), document);
-        state.add_document_id_to_state(&info.id()).await;
+        state.add_document_id_to_state(info.id(), parent_id).await;
         info
     }
 
@@ -335,21 +339,26 @@ where
         &self,
         result: NewDocumentResult<T, U>,
         mut parent_document: Option<Document<T, U>>,
-    ) -> Result<Document<T, U>, PeermergeError> {
+    ) -> Result<(Document<T, U>, Option<DocumentId>), PeermergeError> {
         if !result.state_events.is_empty() {
             if let Some(state_event_sender) = self.state_event_sender.lock().await.as_mut() {
                 send_state_events(state_event_sender, result.state_events);
             }
         }
-        if let Some(child_document_info) = result.child_document_info {
-            let mut parent_document = parent_document.take().unwrap();
-            let document_secret = result.document.document_secret().unwrap();
-            let document_url = &result.document.sharing_info().await.unwrap().doc_url;
-            parent_document
-                .add_created_child_document(child_document_info, document_url, document_secret)
-                .await?;
-        }
-        Ok(result.document)
+        let parent_id: Option<DocumentId> =
+            if let Some(child_document_info) = result.child_document_info {
+                let mut parent_document = parent_document.take().unwrap();
+                let parent_id = parent_document.id();
+                let document_secret = result.document.document_secret().unwrap();
+                let document_url = &result.document.sharing_info().await.unwrap().doc_url;
+                parent_document
+                    .add_created_child_document(child_document_info, document_url, document_secret)
+                    .await?;
+                Some(parent_id)
+            } else {
+                None
+            };
+        Ok((result.document, parent_id))
     }
 }
 
@@ -401,10 +410,10 @@ impl Peermerge<RandomAccessMemory, FeedMemoryPersistence> {
             init_cb,
         )
         .await?;
-        let document = self
+        let (document, parent_id) = self
             .process_new_document_result(create_result, parent_document)
             .await?;
-        Ok((self.add_document(document).await, init_result))
+        Ok((self.add_document(document, parent_id).await, init_result))
     }
 
     pub async fn attach_document_memory(
@@ -477,10 +486,10 @@ impl Peermerge<RandomAccessMemory, FeedMemoryPersistence> {
             self.document_settings.clone(),
         )
         .await?;
-        let document = self
+        let (document, parent_id) = self
             .process_new_document_result(attach_result, parent_document)
             .await?;
-        Ok(self.add_document(document).await)
+        Ok(self.add_document(document, parent_id).await)
     }
 
     #[instrument(skip_all, fields(peer_name = self.default_peer_header.name))]
@@ -581,6 +590,8 @@ async fn on_feed_event_memory(
                         .await
                         .unwrap()
                     {
+                        let document_id = decoded_document_url.static_info.document_id;
+
                         // It is possible that this child document has multiple parents, and is already
                         // attached by another parent.
                         if !documents.contains_key(&decoded_document_url.static_info.document_id) {
@@ -597,18 +608,19 @@ async fn on_feed_event_memory(
                             )
                             .await
                             .unwrap();
-                            let document_id = attach_result.document.id();
                             if !attach_result.state_events.is_empty() {
                                 send_state_events(
                                     &mut state_event_sender,
                                     attach_result.state_events,
                                 );
                             }
-                            {
-                                documents.insert(document_id, attach_result.document);
-                                let mut state = peermerge_state.lock().await;
-                                state.add_document_id_to_state(&document_id).await;
-                            }
+                            documents.insert(document_id, attach_result.document);
+                        }
+                        {
+                            let mut state = peermerge_state.lock().await;
+                            state
+                                .add_document_id_to_state(document_id, Some(parent_id))
+                                .await;
                         }
                         // Finally, set child document to created to parent
                         parent_document
@@ -618,7 +630,15 @@ async fn on_feed_event_memory(
                     }
                 }
             }
-            _ => process_feed_event(event, &mut state_event_sender, &mut documents).await,
+            _ => {
+                process_feed_event(
+                    event,
+                    &mut state_event_sender,
+                    &mut documents,
+                    &peermerge_state,
+                )
+                .await
+            }
         }
     }
     debug!("Exiting");
@@ -657,8 +677,8 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
     ) -> Result<Option<Vec<DocumentInfo>>, PeermergeError> {
         if let Some(state_wrapper) = PeermergeStateWrapper::open_disk(data_root_dir).await? {
             let mut document_infos: Vec<DocumentInfo> = vec![];
-            for document_id in &state_wrapper.state.document_ids {
-                let postfix = encode_document_id(document_id);
+            for document_id_with_parents in &state_wrapper.state.document_ids {
+                let postfix = encode_document_id(&document_id_with_parents.document_id);
                 let document_data_root_dir = data_root_dir.join(postfix);
                 document_infos.push(Document::info_disk(&document_data_root_dir).await?);
             }
@@ -682,7 +702,9 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
         let document_settings = state.document_settings.clone();
         let documents: DashMap<DocumentId, Document<RandomAccessDisk, FeedDiskPersistence>> =
             DashMap::new();
-        for document_id in &state_wrapper.state.document_ids {
+        let mut state_events: Vec<StateEvent> = vec![];
+        for document_id_with_parents in &state_wrapper.state.document_ids {
+            let document_id = &document_id_with_parents.document_id;
             let document_secret: Option<DocumentSecret> =
                 if let Some(document_secret) = &document_secrets.get(document_id).cloned() {
                     Some(decode_document_secret(document_secret)?)
@@ -691,25 +713,33 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
                 };
             let postfix = encode_document_id(document_id);
             let document_data_root_dir = data_root_dir.join(postfix);
-            let (document, state_events) = Document::open_disk(
+            let (document, document_state_events) = Document::open_disk(
                 peer_id,
                 document_secret,
                 &document_data_root_dir,
                 document_settings.clone(),
             )
             .await?;
-            if let Some(state_event_sender) = state_event_sender.as_mut() {
-                send_state_events(state_event_sender, state_events);
-            }
+            state_events.extend(document_state_events);
             documents.insert(*document_id, document);
+        }
+        let documents = Arc::new(documents);
+        let peermerge_state = Arc::new(Mutex::new(state_wrapper));
+        if let Some(state_event_sender) = state_event_sender.as_mut() {
+            if !state_event_sender.is_closed() {
+                for mut state_event in state_events {
+                    post_process_state_event(&mut state_event, &peermerge_state).await;
+                    state_event_sender.unbounded_send(state_event).unwrap();
+                }
+            }
         }
 
         Ok(Self {
             peer_id,
             default_peer_header,
             prefix: data_root_dir.clone(),
-            peermerge_state: Arc::new(Mutex::new(state_wrapper)),
-            documents: Arc::new(documents),
+            peermerge_state,
+            documents,
             state_event_sender: Arc::new(Mutex::new(state_event_sender)),
             document_settings,
         })
@@ -738,10 +768,10 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
             &self.prefix,
         )
         .await?;
-        let document = self
+        let (document, parent_id) = self
             .process_new_document_result(create_result, parent_document)
             .await?;
-        Ok((self.add_document(document).await, init_result))
+        Ok((self.add_document(document, parent_id).await, init_result))
     }
 
     pub async fn attach_document_disk(
@@ -769,10 +799,10 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
             self.document_settings.clone(),
         )
         .await?;
-        let document = self
+        let (document, parent_id) = self
             .process_new_document_result(attach_result, parent_document)
             .await?;
-        Ok(self.add_document(document).await)
+        Ok(self.add_document(document, parent_id).await)
     }
 
     #[instrument(skip_all, fields(name = self.default_peer_header.name))]
@@ -859,9 +889,10 @@ async fn on_feed_event_disk(
                         .await
                         .unwrap()
                     {
+                        let document_id = decoded_document_url.static_info.document_id;
                         // It is possible that this child document has multiple parents, and is already
                         // attached by another parent.
-                        if !documents.contains_key(&decoded_document_url.static_info.document_id) {
+                        if !documents.contains_key(&document_id) {
                             let attach_result = Document::attach_disk(
                                 peer_id,
                                 &default_peer_header,
@@ -876,18 +907,19 @@ async fn on_feed_event_disk(
                             .await
                             .unwrap();
 
-                            let document_id = attach_result.document.id();
                             if !attach_result.state_events.is_empty() {
                                 send_state_events(
                                     &mut state_event_sender,
                                     attach_result.state_events,
                                 );
                             }
-                            {
-                                documents.insert(document_id, attach_result.document);
-                                let mut state = peermerge_state.lock().await;
-                                state.add_document_id_to_state(&document_id).await;
-                            }
+                            documents.insert(document_id, attach_result.document);
+                        }
+                        {
+                            let mut state = peermerge_state.lock().await;
+                            state
+                                .add_document_id_to_state(document_id, Some(parent_id))
+                                .await;
                         }
 
                         // Finally, set child document to created to parent
@@ -899,7 +931,15 @@ async fn on_feed_event_disk(
                 }
             }
 
-            _ => process_feed_event(event, &mut state_event_sender, &mut documents).await,
+            _ => {
+                process_feed_event(
+                    event,
+                    &mut state_event_sender,
+                    &mut documents,
+                    &peermerge_state,
+                )
+                .await
+            }
         }
     }
     debug!("Exiting");
@@ -925,6 +965,7 @@ async fn process_feed_event<T, U>(
     event: FeedEvent,
     state_event_sender: &mut UnboundedSender<StateEvent>,
     documents: &mut Arc<DashMap<DocumentId, Document<T, U>>>,
+    peermerge_state: &Arc<Mutex<PeermergeStateWrapper<T>>>,
 ) where
     T: RandomAccess + Debug + Send + 'static,
     U: FeedPersistence,
@@ -983,10 +1024,40 @@ async fn process_feed_event<T, U>(
                 .await;
 
             if !state_event_sender.is_closed() {
-                for state_event in state_events {
+                for mut state_event in state_events {
+                    post_process_state_event(&mut state_event, peermerge_state).await;
                     state_event_sender.unbounded_send(state_event).unwrap();
                 }
             }
+        }
+    }
+}
+
+async fn post_process_state_event<T>(
+    state_event: &mut StateEvent,
+    peermerge_state: &Arc<Mutex<PeermergeStateWrapper<T>>>,
+) where
+    T: RandomAccess + Debug + Send + 'static,
+{
+    if let StateEventContent::DocumentInitialized {
+        child,
+        ref mut parent_document_ids,
+        ..
+    } = state_event.content
+    {
+        if child && parent_document_ids.is_empty() {
+            // Parents are saved in peermerge state
+            let peermerge_state = peermerge_state.lock().await;
+            parent_document_ids.extend(
+                peermerge_state
+                    .state
+                    .document_ids
+                    .iter()
+                    .find(|id_with_parents| state_event.document_id == id_with_parents.document_id)
+                    .unwrap()
+                    .parent_document_ids
+                    .clone(),
+            );
         }
     }
 }

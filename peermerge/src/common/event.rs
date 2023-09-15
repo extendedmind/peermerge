@@ -38,7 +38,8 @@ pub enum StateEventContent {
     },
     DocumentInitialized {
         new_document: bool,
-        parent_document_id: Option<DocumentId>,
+        child: bool,
+        parent_document_ids: Vec<DocumentId>,
     },
     DocumentChanged {
         change_id: Option<Vec<u8>>,

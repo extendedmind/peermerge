@@ -628,6 +628,7 @@ where
         let (state_events, not_created_child_documents): (Vec<StateEvent>, Vec<ChildDocumentInfo>) = {
             // Sync doc state exclusively...
             let mut document_state = self.document_state.lock().await;
+            let child = document_state.state().child;
             let not_created_child_documents = document_state.state().not_created_child_documents();
             let (document_initialized, patches, peer_syncs) =
                 if let Some((content, feeds_state, unapplied_entries)) =
@@ -667,7 +668,10 @@ where
                             (
                                 Some(DocumentInitialized {
                                     new_document: true,
-                                    parent_document_id: None, // TODO: Parent document id
+                                    child,
+                                    // Filled above in Peermerge because there can be many parents we are not
+                                    // aware of here.
+                                    parent_document_ids: vec![],
                                 }),
                                 vec![],
                                 peer_syncs,
@@ -1763,7 +1767,10 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
             document_id,
             StateEventContent::DocumentInitialized {
                 new_document: false,
-                parent_document_id: None, // TODO: child
+                child: document_state_wrapper.state().child,
+                // Filled upstream in Peermerge because there can be many parents we are not
+                // aware of here.
+                parent_document_ids: vec![],
             },
         ));
 
@@ -2074,7 +2081,10 @@ where
         document_id,
         StateEventContent::DocumentInitialized {
             new_document: true,
-            parent_document_id: parent_id,
+            child: parent_id.is_some(),
+            // Filled already here, this is the only parent because the document is
+            // created just now.
+            parent_document_ids: parent_id.map(|id| vec![id]).unwrap_or_else(Vec::new),
         },
     ));
 

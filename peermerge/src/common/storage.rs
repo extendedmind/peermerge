@@ -22,7 +22,7 @@ use super::{
     keys::{discovery_key_from_public_key, document_id_from_discovery_key},
     state::{
         ChangeDocumentFeedsStateResult, ChildDocumentInfo, ChildDocumentStatus, DocumentContent,
-        DocumentFeedInfo, DocumentFeedsState,
+        DocumentFeedInfo, DocumentFeedsState, DocumentIdWithParents,
     },
 };
 #[derive(Debug)]
@@ -38,8 +38,29 @@ impl<T> PeermergeStateWrapper<T>
 where
     T: RandomAccess + Debug + Send,
 {
-    pub(crate) async fn add_document_id_to_state(&mut self, document_id: &DocumentId) {
-        self.state.document_ids.push(*document_id);
+    pub(crate) async fn add_document_id_to_state(
+        &mut self,
+        document_id: DocumentId,
+        parent_document_id: Option<DocumentId>,
+    ) {
+        let parent_document_ids: Vec<DocumentId> = parent_document_id
+            .map(|id| vec![id])
+            .unwrap_or_else(Vec::new);
+        if let Some(document_id_with_parents) = self
+            .state
+            .document_ids
+            .iter_mut()
+            .find(|id_with_parents| id_with_parents.document_id == document_id)
+        {
+            document_id_with_parents
+                .parent_document_ids
+                .extend(parent_document_ids);
+        } else {
+            self.state.document_ids.push(DocumentIdWithParents {
+                document_id,
+                parent_document_ids,
+            });
+        }
         write_repo_state(&self.state, &mut self.storage).await;
     }
 

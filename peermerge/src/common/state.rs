@@ -30,13 +30,21 @@ pub(crate) struct PeermergeState {
     pub(crate) version: u8,
     pub(crate) peer_id: PeerId,
     pub(crate) default_peer_header: NameDescription,
-    pub(crate) document_ids: Vec<DocumentId>,
+    pub(crate) document_ids: Vec<DocumentIdWithParents>,
     pub(crate) document_settings: DocumentSettings,
 }
+
+/// Document Id and parent document Ids within this peermerge.
+#[derive(Debug, Clone)]
+pub(crate) struct DocumentIdWithParents {
+    pub(crate) document_id: DocumentId,
+    pub(crate) parent_document_ids: Vec<DocumentId>,
+}
+
 impl PeermergeState {
     pub(crate) fn new(
         default_peer_header: &NameDescription,
-        document_ids: Vec<DocumentId>,
+        document_ids: Vec<DocumentIdWithParents>,
         document_settings: DocumentSettings,
     ) -> Self {
         let peer_id: PeerId = *Uuid::new_v4().as_bytes();
@@ -53,7 +61,7 @@ impl PeermergeState {
         version: u8,
         peer_id: PeerId,
         default_peer_header: NameDescription,
-        document_ids: Vec<DocumentId>,
+        document_ids: Vec<DocumentIdWithParents>,
         document_settings: DocumentSettings,
     ) -> Self {
         Self {
