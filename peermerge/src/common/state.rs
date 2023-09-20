@@ -846,16 +846,14 @@ impl DocumentFeedsState {
                 }
             }
 
-            // Go throgh the values
             let mut replaced_feeds: Vec<DocumentFeedInfo> = vec![];
             let mut feeds_to_create: Vec<DocumentFeedInfo> = vec![];
             for (peer_id, feeds) in changed_feeds_map {
                 let len = feeds.len();
-                for (i, feed) in feeds.into_iter().enumerate() {
-                    let mut feed_to_store = feed.clone();
-                    feed_to_store.populate_discovery_key();
-                    feed_to_store.verified = false;
-                    feed_to_store.removed = false;
+                for (i, mut feed) in feeds.into_iter().enumerate() {
+                    feed.populate_discovery_key();
+                    feed.verified = false;
+                    feed.removed = false;
                     if let Some(stored_feeds) = self.other_feeds.get_mut(&feed.peer_id) {
                         let previous_feed_index = stored_feeds.len() - 1;
                         let previous_feed = stored_feeds.get_mut(previous_feed_index).unwrap();
@@ -868,7 +866,7 @@ impl DocumentFeedsState {
                         if i == 0 {
                             replaced_feeds.push(previous_feed.clone());
                         }
-                        stored_feeds.push(feed_to_store);
+                        stored_feeds.push(feed.clone());
                     } else {
                         if feed.replaced_public_key.is_some() {
                             return Err(PeermergeError::InvalidOperation {
@@ -877,7 +875,7 @@ impl DocumentFeedsState {
                                 ),
                             });
                         }
-                        self.other_feeds.insert(feed.peer_id, vec![feed_to_store]);
+                        self.other_feeds.insert(feed.peer_id, vec![feed.clone()]);
                     }
                     if i == len - 1 {
                         // The last one is the active one that should be created

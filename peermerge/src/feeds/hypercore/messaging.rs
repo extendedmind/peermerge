@@ -217,7 +217,7 @@ where
     }
 }
 
-#[instrument(level = "debug", skip(hypercore, peer_state, channel))]
+#[instrument(level = "debug", skip(hypercore, peer_state, channel), fields(peer_id = peer_state.local_peer_id[0]))]
 pub(super) async fn on_message<T>(
     hypercore: &mut Arc<Mutex<Hypercore<T>>>,
     peer_state: &mut PeerState,

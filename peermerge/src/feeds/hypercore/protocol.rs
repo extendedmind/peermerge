@@ -26,6 +26,7 @@ use crate::{DocumentId, FeedDiscoveryKey, FeedPersistence, PeerId, PeermergeErro
 
 #[instrument(level = "debug", skip_all, fields(is_initiator = protocol.is_initiator()))]
 pub(crate) async fn on_protocol<T, U, V>(
+    local_peer_id: PeerId,
     protocol: &mut Protocol<V>,
     documents: Arc<DashMap<DocumentId, Document<T, U>>>,
     feed_event_sender: &mut UnboundedSender<FeedEvent>,
@@ -39,15 +40,17 @@ where
 
     debug!("Begin listening to protocol events");
     // Stores discovery keys that have been received only via hypercore's
-    // Event::DiscoveryKey, but which haven't yet been broadcasted and thus
-    // hypercores not yet created either.
+    // Event::DiscoveryKey, but which have either not yet been broadcasted and thus
+    // hypercores not yet created either, or then the doc feed isn't verified. These
+    // are keys across different documents, and only relevant for responders to know
+    // to open a protocol when the time is right.
     let mut unbound_discovery_keys: Vec<FeedDiscoveryKey> = vec![];
-    // Stores discovery keys per doc feed discovery key, that have been broadcasted and
-    // hypercores created but which are not yet opened because doc feed has not been
-    // verified yet.
+    // Documents that have a Channel open, but possibly not yet have a doc feed verified.
+    let mut opened_documents: Vec<DocumentId> = vec![];
+    // Stores discovery keys per doc feed discovery key, that have been broadcasted
+    // but which are not yet opened because doc feed has not been verified yet.
     let mut discovery_keys_to_open: HashMap<FeedDiscoveryKey, Vec<FeedDiscoveryKey>> =
         HashMap::new();
-    let mut opened_documents: Vec<DocumentId> = vec![];
     while let Some(event) = protocol.next().await {
         debug!("Got protocol event {:?}", event);
         match event {
@@ -80,12 +83,14 @@ where
                         }
                     }
                     Event::DiscoveryKey(discovery_key) => {
-                        if let Some(hypercore) = get_openeable_hypercore_for_discovery_key(
-                            &discovery_key,
-                            &documents,
-                            &opened_documents,
-                        )
-                        .await
+                        if let Some((hypercore, _is_doc)) =
+                            get_openeable_hypercore_for_discovery_key(
+                                &discovery_key,
+                                &documents,
+                                &opened_documents,
+                                &mut discovery_keys_to_open,
+                            )
+                            .await
                         {
                             unbound_discovery_keys.retain(|key| key != &discovery_key);
                             let hypercore = hypercore.lock().await;
@@ -107,8 +112,8 @@ where
                         {
                             if is_doc {
                                 opened_documents.push(*discovery_key);
-                                if document.doc_feed_verified().await {
-                                    if is_initiator {
+                                if is_initiator {
+                                    if document.doc_feed_verified().await {
                                         // Now that the doc channel is open, we can open channels for the write feed and peer feeds
                                         let active_feeds = document.active_feeds().await;
                                         for active_feed in active_feeds {
@@ -116,22 +121,26 @@ where
                                             debug!("Event:Channel: opening active feed");
                                             protocol.open(*active_feed.public_key()).await?;
                                         }
-                                    }
-                                } else {
-                                    // Doc feed is not verified, need to wait for the others,
-                                    // tolerate unverified.
-                                    let doc_discovery_key = document.doc_discovery_key();
-                                    let active_peer_feeds_discovery_keys =
-                                        document.active_feeds_discovery_keys().await;
-                                    if let Some(existing_keys) =
-                                        discovery_keys_to_open.get_mut(&doc_discovery_key).as_mut()
-                                    {
-                                        existing_keys.extend(active_peer_feeds_discovery_keys);
                                     } else {
-                                        discovery_keys_to_open.insert(
-                                            doc_discovery_key,
-                                            active_peer_feeds_discovery_keys,
-                                        );
+                                        // Doc feed is not verified, need to wait for the others,
+                                        // tolerate unverified.
+                                        let doc_discovery_key = document.doc_discovery_key();
+                                        let active_peer_feeds_discovery_keys =
+                                            document.active_feeds_discovery_keys().await;
+                                        if let Some(existing_discovery_keys_to_open) =
+                                            discovery_keys_to_open
+                                                .get_mut(&doc_discovery_key)
+                                                .as_mut()
+                                        {
+                                            existing_discovery_keys_to_open
+                                                .extend(active_peer_feeds_discovery_keys);
+                                            existing_discovery_keys_to_open.dedup();
+                                        } else {
+                                            discovery_keys_to_open.insert(
+                                                doc_discovery_key,
+                                                active_peer_feeds_discovery_keys,
+                                            );
+                                        }
                                     }
                                 }
                             }
@@ -144,17 +153,16 @@ where
                                     document.feeds_state_and_child_documents().await;
                                 (Some(feeds_state), child_documents, None)
                             } else {
-                                (
-                                    None,
-                                    vec![],
-                                    Some(document.peer_id_from_discovery_key(discovery_key).await),
-                                )
+                                let peer_id =
+                                    document.peer_id_from_discovery_key(discovery_key).await;
+                                (None, vec![], Some(peer_id))
                             };
 
                             let mut hypercore = hypercore.lock().await;
                             let channel_receiver = channel.take_receiver().unwrap();
                             let channel_sender = channel.local_sender();
                             hypercore.on_channel(
+                                local_peer_id,
                                 is_doc,
                                 feeds_state,
                                 child_documents,
@@ -195,32 +203,24 @@ where
                             )
                             .await
                             .unwrap();
-
                             let new_discovery_keys_to_open: Vec<[u8; 32]> = message
                                 .feeds_to_create
                                 .iter()
                                 .map(|peer| discovery_key_from_public_key(&peer.public_key))
                                 .filter(|discovery_key| {
-                                    if is_initiator {
-                                        true
-                                    } else {
-                                        // Only open protocol to those that have previously
-                                        // been announced.
-                                        if unbound_discovery_keys.contains(discovery_key) {
-                                            unbound_discovery_keys
-                                                .retain(|key| key != discovery_key);
-                                            true
-                                        } else {
-                                            false
-                                        }
-                                    }
+                                    should_open_discovery_key(
+                                        discovery_key,
+                                        is_initiator,
+                                        &mut unbound_discovery_keys,
+                                    )
                                 })
                                 .collect();
-                            if let Some(existing_keys) = discovery_keys_to_open
+                            if let Some(existing_discovery_keys_to_open) = discovery_keys_to_open
                                 .get_mut(&message.doc_discovery_key)
                                 .as_mut()
                             {
-                                existing_keys.extend(new_discovery_keys_to_open);
+                                existing_discovery_keys_to_open.extend(new_discovery_keys_to_open);
+                                existing_discovery_keys_to_open.dedup();
                             } else {
                                 discovery_keys_to_open
                                     .insert(message.doc_discovery_key, new_discovery_keys_to_open);
@@ -260,6 +260,7 @@ where
                                 )
                                 .await
                                 .unwrap();
+
                                 if let Some(document_discovery_keys_to_open) =
                                     discovery_keys_to_open.get_mut(&message.doc_discovery_key)
                                 {
@@ -287,17 +288,17 @@ where
                         CHILD_DOCUMENT_CREATED_LOCAL_SIGNAL_NAME => {
                             let mut dec_state = State::from_buffer(&data);
                             let child_document_info: ChildDocumentInfo = dec_state.decode(&data)?;
+                            let child_public_key = child_document_info.doc_public_key;
                             let child_discovery_key =
-                                discovery_key_from_public_key(&child_document_info.doc_public_key);
-                            let child_document =
-                                get_document_by_discovery_key(&documents, &child_discovery_key)
-                                    .await
-                                    .unwrap();
-                            let child_doc_hypercore = child_document.doc_feed().await;
-                            let child_doc_hypercore = child_doc_hypercore.lock().await;
-                            let child_doc_public_key = *child_doc_hypercore.public_key();
-                            debug!("Event:ChildDocumentCreated: opening doc channel");
-                            protocol.open(child_doc_public_key).await?;
+                                discovery_key_from_public_key(&child_public_key);
+                            if should_open_discovery_key(
+                                &child_discovery_key,
+                                is_initiator,
+                                &mut unbound_discovery_keys,
+                            ) {
+                                debug!("Event:ChildDocumentCreated: opening doc channel");
+                                protocol.open(child_public_key).await?;
+                            }
                         }
                         _ => panic!("Unknown local signal: {name}"),
                     },
@@ -314,13 +315,14 @@ async fn get_openeable_hypercore_for_discovery_key<T, U>(
     discovery_key: &[u8; 32],
     documents: &Arc<DashMap<DocumentId, Document<T, U>>>,
     opened_documents: &Vec<DocumentId>,
-) -> Option<Arc<Mutex<HypercoreWrapper<U>>>>
+    discovery_keys_to_open: &mut HashMap<FeedDiscoveryKey, Vec<FeedDiscoveryKey>>,
+) -> Option<(Arc<Mutex<HypercoreWrapper<U>>>, bool)>
 where
     T: RandomAccess + Debug + Send + 'static,
     U: FeedPersistence,
 {
     if let Some(document) = get_document_by_discovery_key(documents, discovery_key).await {
-        Some(document.doc_feed().await)
+        Some((document.doc_feed().await, true))
     } else {
         for opened_document_id in opened_documents {
             let document = get_document_by_discovery_key(documents, opened_document_id)
@@ -328,7 +330,20 @@ where
                 .unwrap();
             let active_feed = document.active_feed(discovery_key).await;
             if active_feed.is_some() {
-                return active_feed;
+                if document.doc_feed_verified().await {
+                    return active_feed.map(|feed| (feed, false));
+                } else {
+                    // The doc feed is not verified yet, store this announced discovery key
+                    let doc_discovery_key = document.doc_discovery_key();
+                    if let Some(existing_discovery_keys_to_open) =
+                        discovery_keys_to_open.get_mut(&doc_discovery_key).as_mut()
+                    {
+                        existing_discovery_keys_to_open.push(*discovery_key);
+                        existing_discovery_keys_to_open.dedup();
+                    } else {
+                        discovery_keys_to_open.insert(doc_discovery_key, vec![*discovery_key]);
+                    }
+                }
             }
         }
         None
@@ -358,5 +373,24 @@ where
             }
         }
         None
+    }
+}
+
+fn should_open_discovery_key(
+    discovery_key: &FeedDiscoveryKey,
+    is_initiator: bool,
+    unbound_discovery_keys: &mut Vec<FeedDiscoveryKey>,
+) -> bool {
+    if is_initiator {
+        true
+    } else {
+        // Only open protocol to those that have previously
+        // been announced.
+        if unbound_discovery_keys.contains(discovery_key) {
+            unbound_discovery_keys.retain(|key| key != discovery_key);
+            true
+        } else {
+            false
+        }
     }
 }

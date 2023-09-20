@@ -608,30 +608,37 @@ where
             "Processing peer synced, is_root={}",
             discovery_key == self.doc_discovery_key
         );
-        if self.access_type == AccessType::Proxy {
-            if let Some(peer_id) = peer_id {
-                // Just notify a peer sync forward
-                return vec![StateEvent::new(
-                    self.id(),
-                    PeerSynced {
-                        peer_id,
-                        discovery_key,
-                        contiguous_length: synced_contiguous_length,
-                    },
-                )];
-            } else {
-                // Peer id is not available for the doc feed only, don't send that
-                // forward
-                return vec![];
-            }
-        }
         let (state_events, not_created_child_documents): (Vec<StateEvent>, Vec<ChildDocumentInfo>) = {
             // Sync doc state exclusively...
             let mut document_state = self.document_state.lock().await;
             let child = document_state.state().child;
+            let debu_doc_discovery_id = self.doc_discovery_key();
             let not_created_child_documents = document_state.state().not_created_child_documents();
-            let (document_initialized, patches, peer_syncs) =
-                if let Some((content, feeds_state, unapplied_entries)) =
+            if self.access_type == AccessType::Proxy {
+                if let Some(peer_id) = peer_id {
+                    // Just notify a peer sync forward
+                    (
+                        vec![StateEvent::new(
+                            self.id(),
+                            PeerSynced {
+                                peer_id,
+                                discovery_key,
+                                contiguous_length: synced_contiguous_length,
+                            },
+                        )],
+                        not_created_child_documents,
+                    )
+                } else {
+                    // Peer id is not available for the doc feed only, don't send that
+                    // forward
+                    (vec![], not_created_child_documents)
+                }
+            } else {
+                let (document_initialized, patches, peer_syncs) = if let Some((
+                    content,
+                    feeds_state,
+                    unapplied_entries,
+                )) =
                     document_state.content_feeds_state_and_unapplied_entries_mut()
                 {
                     if content.is_bootsrapped() {
@@ -651,7 +658,10 @@ where
                     } else {
                         debug!("Bootstrapping document content from entries");
                         if discovery_key != self.doc_discovery_key {
-                            panic!("Did not receive sync for doc feed first");
+                            panic!(
+                                "{} Did not receive sync for doc feed first, {debu_doc_discovery_id:?}",
+                                self.peer_id[0]
+                            );
                         }
                         if let Some(peer_syncs) = self
                             .bootstrap_content(
@@ -686,15 +696,17 @@ where
                     panic!("Content needs to exist for non-proxy documents");
                 };
 
-            (
-                self.state_events_from_update_content_result(
-                    &document_state,
-                    document_initialized,
-                    patches,
-                    peer_syncs,
-                ),
-                not_created_child_documents,
-            )
+                (
+                    self.state_events_from_update_content_result(
+                        &document_state,
+                        document_initialized,
+                        patches,
+                        peer_syncs,
+                    ),
+                    not_created_child_documents,
+                )
+            }
+
             // ..doc state sync ready, release lock
         };
 

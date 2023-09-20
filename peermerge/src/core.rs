@@ -504,15 +504,12 @@ impl Peermerge<RandomAccessMemory, FeedMemoryPersistence> {
             UnboundedSender<FeedEvent>,
             UnboundedReceiver<FeedEvent>,
         ) = unbounded();
-        let state_event_sender_for_task =
-            self.state_event_sender
-                .lock()
-                .await
-                .clone()
-                .ok_or_else(|| PeermergeError::BadArgument {
-                    context: "State event sender must be set before connecting protocol"
-                        .to_string(),
-                })?;
+        if self.state_event_sender.lock().await.is_none() {
+            return Err(PeermergeError::BadArgument {
+                context: "State event sender must be set before connecting protocol".to_string(),
+            });
+        };
+        let state_event_sender_for_task = self.state_event_sender.clone();
         let documents_for_task = self.documents.clone();
         let peermerge_state_for_task = self.peermerge_state.clone();
         let task_span = tracing::debug_span!("call_on_feed_event_memory").or_current();
@@ -549,7 +546,13 @@ impl Peermerge<RandomAccessMemory, FeedMemoryPersistence> {
             .await;
         });
 
-        on_protocol(protocol, self.documents.clone(), &mut feed_event_sender).await?;
+        on_protocol(
+            self.peer_id,
+            protocol,
+            self.documents.clone(),
+            &mut feed_event_sender,
+        )
+        .await?;
         Ok(())
     }
 }
@@ -560,12 +563,23 @@ async fn on_feed_event_memory(
     default_peer_header: NameDescription,
     document_settings: DocumentSettings,
     mut feed_event_receiver: UnboundedReceiver<FeedEvent>,
-    mut state_event_sender: UnboundedSender<StateEvent>,
+    state_event_sender_mutex: Arc<Mutex<Option<UnboundedSender<StateEvent>>>>,
     mut documents: Arc<DashMap<DocumentId, Document<RandomAccessMemory, FeedMemoryPersistence>>>,
     peermerge_state: Arc<Mutex<PeermergeStateWrapper<RandomAccessMemory>>>,
 ) {
+    let mut state_event_sender: UnboundedSender<StateEvent> = state_event_sender_mutex
+        .lock()
+        .await
+        .clone()
+        .expect("Should always be present");
     while let Some(event) = feed_event_receiver.next().await {
         debug!("Received event {:?}", event);
+        // The state event sender might change so that the other side closes
+        if state_event_sender.is_closed() {
+            if let Some(sender) = state_event_sender_mutex.lock().await.clone() {
+                state_event_sender = sender;
+            }
+        }
         match event.content {
             FeedEventContent::NewFeedsBroadcasted { new_feeds } => {
                 let mut document =
@@ -817,15 +831,12 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
             UnboundedSender<FeedEvent>,
             UnboundedReceiver<FeedEvent>,
         ) = unbounded();
-        let state_event_sender_for_task =
-            self.state_event_sender
-                .lock()
-                .await
-                .clone()
-                .ok_or_else(|| PeermergeError::BadArgument {
-                    context: "State event sender must be set before connecting protocol"
-                        .to_string(),
-                })?;
+        if self.state_event_sender.lock().await.is_none() {
+            return Err(PeermergeError::BadArgument {
+                context: "State event sender must be set before connecting protocol".to_string(),
+            });
+        };
+        let state_event_sender_for_task = self.state_event_sender.clone();
         let documents_for_task = self.documents.clone();
         let peemerge_state_for_task = self.peermerge_state.clone();
         let peer_id = self.peer_id;
@@ -848,7 +859,13 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
             .await;
         });
 
-        on_protocol(protocol, self.documents.clone(), &mut feed_event_sender).await?;
+        on_protocol(
+            self.peer_id,
+            protocol,
+            self.documents.clone(),
+            &mut feed_event_sender,
+        )
+        .await?;
         Ok(())
     }
 }
@@ -861,11 +878,22 @@ async fn on_feed_event_disk(
     document_settings: DocumentSettings,
     prefix: &PathBuf,
     mut feed_event_receiver: UnboundedReceiver<FeedEvent>,
-    mut state_event_sender: UnboundedSender<StateEvent>,
+    state_event_sender_mutex: Arc<Mutex<Option<UnboundedSender<StateEvent>>>>,
     mut documents: Arc<DashMap<DocumentId, Document<RandomAccessDisk, FeedDiskPersistence>>>,
     peermerge_state: Arc<Mutex<PeermergeStateWrapper<RandomAccessDisk>>>,
 ) {
+    let mut state_event_sender: UnboundedSender<StateEvent> = state_event_sender_mutex
+        .lock()
+        .await
+        .clone()
+        .expect("Should always be present");
     while let Some(event) = feed_event_receiver.next().await {
+        // The state event sender might change so that the other side closes
+        if state_event_sender.is_closed() {
+            if let Some(sender) = state_event_sender_mutex.lock().await.clone() {
+                state_event_sender = sender;
+            }
+        }
         debug!("Received event {:?}", event);
         match event.content {
             FeedEventContent::NewFeedsBroadcasted { new_feeds } => {
@@ -948,6 +976,7 @@ async fn on_feed_event_disk(
 //////////////////////////////////////////////////////
 //
 // Utilities
+//
 
 fn send_state_events(
     state_event_sender: &mut UnboundedSender<StateEvent>,

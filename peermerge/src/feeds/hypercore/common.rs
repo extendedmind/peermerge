@@ -13,6 +13,7 @@ use crate::{
 /// A PeerState stores information about a connected peer.
 #[derive(Debug)]
 pub(super) struct PeerState {
+    pub(super) local_peer_id: PeerId,
     pub(super) is_doc: bool,
     /// Set only when is_doc is true
     pub(super) feeds_state: Option<DocumentFeedsState>,
@@ -54,6 +55,7 @@ pub(super) struct PeerState {
 }
 impl PeerState {
     pub(crate) fn new(
+        local_peer_id: PeerId,
         is_doc: bool,
         doc_discovery_key: FeedDiscoveryKey,
         doc_signature_verifying_key: VerifyingKey,
@@ -62,6 +64,7 @@ impl PeerState {
         peer_id: Option<PeerId>,
     ) -> Self {
         PeerState {
+            local_peer_id,
             is_doc,
             doc_discovery_key,
             doc_signature_verifying_key,

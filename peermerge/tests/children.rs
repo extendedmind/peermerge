@@ -4,7 +4,7 @@ use futures::{
     StreamExt,
 };
 use peermerge::{
-    automerge::{transaction::Transactable, ROOT},
+    automerge::{transaction::Transactable, ScalarValue, ROOT},
     AccessType, AttachDocumentDiskOptionsBuilder, AttachDocumentMemoryOptionsBuilder,
     CreateNewDocumentDiskOptionsBuilder, CreateNewDocumentMemoryOptionsBuilder, DocumentId,
     FeedDiskPersistence, FeedMemoryPersistence, FeedPersistence, NameDescription, PeerId,
@@ -17,7 +17,6 @@ use random_access_storage::RandomAccess;
 use std::{collections::HashMap, fmt::Debug};
 use tempfile::Builder;
 use test_log::test;
-use tokio::time::{sleep, Duration};
 
 #[cfg(feature = "async-std")]
 use async_std::{sync::Mutex, task, test as async_test};
@@ -31,7 +30,7 @@ use common::*;
 /// one between all of them, an one between the first and second. All mediated
 /// by a proxy.
 #[test(async_test)]
-async fn scale_three_main_documents_two_shared() -> anyhow::Result<()> {
+async fn children_three_main_documents_two_shared() -> anyhow::Result<()> {
     // Document 1: memory peers
 
     let mut peermerge_creator_1 = Peermerge::new_memory(
@@ -40,12 +39,14 @@ async fn scale_three_main_documents_two_shared() -> anyhow::Result<()> {
             .build()?,
     )
     .await?;
+    println!("### CREATOR 1: {}", peermerge_creator_1.peer_id()[0]);
     let mut peermerge_joiner_1 = Peermerge::new_memory(
         PeermergeMemoryOptionsBuilder::default()
             .default_peer_header(NameDescription::new("joiner_1"))
             .build()?,
     )
     .await?;
+    println!("### JOINER 1: {}", peermerge_joiner_1.peer_id()[0]);
     let creator_1_state_event_receiver =
         create_state_events_channel(&mut peermerge_creator_1).await?;
     let joiner_1_state_event_receiver =
@@ -56,6 +57,7 @@ async fn scale_three_main_documents_two_shared() -> anyhow::Result<()> {
         &mut peermerge_joiner_1,
     )
     .await?;
+    println!("### DOCUMENT 1: {}", document_1_id[0]);
 
     // Document 2: disk peers
 
@@ -71,6 +73,7 @@ async fn scale_three_main_documents_two_shared() -> anyhow::Result<()> {
             .build()?,
     )
     .await?;
+    println!("### CREATOR 2: {}", peermerge_creator_2.peer_id()[0]);
     let joiner_2_dir = Builder::new()
         .prefix("scale_three_main_documents_two_shared_joiner_2")
         .tempdir()
@@ -84,6 +87,7 @@ async fn scale_three_main_documents_two_shared() -> anyhow::Result<()> {
             .build()?,
     )
     .await?;
+    println!("### JOINER 2: {}", peermerge_joiner_2.peer_id()[0]);
     let creator_2_state_event_receiver =
         create_state_events_channel(&mut peermerge_creator_2).await?;
     let joiner_2_state_event_receiver =
@@ -94,6 +98,7 @@ async fn scale_three_main_documents_two_shared() -> anyhow::Result<()> {
         &mut peermerge_joiner_2,
     )
     .await?;
+    println!("### DOCUMENT 2: {}", document_2_id[0]);
 
     // Document 3: memory peers
 
@@ -103,12 +108,14 @@ async fn scale_three_main_documents_two_shared() -> anyhow::Result<()> {
             .build()?,
     )
     .await?;
+    println!("### CREATOR 3: {}", peermerge_creator_3.peer_id()[0]);
     let mut peermerge_joiner_3 = Peermerge::new_memory(
         PeermergeMemoryOptionsBuilder::default()
             .default_peer_header(NameDescription::new("joiner_3"))
             .build()?,
     )
     .await?;
+    println!("### JOINER 3: {}", peermerge_joiner_3.peer_id()[0]);
     let creator_3_state_event_receiver =
         create_state_events_channel(&mut peermerge_creator_3).await?;
     let joiner_3_state_event_receiver =
@@ -119,33 +126,48 @@ async fn scale_three_main_documents_two_shared() -> anyhow::Result<()> {
         &mut peermerge_joiner_3,
     )
     .await?;
+    println!("### DOCUMENT 3: {}", document_3_id[0]);
+
+    // Use a proxy to sync peers of different documents together, asserting that the right document is
+    // found in every peer that should have it. NB: The proxy doesn't need to know about child
+    // documents, they are synced automatically.
+
+    let mut peermerge_proxy = Peermerge::new_memory(
+        PeermergeMemoryOptionsBuilder::default()
+            .default_peer_header(NameDescription::new("proxy"))
+            .build()?,
+    )
+    .await?;
+    println!("### PROXY: {}", peermerge_proxy.peer_id()[0]);
+    let proxy_state_event_receiver = create_state_events_channel(&mut peermerge_proxy).await?;
 
     // Shared document A: between all of the parties
 
-    let (shared_doc_info_a, _) = peermerge_joiner_1
-        .create_new_document_memory(
-            CreateNewDocumentMemoryOptionsBuilder::default()
+    let (shared_doc_info_a, _) = peermerge_joiner_2
+        .create_new_document_disk(
+            CreateNewDocumentDiskOptionsBuilder::default()
                 .document_type("scale_shared".to_string())
                 .document_header(NameDescription::new("a"))
-                .parent_id(document_1_id)
+                .parent_id(document_2_id)
                 .build()?,
-            |tx| tx.put(ROOT, "shared_counter", 0),
+            |tx| tx.put(ROOT, "shared_counter", ScalarValue::Counter(0.into())),
         )
         .await?;
     let shared_doc_id_a = shared_doc_info_a.id();
+    println!("### SHARED DOCUMENT A: {}", shared_doc_id_a[0]);
     assert!(shared_doc_info_a.static_info.child);
-    let document_secret_a = peermerge_joiner_1
+    let document_secret_a = peermerge_joiner_2
         .document_secret(&shared_doc_id_a)
         .await?
         .unwrap();
-    let sharing_info_a = peermerge_joiner_1.sharing_info(&shared_doc_id_a).await?;
-    let shared_doc_info_attach_a = peermerge_creator_2
-        .attach_document_disk(
-            AttachDocumentDiskOptionsBuilder::default()
+    let sharing_info_a = peermerge_joiner_2.sharing_info(&shared_doc_id_a).await?;
+    let shared_doc_info_attach_a = peermerge_creator_1
+        .attach_document_memory(
+            AttachDocumentMemoryOptionsBuilder::default()
                 .document_url(sharing_info_a.doc_url.clone())
                 .document_secret(document_secret_a.clone())
-                .parent_id(document_2_id)
-                .parent_header(NameDescription::new("document_2_override"))
+                .parent_id(document_1_id)
+                .parent_header(NameDescription::new("document_1_override"))
                 .build()?,
         )
         .await?;
@@ -168,75 +190,80 @@ async fn scale_three_main_documents_two_shared() -> anyhow::Result<()> {
     connect_peers_disk(&mut peermerge_creator_2, &mut peermerge_joiner_2).await?;
     connect_peers_memory(&mut peermerge_creator_3, &mut peermerge_joiner_3).await?;
 
-    wait_for_peers_synced(
+    let three_doc_receivers = wait_for_peers_synced(
         vec![
             (
-                peermerge_creator_1.peer_id(),
+                peermerge_creator_1.clone(),
                 peermerge_joiner_1.peer_id(),
                 creator_1_state_event_receiver,
                 document_1_id,
-                shared_doc_id_a,
+                None,
             ),
             (
-                peermerge_creator_2.peer_id(),
-                peermerge_joiner_2.peer_id(),
-                creator_2_state_event_receiver,
-                document_2_id,
-                shared_doc_id_a,
-            ),
-            (
-                peermerge_creator_3.peer_id(),
+                peermerge_creator_3.clone(),
                 peermerge_joiner_3.peer_id(),
                 creator_3_state_event_receiver,
                 document_3_id,
-                shared_doc_id_a,
+                None,
             ),
         ],
         vec![
             (
-                peermerge_joiner_1.peer_id(),
+                peermerge_joiner_1.clone(),
                 peermerge_creator_1.peer_id(),
                 joiner_1_state_event_receiver,
                 document_1_id,
-                shared_doc_id_a,
+                None,
             ),
             (
-                peermerge_joiner_2.peer_id(),
-                peermerge_creator_2.peer_id(),
-                joiner_2_state_event_receiver,
-                document_2_id,
-                shared_doc_id_a,
-            ),
-            (
-                peermerge_joiner_3.peer_id(),
+                peermerge_joiner_3.clone(),
                 peermerge_creator_3.peer_id(),
                 joiner_3_state_event_receiver,
                 document_3_id,
-                shared_doc_id_a,
+                None,
             ),
         ],
     )
     .await?;
 
-    // Shared document B: between first and second peer
+    let two_doc_receivers = wait_for_peers_synced(
+        vec![(
+            peermerge_creator_2.clone(),
+            peermerge_joiner_2.peer_id(),
+            creator_2_state_event_receiver,
+            document_2_id,
+            Some(shared_doc_id_a),
+        )],
+        vec![(
+            peermerge_joiner_2.clone(),
+            peermerge_creator_2.peer_id(),
+            joiner_2_state_event_receiver,
+            document_2_id,
+            Some(shared_doc_id_a),
+        )],
+    )
+    .await?;
 
-    let (shared_doc_info_b, _) = peermerge_creator_2
-        .create_new_document_disk(
-            CreateNewDocumentDiskOptionsBuilder::default()
+    // Shared document B: between first and third peer
+
+    let (shared_doc_info_b, _) = peermerge_creator_3
+        .create_new_document_memory(
+            CreateNewDocumentMemoryOptionsBuilder::default()
                 .document_type("scale_shared".to_string())
                 .document_header(NameDescription::new("b"))
-                .parent_id(document_2_id)
+                .parent_id(document_3_id)
                 .build()?,
-            |tx| tx.put(ROOT, "shared_counter", 0),
+            |tx| tx.put(ROOT, "shared_counter", ScalarValue::Counter(0.into())),
         )
         .await?;
     let shared_doc_id_b = shared_doc_info_b.id();
+    println!("### SHARED DOCUMENT B: {}", shared_doc_id_b[0]);
     assert!(shared_doc_info_b.static_info.child);
-    let document_secret_b = peermerge_creator_2
+    let document_secret_b = peermerge_creator_3
         .document_secret(&shared_doc_id_b)
         .await?
         .unwrap();
-    let sharing_info_b = peermerge_creator_2.sharing_info(&shared_doc_id_b).await?;
+    let sharing_info_b = peermerge_creator_3.sharing_info(&shared_doc_id_b).await?;
     let shared_doc_info_attach_b = peermerge_creator_1
         .attach_document_memory(
             AttachDocumentMemoryOptionsBuilder::default()
@@ -249,20 +276,6 @@ async fn scale_three_main_documents_two_shared() -> anyhow::Result<()> {
         .await?;
     assert!(shared_doc_info_attach_b.static_info.child);
 
-    println!("### SLEEP START...");
-    sleep(Duration::from_millis(10000)).await;
-    println!("### ...SLEEP END");
-
-    // Use a proxy to sync peers of different documents together, asserting that the right document is
-    // found in every peer that should have it. NB: The proxy doesn't need to know about child
-    // documents, they are synced automatically.
-
-    let mut peermerge_proxy = Peermerge::new_memory(
-        PeermergeMemoryOptionsBuilder::default()
-            .default_peer_header(NameDescription::new("proxy"))
-            .build()?,
-    )
-    .await?;
     let proxy_info = peermerge_proxy
         .attach_document_memory(
             AttachDocumentMemoryOptionsBuilder::default()
@@ -288,38 +301,18 @@ async fn scale_three_main_documents_two_shared() -> anyhow::Result<()> {
         .await?;
     assert_eq!(proxy_info.access_type, AccessType::Proxy);
 
-    let proxy_state_event_receiver = create_state_events_channel(&mut peermerge_proxy).await?;
-    let creator_1_state_event_receiver =
-        create_state_events_channel(&mut peermerge_creator_1).await?;
-    let joiner_1_state_event_receiver =
-        create_state_events_channel(&mut peermerge_joiner_1).await?;
-    let creator_2_state_event_receiver =
-        create_state_events_channel(&mut peermerge_creator_2).await?;
-    let joiner_2_state_event_receiver =
-        create_state_events_channel(&mut peermerge_joiner_2).await?;
-    let creator_3_state_event_receiver =
-        create_state_events_channel(&mut peermerge_creator_3).await?;
-    let joiner_3_state_event_receiver =
-        create_state_events_channel(&mut peermerge_joiner_3).await?;
-
     // Only one of the peers per document is connected, the mutual sync between the peers
     // from before will sync to the other peer not connected to the proxy.
     connect_peers_memory(&mut peermerge_proxy, &mut peermerge_creator_1).await?;
-    connect_peers_disk_to_memory(&mut peermerge_proxy, &mut peermerge_joiner_2).await?;
-    connect_peers_memory(&mut peermerge_proxy, &mut peermerge_creator_3).await?;
+    connect_peers_disk_to_memory(&mut peermerge_proxy, &mut peermerge_creator_2).await?;
+    connect_peers_memory(&mut peermerge_proxy, &mut peermerge_joiner_3).await?;
 
     wait_for_proxy_mediated_increments(
         proxy_state_event_receiver,
-        vec![
-            creator_3_state_event_receiver,
-            joiner_3_state_event_receiver,
-        ],
-        vec![
-            creator_1_state_event_receiver,
-            joiner_1_state_event_receiver,
-            creator_2_state_event_receiver,
-            joiner_2_state_event_receiver,
-        ],
+        shared_doc_id_b,
+        two_doc_receivers,
+        shared_doc_id_a,
+        three_doc_receivers,
     )
     .await?;
 
@@ -354,7 +347,7 @@ async fn create_main_document_memory(
                 .document_type("scale".to_string())
                 .document_header(NameDescription::new(document_name))
                 .build()?,
-            |tx| tx.put(ROOT, "counter", 0),
+            |tx| tx.put(ROOT, "main", document_name),
         )
         .await?;
     let document_id = creator_doc_info.id();
@@ -474,67 +467,76 @@ async fn connect_peers_disk_to_memory(
     Ok(())
 }
 
-async fn wait_for_peers_synced(
+async fn wait_for_peers_synced<T, U>(
     creators: Vec<(
-        PeerId,
+        Peermerge<T, U>,
         PeerId,
         UnboundedReceiver<StateEvent>,
         DocumentId,
-        DocumentId,
+        Option<DocumentId>,
     )>,
     joiners: Vec<(
-        PeerId,
+        Peermerge<T, U>,
         PeerId,
         UnboundedReceiver<StateEvent>,
         DocumentId,
-        DocumentId,
+        Option<DocumentId>,
     )>,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Vec<(Peermerge<T, U>, DocumentId, UnboundedReceiver<StateEvent>)>>
+where
+    T: RandomAccess + Debug + Send + 'static,
+    U: FeedPersistence,
+{
     let mut processes = vec![];
-    for (creator_peer_id, joiner_peer_id, creator_state_event_receiver, doc_id, child_doc_id) in
-        creators
-    {
+    for (creator, joiner_peer_id, creator_state_event_receiver, doc_id, child_doc_id) in creators {
         processes.push(task::spawn(async move {
             process_until_synced(
+                creator,
                 creator_state_event_receiver,
-                creator_peer_id,
                 joiner_peer_id,
                 doc_id,
                 child_doc_id,
             )
-            .await;
+            .await
         }));
     }
 
-    for (joiner_peer_id, creator_peer_id, joiner_state_event_receiver, doc_id, child_doc_id) in
-        joiners
-    {
+    for (joiner, creator_peer_id, joiner_state_event_receiver, doc_id, child_doc_id) in joiners {
         processes.push(task::spawn(async move {
             process_until_synced(
+                joiner,
                 joiner_state_event_receiver,
-                joiner_peer_id,
                 creator_peer_id,
                 doc_id,
                 child_doc_id,
             )
-            .await;
+            .await
         }));
     }
 
-    join_all(processes).await;
-    Ok(())
+    let receiver_results = join_all(processes).await;
+    let receivers = receiver_results
+        .into_iter()
+        .map(|result| result.unwrap())
+        .collect();
+    Ok(receivers)
 }
 
-async fn process_until_synced(
+async fn process_until_synced<T, U>(
+    mut peermerge: Peermerge<T, U>,
     mut state_event_receiver: UnboundedReceiver<StateEvent>,
-    local_peer_id: PeerId,
     remote_peer_id: PeerId,
     document_id: DocumentId,
-    child_document_id: DocumentId,
-) {
+    child_document_id: Option<DocumentId>,
+) -> (Peermerge<T, U>, DocumentId, UnboundedReceiver<StateEvent>)
+where
+    T: RandomAccess + Debug + Send + 'static,
+    U: FeedPersistence,
+{
     let mut peer_synced: bool = false;
     let mut remote_peer_synced: bool = false;
     let mut documents_synced: usize = 0;
+    let local_peer_id = peermerge.peer_id();
     while let Some(event) = state_event_receiver.next().await {
         match event.content {
             PeerSynced {
@@ -560,15 +562,12 @@ async fn process_until_synced(
                 parent_document_ids,
                 ..
             } => {
-                println!("### {child}");
-                if child
-                    && child_document_id == event.document_id
-                    && parent_document_ids == vec![document_id]
-                {
-                    documents_synced += 1;
-                } else if !child
-                    && document_id == event.document_id
-                    && parent_document_ids.is_empty()
+                if (child
+                    && child_document_id == Some(event.document_id)
+                    && parent_document_ids == vec![document_id])
+                    || (!child
+                        && document_id == event.document_id
+                        && parent_document_ids.is_empty())
                 {
                     documents_synced += 1;
                 } else {
@@ -577,35 +576,65 @@ async fn process_until_synced(
             }
             _ => {}
         }
-        if peer_synced && remote_peer_synced && documents_synced == 2 {
-            break;
+        if peer_synced
+            && remote_peer_synced
+            && documents_synced == (if child_document_id.is_some() { 2 } else { 1 })
+        {
+            let state_event_receiver = create_state_events_channel(&mut peermerge).await.unwrap();
+            return (peermerge, document_id, state_event_receiver);
         }
     }
+    unreachable!()
 }
 
 async fn wait_for_proxy_mediated_increments(
     proxy_state_event_receiver: UnboundedReceiver<StateEvent>,
-    two_document_state_event_receivers: Vec<UnboundedReceiver<StateEvent>>,
-    three_document_state_event_receivers: Vec<UnboundedReceiver<StateEvent>>,
+    two_shared_doc_id: DocumentId,
+    two_document_state_event_receivers: Vec<(
+        Peermerge<RandomAccessDisk, FeedDiskPersistence>,
+        DocumentId,
+        UnboundedReceiver<StateEvent>,
+    )>,
+    three_shared_doc_id: DocumentId,
+    three_document_state_event_receivers: Vec<(
+        Peermerge<RandomAccessMemory, FeedMemoryPersistence>,
+        DocumentId,
+        UnboundedReceiver<StateEvent>,
+    )>,
 ) -> anyhow::Result<()> {
-    let proxy_process = task::spawn(async move {
+    // TODO: The proxy now never exists
+    let _proxy_process = task::spawn(async move {
         process_proxy_state_events(proxy_state_event_receiver)
             .await
             .unwrap();
     });
-    let mut processes = vec![proxy_process];
-    for state_event_receiver in two_document_state_event_receivers {
+    let mut processes = vec![];
+    for (peermerge, parent_document_id, state_event_receiver) in two_document_state_event_receivers
+    {
         processes.push(task::spawn(async move {
-            process_two_documents_state_events(state_event_receiver)
-                .await
-                .unwrap();
+            process_two_documents_state_events(
+                peermerge,
+                state_event_receiver,
+                three_shared_doc_id,
+                parent_document_id,
+            )
+            .await
+            .unwrap();
         }));
     }
-    for state_event_receiver in three_document_state_event_receivers {
+    for (peermerge, parent_document_id, state_event_receiver) in
+        three_document_state_event_receivers.into_iter()
+    {
         processes.push(task::spawn(async move {
-            process_three_documents_state_events(state_event_receiver)
-                .await
-                .unwrap();
+            process_three_documents_state_events(
+                peermerge,
+                state_event_receiver,
+                two_shared_doc_id,
+                three_shared_doc_id,
+                parent_document_id,
+            )
+            .await
+            .unwrap();
         }));
     }
     join_all(processes).await;
@@ -624,15 +653,20 @@ async fn process_proxy_state_events(
         } = event.content
         {
             peer_syncs.insert(peer_id, contiguous_length);
-            // TODO: Break when there is the right number of these
+            // TODO: Break when there is the right number of these,
+            // or some other thing happens
         }
     }
     Ok(())
 }
 
 async fn process_two_documents_state_events(
+    mut peermerge: Peermerge<RandomAccessDisk, FeedDiskPersistence>,
     mut state_event_receiver: UnboundedReceiver<StateEvent>,
+    three_shared_doc_id: DocumentId,
+    _parent_document_id: DocumentId,
 ) -> anyhow::Result<()> {
+    let mut first_change = true;
     while let Some(event) = state_event_receiver.next().await {
         match event.content {
             PeerSynced { .. } => {
@@ -641,8 +675,33 @@ async fn process_two_documents_state_events(
             RemotePeerSynced { .. } => {
                 // TODO
             }
-            DocumentInitialized { new_document, .. } => {
-                println!("### 2 DOCS, {new_document}");
+            DocumentInitialized { .. } => {
+                panic!("Unexpected DocumentInitialized for two docs")
+            }
+            DocumentChanged { .. } => {
+                if event.document_id == three_shared_doc_id {
+                    if first_change {
+                        // Increment the doc shared with all three
+                        peermerge
+                            .transact_mut(
+                                &three_shared_doc_id,
+                                |doc| doc.increment(ROOT, "shared_counter", 1),
+                                None,
+                            )
+                            .await?;
+                        first_change = false;
+                    } else {
+                        let value = peermerge
+                            .transact(&three_shared_doc_id, |doc| {
+                                let (value, _) = get(doc, ROOT, "shared_counter")?.unwrap();
+                                Ok(value.into_scalar().unwrap().to_u64().unwrap())
+                            })
+                            .await?;
+                        if value == 6 {
+                            break;
+                        }
+                    }
+                }
             }
             _ => {}
         }
@@ -651,8 +710,14 @@ async fn process_two_documents_state_events(
 }
 
 async fn process_three_documents_state_events(
+    mut peermerge: Peermerge<RandomAccessMemory, FeedMemoryPersistence>,
     mut state_event_receiver: UnboundedReceiver<StateEvent>,
+    two_shared_doc_id: DocumentId,
+    three_shared_doc_id: DocumentId,
+    parent_document_id: DocumentId,
 ) -> anyhow::Result<()> {
+    let mut two_shared_initialized: bool = false;
+    let mut three_shared_initialized: bool = false;
     while let Some(event) = state_event_receiver.next().await {
         match event.content {
             PeerSynced { .. } => {
@@ -661,8 +726,49 @@ async fn process_three_documents_state_events(
             RemotePeerSynced { .. } => {
                 // TODO
             }
-            DocumentInitialized { new_document, .. } => {
-                println!("### 3 DOCS, {new_document}");
+            DocumentInitialized {
+                child,
+                parent_document_ids,
+                ..
+            } => {
+                if child
+                    && (!two_shared_initialized
+                        && event.document_id == two_shared_doc_id
+                        && parent_document_ids == vec![parent_document_id])
+                {
+                    two_shared_initialized = true;
+                } else if child
+                    && (!three_shared_initialized
+                        && event.document_id == three_shared_doc_id
+                        && parent_document_ids == vec![parent_document_id])
+                {
+                    three_shared_initialized = true;
+                } else {
+                    panic!("Unexpected DocumentInitialized");
+                }
+                if two_shared_initialized && three_shared_initialized {
+                    // Increment the doc shared with all three
+                    peermerge
+                        .transact_mut(
+                            &three_shared_doc_id,
+                            |doc| doc.increment(ROOT, "shared_counter", 1),
+                            None,
+                        )
+                        .await?;
+                }
+            }
+            DocumentChanged { .. } => {
+                if event.document_id == three_shared_doc_id {
+                    let value = peermerge
+                        .transact(&three_shared_doc_id, |doc| {
+                            let (value, _) = get(doc, ROOT, "shared_counter")?.unwrap();
+                            Ok(value.into_scalar().unwrap().to_u64().unwrap())
+                        })
+                        .await?;
+                    if value == 6 {
+                        break;
+                    }
+                }
             }
             _ => {}
         }

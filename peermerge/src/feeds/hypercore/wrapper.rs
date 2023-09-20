@@ -289,6 +289,7 @@ where
     #[instrument(level = "debug", skip_all)]
     pub(super) fn on_channel(
         &mut self,
+        local_peer_id: PeerId,
         is_doc: bool,
         peers_state: Option<DocumentFeedsState>,
         child_documents: Vec<ChildDocumentInfo>,
@@ -303,6 +304,7 @@ where
         debug!("Processing channel id={}", channel.id(),);
         self.channel_senders.push(channel_sender);
         let peer_state = PeerState::new(
+            local_peer_id,
             is_doc,
             doc_discovery_key,
             doc_signature_verifying_key,
