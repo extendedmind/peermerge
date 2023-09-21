@@ -52,6 +52,7 @@ where
         true,
         max_entry_data_size_bytes,
     );
+
     Ok((
         InitAutomergeDocsResult {
             meta_automerge_doc,
@@ -166,7 +167,8 @@ pub(crate) fn bootstrap_automerge_user_doc_from_entries(
         ),
         _ => panic!("Invalid init entries"),
     };
-    assert_eq!(shrunk_entries.shrunk_count, doc_part_count as u64);
+    let shrunk_count = shrunk_entries.shrunk_count;
+    assert_eq!(shrunk_count, doc_part_count as u64);
     let actor_id = generate_actor_id(write_peer_id);
     let mut user_automerge_doc =
         init_automerge_doc_from_data_with_actor_id(actor_id, &user_doc_data);
@@ -175,7 +177,6 @@ pub(crate) fn bootstrap_automerge_user_doc_from_entries(
         .merge(&mut changed_meta_automerge_doc)
         .unwrap();
 
-    let shrunk_count = shrunk_entries.shrunk_count;
     let mut result = apply_entries_autocommit(
         meta_automerge_doc,
         &mut user_automerge_doc,
@@ -184,6 +185,7 @@ pub(crate) fn bootstrap_automerge_user_doc_from_entries(
         shrunk_entries,
         unapplied_entries,
     )?;
+
     if !result.contains_key(synced_discovery_key) {
         // If there weren't other entries after the init entries that caused the
         // feed change to go further, then push the feed change at least pass

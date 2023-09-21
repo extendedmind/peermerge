@@ -59,6 +59,7 @@ async fn memory_three_writers() -> anyhow::Result<()> {
                 .encrypted(false)
                 .build()?,
             |tx| tx.put(ROOT, "version", 1),
+            None,
         )
         .await?;
     assert_eq!(
@@ -408,18 +409,22 @@ async fn process_creator_state_events(
                 let document_changes_len = document_changes.len();
                 match document_changes_len {
                     0 => {
-                        assert_eq!(patches.len(), 2); // Original creation of "version" and "texts";
+                        assert_eq!(patches.len(), 1); // Original creation of "version";
                         document_changes.push(patches);
                     }
                     1 => {
-                        assert_eq!(patches.len(), 1); // Original creation of "text";
+                        assert_eq!(patches.len(), 1); // Original creation of "texts";
                         document_changes.push(patches);
                     }
                     2 => {
-                        assert_eq!(patches.len(), 1); // "Hello" in one Splice patch
+                        assert_eq!(patches.len(), 1); // Original creation of "text";
                         document_changes.push(patches);
                     }
                     3 => {
+                        assert_eq!(patches.len(), 1); // "Hello" in one Splice patch
+                        document_changes.push(patches);
+                    }
+                    4 => {
                         assert_eq!(patches.len(), 1); // ", world!" in one TextValue
                         document_changes.push(patches);
                         assert_text_equals(&peermerge, &doc_id, &text_id, "Hello, world!").await;
@@ -447,19 +452,19 @@ async fn process_creator_state_events(
                             .unwrap();
                         assert_text_equals(&peermerge, &doc_id, &text_id, "HellYY world!").await;
                     }
-                    4 => {
+                    5 => {
                         // This is the local deletions, one Delete patch with num 2
                         assert_eq!(patches.len(), 1);
                         document_changes.push(patches);
                     }
-                    5 => {
+                    6 => {
                         // This is the two local additions as one Splice message
                         assert_eq!(patches.len(), 1);
                         document_changes.push(patches);
                         // Unreserve to process the changes from the peer now
                         peermerge.unreserve_object(&doc_id, &text_id).await?;
                     }
-                    6 => {
+                    7 => {
                         assert_eq!(patches.len(), 2); // One deletion that wasn't joined and two X chars as one TextValue
                         document_changes.push(patches);
                         {
@@ -529,7 +534,7 @@ async fn process_creator_state_events(
                             .unwrap();
                         });
                     }
-                    7 => {
+                    8 => {
                         assert_eq!(patches.len(), 1); // ZZ latecomer addition as one TextValue
                         assert_text_equals_either(
                             &peermerge,

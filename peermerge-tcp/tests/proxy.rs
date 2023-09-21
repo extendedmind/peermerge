@@ -52,6 +52,7 @@ async fn tcp_proxy_disk_encrypted() -> anyhow::Result<()> {
                 .encrypted(true)
                 .build()?,
             |tx| tx.put(ROOT, "version", 1),
+            None,
         )
         .await?;
 

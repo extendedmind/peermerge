@@ -45,7 +45,7 @@ pub(crate) enum EntryContent {
         meta: bool,
         /// Number of ChangePart entries coming after this entry. This is > 0
         /// if data > max_chunk_bytes.
-        part_count: u32,
+        change_part_count: u32,
         /// Data of the change.
         data: Vec<u8>,
         /// Size of the data. Needed when draining the content of the data
@@ -64,11 +64,11 @@ pub(crate) enum EntryContent {
 }
 
 impl EntryContent {
-    pub(crate) fn new_change(meta: bool, part_count: u32, data: Vec<u8>) -> Self {
+    pub(crate) fn new_change(meta: bool, change_part_count: u32, data: Vec<u8>) -> Self {
         let data_len = data.len();
         EntryContent::Change {
             meta,
-            part_count,
+            change_part_count,
             data,
             data_len,
             change: None,
@@ -89,6 +89,10 @@ impl EntryContent {
 pub(crate) struct Entry {
     pub(crate) version: u8,
     pub(crate) content: EntryContent,
+    // Derived value set, if InitDoc, InitPeer or Change, to
+    // doc_part_count or change_part_count, or if DocPart or
+    // ChangePart, to 0.
+    pub(crate) part_count: u32,
 }
 impl Entry {
     pub(crate) fn new_init_doc(
@@ -136,10 +140,10 @@ impl Entry {
         )
     }
 
-    pub(crate) fn new_change(meta: bool, part_count: u32, data: Vec<u8>) -> Self {
+    pub(crate) fn new_change(meta: bool, change_part_count: u32, data: Vec<u8>) -> Self {
         Self::new(
             PEERMERGE_VERSION,
-            EntryContent::new_change(meta, part_count, data),
+            EntryContent::new_change(meta, change_part_count, data),
         )
     }
 
@@ -148,7 +152,19 @@ impl Entry {
     }
 
     pub(crate) fn new(version: u8, content: EntryContent) -> Self {
-        Self { version, content }
+        let part_count: u32 = match content {
+            EntryContent::Change {
+                change_part_count, ..
+            } => change_part_count,
+            EntryContent::InitDoc { doc_part_count, .. } => doc_part_count,
+            EntryContent::InitPeer { doc_part_count, .. } => doc_part_count,
+            _ => 0,
+        };
+        Self {
+            version,
+            content,
+            part_count,
+        }
     }
 }
 
@@ -301,7 +317,10 @@ pub(crate) fn shrink_entries(mut entries: Vec<Entry>) -> ShrunkEntries {
                     expected_part_count = *doc_part_count;
                     is_init_ongoing = true;
                 }
-                EntryContent::Change { part_count, .. } => {
+                EntryContent::Change {
+                    change_part_count: part_count,
+                    ..
+                } => {
                     expected_part_count = *part_count;
                     is_change_ongoing = true;
                 }

@@ -392,6 +392,7 @@ impl Peermerge<RandomAccessMemory, FeedMemoryPersistence> {
         &mut self,
         options: CreateNewDocumentMemoryOptions,
         init_cb: F,
+        change_id: Option<Vec<u8>>,
     ) -> Result<(DocumentInfo, O), PeermergeError>
     where
         F: FnOnce(&mut Transaction) -> Result<O, AutomergeError>,
@@ -408,6 +409,7 @@ impl Peermerge<RandomAccessMemory, FeedMemoryPersistence> {
             parent_id_signing_key_and_header,
             self.document_settings.clone(),
             init_cb,
+            change_id,
         )
         .await?;
         let (document, parent_id) = self
@@ -763,6 +765,7 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
         &mut self,
         options: CreateNewDocumentDiskOptions,
         init_cb: F,
+        change_id: Option<Vec<u8>>,
     ) -> Result<(DocumentInfo, O), PeermergeError>
     where
         F: FnOnce(&mut Transaction) -> Result<O, AutomergeError>,
@@ -779,6 +782,7 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
             parent_id_signing_key_and_header,
             self.document_settings.clone(),
             init_cb,
+            change_id,
             &self.prefix,
         )
         .await?;

@@ -53,6 +53,7 @@ async fn children_three_main_documents_two_shared() -> anyhow::Result<()> {
         create_state_events_channel(&mut peermerge_joiner_1).await?;
     let (document_1_id, document_1_proxy_doc_url) = create_main_document_memory(
         "document_1",
+        "value_1",
         &mut peermerge_creator_1,
         &mut peermerge_joiner_1,
     )
@@ -94,6 +95,7 @@ async fn children_three_main_documents_two_shared() -> anyhow::Result<()> {
         create_state_events_channel(&mut peermerge_joiner_2).await?;
     let (document_2_id, document_2_proxy_doc_url) = create_main_document_disk(
         "document_2",
+        "value_2",
         &mut peermerge_creator_2,
         &mut peermerge_joiner_2,
     )
@@ -101,13 +103,19 @@ async fn children_three_main_documents_two_shared() -> anyhow::Result<()> {
     println!("### DOCUMENT 2: {}", document_2_id[0]);
 
     // Document 3: memory peers
-
+    // NB: The creator has small max entry size, big meta and user doc values, to test
+    // splitting of values.
     let mut peermerge_creator_3 = Peermerge::new_memory(
         PeermergeMemoryOptionsBuilder::default()
-            .default_peer_header(NameDescription::new("creator_3"))
+            .default_peer_header(NameDescription::new_with_description(
+                "creator_3",
+                &generate_string(1, 1500),
+            ))
+            .max_entry_data_size_bytes(1024)
             .build()?,
     )
     .await?;
+
     println!("### CREATOR 3: {}", peermerge_creator_3.peer_id()[0]);
     let mut peermerge_joiner_3 = Peermerge::new_memory(
         PeermergeMemoryOptionsBuilder::default()
@@ -121,12 +129,34 @@ async fn children_three_main_documents_two_shared() -> anyhow::Result<()> {
     let joiner_3_state_event_receiver =
         create_state_events_channel(&mut peermerge_joiner_3).await?;
     let (document_3_id, document_3_proxy_doc_url) = create_main_document_memory(
-        "document_3",
+        &("document_3_".to_string() + &generate_string(2, 1500)),
+        &generate_string(3, 1500),
         &mut peermerge_creator_3,
         &mut peermerge_joiner_3,
     )
     .await?;
     println!("### DOCUMENT 3: {}", document_3_id[0]);
+
+    // Create an assortment of changes, big and small, to verify that changes split into many pieces
+    // are recreated later in the joiner.
+    peermerge_creator_3
+        .transact_mut(&document_3_id, |doc| doc.put(ROOT, "test", "initial"), None)
+        .await?;
+    peermerge_creator_3
+        .transact_mut(
+            &document_3_id,
+            |doc| doc.put(ROOT, "test", generate_string(4, 3500)),
+            None,
+        )
+        .await?;
+    let document_3_final_change_id: Vec<u8> = vec![1];
+    peermerge_creator_3
+        .transact_mut(
+            &document_3_id,
+            |doc| doc.put(ROOT, "test", "final"),
+            Some(document_3_final_change_id.clone()),
+        )
+        .await?;
 
     // Use a proxy to sync peers of different documents together, asserting that the right document is
     // found in every peer that should have it. NB: The proxy doesn't need to know about child
@@ -151,6 +181,7 @@ async fn children_three_main_documents_two_shared() -> anyhow::Result<()> {
                 .parent_id(document_2_id)
                 .build()?,
             |tx| tx.put(ROOT, "shared_counter", ScalarValue::Counter(0.into())),
+            None,
         )
         .await?;
     let shared_doc_id_a = shared_doc_info_a.id();
@@ -197,6 +228,7 @@ async fn children_three_main_documents_two_shared() -> anyhow::Result<()> {
                 peermerge_joiner_1.peer_id(),
                 creator_1_state_event_receiver,
                 document_1_id,
+                ("main".to_string(), "value_1".to_string(), None),
                 None,
             ),
             (
@@ -204,6 +236,11 @@ async fn children_three_main_documents_two_shared() -> anyhow::Result<()> {
                 peermerge_joiner_3.peer_id(),
                 creator_3_state_event_receiver,
                 document_3_id,
+                (
+                    "test".to_string(),
+                    "final".to_string(),
+                    Some(document_3_final_change_id),
+                ),
                 None,
             ),
         ],
@@ -213,6 +250,7 @@ async fn children_three_main_documents_two_shared() -> anyhow::Result<()> {
                 peermerge_creator_1.peer_id(),
                 joiner_1_state_event_receiver,
                 document_1_id,
+                ("main".to_string(), "value_1".to_string(), None),
                 None,
             ),
             (
@@ -220,6 +258,7 @@ async fn children_three_main_documents_two_shared() -> anyhow::Result<()> {
                 peermerge_creator_3.peer_id(),
                 joiner_3_state_event_receiver,
                 document_3_id,
+                ("test".to_string(), "final".to_string(), None),
                 None,
             ),
         ],
@@ -232,6 +271,7 @@ async fn children_three_main_documents_two_shared() -> anyhow::Result<()> {
             peermerge_joiner_2.peer_id(),
             creator_2_state_event_receiver,
             document_2_id,
+            ("main".to_string(), "value_2".to_string(), None),
             Some(shared_doc_id_a),
         )],
         vec![(
@@ -239,6 +279,7 @@ async fn children_three_main_documents_two_shared() -> anyhow::Result<()> {
             peermerge_creator_2.peer_id(),
             joiner_2_state_event_receiver,
             document_2_id,
+            ("main".to_string(), "value_2".to_string(), None),
             Some(shared_doc_id_a),
         )],
     )
@@ -246,6 +287,7 @@ async fn children_three_main_documents_two_shared() -> anyhow::Result<()> {
 
     // Shared document B: between first and third peer
 
+    let shared_doc_b_initial_change_id: Vec<u8> = vec![2];
     let (shared_doc_info_b, _) = peermerge_creator_3
         .create_new_document_memory(
             CreateNewDocumentMemoryOptionsBuilder::default()
@@ -254,6 +296,7 @@ async fn children_three_main_documents_two_shared() -> anyhow::Result<()> {
                 .parent_id(document_3_id)
                 .build()?,
             |tx| tx.put(ROOT, "shared_counter", ScalarValue::Counter(0.into())),
+            Some(shared_doc_b_initial_change_id.clone()),
         )
         .await?;
     let shared_doc_id_b = shared_doc_info_b.id();
@@ -310,6 +353,7 @@ async fn children_three_main_documents_two_shared() -> anyhow::Result<()> {
     wait_for_proxy_mediated_increments(
         proxy_state_event_receiver,
         shared_doc_id_b,
+        shared_doc_b_initial_change_id,
         two_doc_receivers,
         shared_doc_id_a,
         three_doc_receivers,
@@ -338,6 +382,7 @@ where
 
 async fn create_main_document_memory(
     document_name: &str,
+    document_main_value: &str,
     peermerge_creator: &mut Peermerge<RandomAccessMemory, FeedMemoryPersistence>,
     peermerge_joiner: &mut Peermerge<RandomAccessMemory, FeedMemoryPersistence>,
 ) -> anyhow::Result<(DocumentId, String)> {
@@ -347,7 +392,8 @@ async fn create_main_document_memory(
                 .document_type("scale".to_string())
                 .document_header(NameDescription::new(document_name))
                 .build()?,
-            |tx| tx.put(ROOT, "main", document_name),
+            |tx| tx.put(ROOT, "main", document_main_value),
+            None,
         )
         .await?;
     let document_id = creator_doc_info.id();
@@ -369,6 +415,7 @@ async fn create_main_document_memory(
 
 async fn create_main_document_disk(
     document_name: &str,
+    document_main_value: &str,
     peermerge_creator: &mut Peermerge<RandomAccessDisk, FeedDiskPersistence>,
     peermerge_joiner: &mut Peermerge<RandomAccessDisk, FeedDiskPersistence>,
 ) -> anyhow::Result<(DocumentId, String)> {
@@ -378,7 +425,8 @@ async fn create_main_document_disk(
                 .document_type("scale".to_string())
                 .document_header(NameDescription::new(document_name))
                 .build()?,
-            |tx| tx.put(ROOT, "main", document_name),
+            |tx| tx.put(ROOT, "main", document_main_value),
+            None,
         )
         .await?;
     let document_id = creator_doc_info.id();
@@ -473,6 +521,7 @@ async fn wait_for_peers_synced<T, U>(
         PeerId,
         UnboundedReceiver<StateEvent>,
         DocumentId,
+        (String, String, Option<Vec<u8>>),
         Option<DocumentId>,
     )>,
     joiners: Vec<(
@@ -480,6 +529,7 @@ async fn wait_for_peers_synced<T, U>(
         PeerId,
         UnboundedReceiver<StateEvent>,
         DocumentId,
+        (String, String, Option<Vec<u8>>),
         Option<DocumentId>,
     )>,
 ) -> anyhow::Result<Vec<(Peermerge<T, U>, DocumentId, UnboundedReceiver<StateEvent>)>>
@@ -488,26 +538,48 @@ where
     U: FeedPersistence,
 {
     let mut processes = vec![];
-    for (creator, joiner_peer_id, creator_state_event_receiver, doc_id, child_doc_id) in creators {
+    for (
+        creator,
+        joiner_peer_id,
+        creator_state_event_receiver,
+        doc_id,
+        (expected_key, expected_value, expected_change_id),
+        child_doc_id,
+    ) in creators
+    {
         processes.push(task::spawn(async move {
             process_until_synced(
                 creator,
                 creator_state_event_receiver,
                 joiner_peer_id,
                 doc_id,
+                expected_key,
+                expected_value,
+                expected_change_id,
                 child_doc_id,
             )
             .await
         }));
     }
 
-    for (joiner, creator_peer_id, joiner_state_event_receiver, doc_id, child_doc_id) in joiners {
+    for (
+        joiner,
+        creator_peer_id,
+        joiner_state_event_receiver,
+        doc_id,
+        (expected_key, expected_value, expected_change_id),
+        child_doc_id,
+    ) in joiners
+    {
         processes.push(task::spawn(async move {
             process_until_synced(
                 joiner,
                 joiner_state_event_receiver,
                 creator_peer_id,
                 doc_id,
+                expected_key,
+                expected_value,
+                expected_change_id,
                 child_doc_id,
             )
             .await
@@ -527,6 +599,9 @@ async fn process_until_synced<T, U>(
     mut state_event_receiver: UnboundedReceiver<StateEvent>,
     remote_peer_id: PeerId,
     document_id: DocumentId,
+    expected_key: String,
+    expected_value: String,
+    expected_change_id: Option<Vec<u8>>,
     child_document_id: Option<DocumentId>,
 ) -> (Peermerge<T, U>, DocumentId, UnboundedReceiver<StateEvent>)
 where
@@ -536,6 +611,9 @@ where
     let mut peer_synced: bool = false;
     let mut remote_peer_synced: bool = false;
     let mut documents_synced: usize = 0;
+    let mut expected_value_match: bool = false;
+    let mut expected_change_found: bool =
+        expected_change_id.as_ref().map(|_| false).unwrap_or(true);
     let local_peer_id = peermerge.peer_id();
     while let Some(event) = state_event_receiver.next().await {
         match event.content {
@@ -573,12 +651,47 @@ where
                 } else {
                     panic!("Unexpected DocumentInitialized");
                 }
+
+                if event.document_id == document_id {
+                    let value = peermerge
+                        .transact(&document_id, |doc| {
+                            if let Some((value, _)) = get(doc, ROOT, &expected_key)? {
+                                Ok(value.into_scalar().unwrap().to_str().unwrap().to_string())
+                            } else {
+                                Ok("".to_string())
+                            }
+                        })
+                        .await
+                        .unwrap();
+                    if value == expected_value {
+                        expected_value_match = true;
+                    }
+                }
+            }
+            DocumentChanged { change_id, .. } => {
+                if change_id.is_some() && change_id == expected_change_id {
+                    expected_change_found = true;
+                }
+                if event.document_id == document_id {
+                    let value = peermerge
+                        .transact(&document_id, |doc| {
+                            let (value, _) = get(doc, ROOT, &expected_key)?.unwrap();
+                            Ok(value.into_scalar().unwrap().to_str().unwrap().to_string())
+                        })
+                        .await
+                        .unwrap();
+                    if value == expected_value {
+                        expected_value_match = true;
+                    }
+                }
             }
             _ => {}
         }
         if peer_synced
             && remote_peer_synced
             && documents_synced == (if child_document_id.is_some() { 2 } else { 1 })
+            && expected_value_match
+            && expected_change_found
         {
             let state_event_receiver = create_state_events_channel(&mut peermerge).await.unwrap();
             return (peermerge, document_id, state_event_receiver);
@@ -590,6 +703,7 @@ where
 async fn wait_for_proxy_mediated_increments(
     proxy_state_event_receiver: UnboundedReceiver<StateEvent>,
     two_shared_doc_id: DocumentId,
+    two_shared_doc_initial_change_id: Vec<u8>,
     two_document_state_event_receivers: Vec<(
         Peermerge<RandomAccessDisk, FeedDiskPersistence>,
         DocumentId,
@@ -625,11 +739,13 @@ async fn wait_for_proxy_mediated_increments(
     for (peermerge, parent_document_id, state_event_receiver) in
         three_document_state_event_receivers.into_iter()
     {
+        let two_shared_doc_initial_change_id_for_task = two_shared_doc_initial_change_id.clone();
         processes.push(task::spawn(async move {
             process_three_documents_state_events(
                 peermerge,
                 state_event_receiver,
                 two_shared_doc_id,
+                two_shared_doc_initial_change_id_for_task,
                 three_shared_doc_id,
                 parent_document_id,
             )
@@ -667,6 +783,7 @@ async fn process_two_documents_state_events(
     _parent_document_id: DocumentId,
 ) -> anyhow::Result<()> {
     let mut first_change = true;
+    let peer_id = peermerge.peer_id();
     while let Some(event) = state_event_receiver.next().await {
         match event.content {
             PeerSynced { .. } => {
@@ -699,13 +816,18 @@ async fn process_two_documents_state_events(
                             .await?;
                         if value == 6 {
                             break;
+                        } else {
+                            println!("---- {} DOC 2 VALUE {}", peer_id[0], value);
                         }
                     }
+                } else {
+                    panic!("Wrong document changed {}", event.document_id[0]);
                 }
             }
             _ => {}
         }
     }
+    println!("--- {} DOC 2 EXIT", peer_id[0]);
     Ok(())
 }
 
@@ -713,11 +835,13 @@ async fn process_three_documents_state_events(
     mut peermerge: Peermerge<RandomAccessMemory, FeedMemoryPersistence>,
     mut state_event_receiver: UnboundedReceiver<StateEvent>,
     two_shared_doc_id: DocumentId,
+    two_shared_doc_initial_change_id: Vec<u8>,
     three_shared_doc_id: DocumentId,
     parent_document_id: DocumentId,
 ) -> anyhow::Result<()> {
     let mut two_shared_initialized: bool = false;
     let mut three_shared_initialized: bool = false;
+    let peer_id = peermerge.peer_id();
     while let Some(event) = state_event_receiver.next().await {
         match event.content {
             PeerSynced { .. } => {
@@ -757,7 +881,7 @@ async fn process_three_documents_state_events(
                         .await?;
                 }
             }
-            DocumentChanged { .. } => {
+            DocumentChanged { change_id, .. } => {
                 if event.document_id == three_shared_doc_id {
                     let value = peermerge
                         .transact(&three_shared_doc_id, |doc| {
@@ -767,11 +891,24 @@ async fn process_three_documents_state_events(
                         .await?;
                     if value == 6 {
                         break;
+                    } else {
+                        println!("---- {} DOC 3 VALUE {}", peer_id[0], value);
+                    }
+                } else if event.document_id == two_shared_doc_id {
+                    if change_id == Some(two_shared_doc_initial_change_id.clone()) {
+                        // TODO: Start incrementing shared doc B as well
+                    } else {
+                        panic!(
+                            "{} Wrong document changed {}",
+                            peer_id[0], event.document_id[0]
+                        );
                     }
                 }
             }
             _ => {}
         }
     }
+
+    println!("--- {} DOC 3 EXIT", peer_id[0]);
     Ok(())
 }

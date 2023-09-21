@@ -66,6 +66,7 @@ async fn disk_two_peers(encrypted: bool) -> anyhow::Result<()> {
                 .encrypted(encrypted)
                 .build()?,
             |tx| tx.put(ROOT, "version", 1),
+            None,
         )
         .await?;
     let doc_url = peermerge_creator

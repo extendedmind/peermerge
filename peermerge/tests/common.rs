@@ -3,6 +3,9 @@ use peermerge::{
     automerge::{AutomergeError, ObjId, Prop, ReadDoc, ScalarValue, Value},
     AutomergeDoc,
 };
+use rand::distributions::{Alphanumeric, DistString};
+use rand::rngs::StdRng;
+use rand::SeedableRng;
 use std::sync::Arc;
 
 #[cfg(feature = "async-std")]
@@ -153,4 +156,9 @@ pub fn realize_text<O: AsRef<ObjId>>(
     }
     let string: String = chars.into_iter().collect();
     Ok(Some(string))
+}
+
+pub fn generate_string(seed: u64, length: usize) -> String {
+    let mut seeded_rng = StdRng::seed_from_u64(seed);
+    Alphanumeric.sample_string(&mut seeded_rng, length)
 }

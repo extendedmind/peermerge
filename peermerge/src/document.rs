@@ -612,7 +612,6 @@ where
             // Sync doc state exclusively...
             let mut document_state = self.document_state.lock().await;
             let child = document_state.state().child;
-            let debu_doc_discovery_id = self.doc_discovery_key();
             let not_created_child_documents = document_state.state().not_created_child_documents();
             if self.access_type == AccessType::Proxy {
                 if let Some(peer_id) = peer_id {
@@ -634,67 +633,63 @@ where
                     (vec![], not_created_child_documents)
                 }
             } else {
-                let (document_initialized, patches, peer_syncs) = if let Some((
-                    content,
-                    feeds_state,
-                    unapplied_entries,
-                )) =
-                    document_state.content_feeds_state_and_unapplied_entries_mut()
-                {
-                    if content.is_bootsrapped() {
-                        debug!("Document has bootstrapped content, updating it");
-                        let (patches, peer_syncs) = self
-                            .update_synced_content(
-                                &discovery_key,
-                                synced_contiguous_length,
-                                content,
-                                feeds_state,
-                                unapplied_entries,
-                            )
-                            .await
-                            .unwrap();
-                        document_state.persist_content().await;
-                        (None, patches, peer_syncs)
-                    } else {
-                        debug!("Bootstrapping document content from entries");
-                        if discovery_key != self.doc_discovery_key {
-                            panic!(
-                                "{} Did not receive sync for doc feed first, {debu_doc_discovery_id:?}",
-                                self.peer_id[0]
-                            );
-                        }
-                        if let Some(peer_syncs) = self
-                            .bootstrap_content(
-                                synced_contiguous_length,
-                                content,
-                                feeds_state,
-                                unapplied_entries,
-                            )
-                            .await
-                            .unwrap()
-                        {
-                            debug!("Document created, saving and returning DocumentInitialized");
+                let (document_initialized, patches, peer_syncs) =
+                    if let Some((content, feeds_state, unapplied_entries)) =
+                        document_state.content_feeds_state_and_unapplied_entries_mut()
+                    {
+                        if content.is_bootsrapped() {
+                            debug!("Document has bootstrapped content, updating it");
+                            let (patches, peer_syncs) = self
+                                .update_synced_content(
+                                    &discovery_key,
+                                    synced_contiguous_length,
+                                    content,
+                                    feeds_state,
+                                    unapplied_entries,
+                                )
+                                .await
+                                .unwrap();
                             document_state.persist_content().await;
-                            (
-                                Some(DocumentInitialized {
-                                    new_document: true,
-                                    child,
-                                    // Filled above in Peermerge because there can be many parents we are not
-                                    // aware of here.
-                                    parent_document_ids: vec![],
-                                }),
-                                vec![],
-                                peer_syncs,
-                            )
+                            (None, patches, peer_syncs)
                         } else {
-                            debug!("Document could not be created, need more peers");
-                            // Could not create content from this peer's data, needs more peers
-                            (None, vec![], vec![])
+                            debug!("Bootstrapping document content from entries");
+                            if discovery_key != self.doc_discovery_key {
+                                panic!("Did not receive sync for doc feed first");
+                            }
+                            if let Some(peer_syncs) = self
+                                .bootstrap_content(
+                                    synced_contiguous_length,
+                                    content,
+                                    feeds_state,
+                                    unapplied_entries,
+                                )
+                                .await
+                                .unwrap()
+                            {
+                                debug!(
+                                    "Document created, saving and returning DocumentInitialized"
+                                );
+                                document_state.persist_content().await;
+                                (
+                                    Some(DocumentInitialized {
+                                        new_document: true,
+                                        child,
+                                        // Filled above in Peermerge because there can be many parents we are not
+                                        // aware of here.
+                                        parent_document_ids: vec![],
+                                    }),
+                                    vec![],
+                                    peer_syncs,
+                                )
+                            } else {
+                                debug!("Document could not be created, need more peers");
+                                // Could not create content from this peer's data, needs more peers
+                                (None, vec![], vec![])
+                            }
                         }
-                    }
-                } else {
-                    panic!("Content needs to exist for non-proxy documents");
-                };
+                    } else {
+                        panic!("Content needs to exist for non-proxy documents");
+                    };
 
                 (
                     self.state_events_from_update_content_result(
@@ -887,6 +882,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
         parent_id_signing_key_and_header: Option<(DocumentId, SigningKey, NameDescription)>,
         settings: DocumentSettings,
         init_cb: F,
+        change_id: Option<Vec<u8>>,
     ) -> Result<
         (
             NewDocumentResult<RandomAccessMemory, FeedMemoryPersistence>,
@@ -906,6 +902,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
             parent_id_signing_key_and_header,
             settings.max_entry_data_size_bytes,
             init_cb,
+            change_id,
         )
         .await?;
 
@@ -1306,6 +1303,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
         parent_id_signing_key_and_header: Option<(DocumentId, SigningKey, NameDescription)>,
         settings: DocumentSettings,
         init_cb: F,
+        change_id: Option<Vec<u8>>,
         data_root_dir: &PathBuf,
     ) -> Result<(NewDocumentResult<RandomAccessDisk, FeedDiskPersistence>, O), PeermergeError>
     where
@@ -1320,6 +1318,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
             parent_id_signing_key_and_header,
             settings.max_entry_data_size_bytes,
             init_cb,
+            change_id,
         )
         .await?;
         let postfix = encode_document_id(&prepare_result.document_id);
@@ -2039,6 +2038,7 @@ async fn prepare_create<F, O>(
     parent_id_signing_key_and_header: Option<(DocumentId, SigningKey, NameDescription)>,
     max_entry_data_size_bytes: usize,
     init_cb: F,
+    change_id: Option<Vec<u8>>,
 ) -> Result<(PrepareCreateResult, O), PeermergeError>
 where
     F: FnOnce(&mut Transaction) -> Result<O, AutomergeError>,
@@ -2099,6 +2099,13 @@ where
             parent_document_ids: parent_id.map(|id| vec![id]).unwrap_or_else(Vec::new),
         },
     ));
+    let patches = create_result.user_automerge_doc.diff_incremental();
+    if !patches.is_empty() {
+        state_events.push(StateEvent::new(
+            document_id,
+            DocumentChanged { change_id, patches },
+        ));
+    }
 
     // Initialize the first peer
     let write_feed_init_entries = init_first_peer(

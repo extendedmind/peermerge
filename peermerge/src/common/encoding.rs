@@ -885,6 +885,7 @@ impl TryFrom<u8> for EntryType {
             1u8 => Ok(Self::InitPeer),
             2u8 => Ok(Self::DocPart),
             3u8 => Ok(Self::Change),
+            4u8 => Ok(Self::ChangePart),
             _ => Err(()),
         }
     }
@@ -935,9 +936,11 @@ impl CompactEncoding<Entry> for State {
                 }
             }
             EntryContent::Change {
-                data, part_count, ..
+                data,
+                change_part_count,
+                ..
             } => {
-                self.preencode(part_count)?;
+                self.preencode(change_part_count)?;
                 self.preencode(data)?;
             }
             EntryContent::ChangePart { index, data } => {
@@ -1003,13 +1006,13 @@ impl CompactEncoding<Entry> for State {
             EntryContent::Change {
                 meta,
                 data,
-                part_count,
+                change_part_count,
                 ..
             } => {
                 if *meta {
                     flags |= 1;
                 }
-                self.encode(part_count, buffer)?;
+                self.encode(change_part_count, buffer)?;
                 self.encode(data, buffer)?;
             }
             EntryContent::ChangePart { index, data } => {

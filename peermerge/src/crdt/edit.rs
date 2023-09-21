@@ -92,8 +92,14 @@ impl UnappliedEntries {
                     value.2 = vec![];
                 }
                 // The data structure stores in value.0 the length after all entries are applied.
-                // When iterating the entries, start from the first.
-                let original_start_index = value.0 - value.1.len() as u64;
+                // When iterating the entries, start from the first, taking into account shrunk
+                // parts.
+                let original_start_index = value.0
+                    - value
+                        .1
+                        .iter()
+                        .fold(0, |acc, entry| acc + 1 + entry.part_count)
+                        as u64;
                 let mut new_length = original_start_index;
                 for entry in value.1.iter() {
                     match &entry.content {
@@ -126,7 +132,7 @@ impl UnappliedEntries {
                                     }
                                 }
                             }) {
-                                new_length += 1;
+                                new_length += 1 + entry.part_count as u64;
                                 if *meta {
                                     meta_changes_to_apply.push(*change.clone());
                                     meta_hashes.insert(change.hash());
@@ -166,7 +172,7 @@ impl UnappliedEntries {
                                     .merge(&mut changed_user_automerge_doc)
                                     .unwrap();
                             }
-                            new_length += 1;
+                            new_length += 1 + entry.part_count as u64;
                             if let Some(result_value) = result.get_mut(discovery_key) {
                                 result_value.set_length(new_length);
                             } else {
@@ -213,12 +219,11 @@ pub(crate) fn apply_entries_autocommit(
     unapplied_entries: &mut UnappliedEntries,
 ) -> Result<HashMap<[u8; 32], ApplyEntriesFeedChange>, PeermergeError> {
     let mut result: HashMap<[u8; 32], ApplyEntriesFeedChange> = HashMap::new();
-    let mut meta_changes_to_apply: Vec<Change> = vec![];
-    let mut user_changes_to_apply: Vec<Change> = vec![];
+
     let len = shrunk_entries.entries.len() as u64;
-    let mut length = contiguous_length - len;
+    let mut length = contiguous_length - len - shrunk_entries.shrunk_count;
     for entry in shrunk_entries.entries.into_iter() {
-        length += 1;
+        length += 1 + entry.part_count as u64;
         match entry.content {
             EntryContent::Change {
                 meta, ref change, ..
@@ -261,9 +266,9 @@ pub(crate) fn apply_entries_autocommit(
                     })
                 {
                     if meta {
-                        meta_changes_to_apply.push(*change.clone());
+                        meta_automerge_doc.apply_changes([*change.clone()])?;
                     } else {
-                        user_changes_to_apply.push(*change.clone());
+                        user_automerge_doc.apply_changes([*change.clone()])?;
                     }
                     if let Some(result_value) = result.get_mut(discovery_key) {
                         result_value.set_length(length);
@@ -310,6 +315,8 @@ pub(crate) fn apply_entries_autocommit(
     }
 
     // Consolidate unapplied entries and add them to changes and result
+    let mut meta_changes_to_apply: Vec<Change> = vec![];
+    let mut user_changes_to_apply: Vec<Change> = vec![];
     unapplied_entries.consolidate(
         meta_automerge_doc,
         user_automerge_doc,

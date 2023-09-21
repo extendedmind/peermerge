@@ -50,6 +50,7 @@ pub async fn setup_peermerge_mesh_memory(
                 .build()
                 .unwrap(),
             |tx| tx.put(ROOT, "version", 1),
+            None,
         )
         .await
         .unwrap();
@@ -165,6 +166,7 @@ pub async fn setup_peermerge_mesh_disk(
                 .build()
                 .unwrap(),
             |tx| tx.put(ROOT, "version", 1),
+            None,
         )
         .await
         .unwrap();

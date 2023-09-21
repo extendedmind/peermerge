@@ -50,6 +50,7 @@ async fn proxy_disk_encrypted() -> anyhow::Result<()> {
                 .encrypted(true)
                 .build()?,
             |tx| tx.put(ROOT, "version", 1),
+            None,
         )
         .await?;
     peermerge_creator
@@ -325,7 +326,7 @@ async fn process_creator_state_events(
                         .await?;
                 } else if remote_peer_syncs == 2 {
                     assert_eq!(contiguous_length, 2);
-                    assert_eq!(document_changes.len(), 1);
+                    assert_eq!(document_changes.len(), 2);
                     break;
                 }
             }
