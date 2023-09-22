@@ -17,7 +17,7 @@ use crate::common::cipher::{
     create_signature, encode_document_id, proxy_doc_url_from_doc_url, DecodedDocUrl, DocumentSecret,
 };
 use crate::common::encoding::{serialize_entry, serialize_init_entries};
-use crate::common::entry::ShrunkEntries;
+use crate::common::entry::{Entry, ShrunkEntries};
 use crate::common::keys::{
     discovery_key_from_public_key, document_id_from_discovery_key, generate_keys, SigningKey,
 };
@@ -281,31 +281,15 @@ where
                 self.settings.max_entry_data_size_bytes,
             )
             .await?;
-        let write_discovery_key = document_state.write_discovery_key();
-        let length = {
-            let write_feed = get_feed(&self.feeds, &write_discovery_key).await.unwrap();
-            let mut write_feed = write_feed.lock().await;
-            let entry_data_batch: Vec<Vec<u8>> = entries
-                .into_iter()
-                .map(|entry| serialize_entry(&entry))
-                .collect::<Result<Vec<Vec<u8>>, PeermergeError>>()?;
-            write_feed
-                .append_batch(
-                    entry_data_batch,
-                    self.doc_signature_key_pair.secret.as_ref().unwrap(),
-                )
-                .await?
-        };
-        document_state
-            .set_cursor_and_save_data(
-                &write_discovery_key,
-                length,
-                DocsChangeResult {
-                    meta_changed: true,
-                    user_changed: false,
-                },
-            )
-            .await;
+        append_entries_to_write_feed(
+            entries,
+            true,
+            false,
+            &mut document_state,
+            &self.doc_signature_key_pair,
+            &self.feeds,
+        )
+        .await?;
 
         // Finally, notify the doc peer that there is a new child document, so that peers connected
         // to this document get the info via broadcasting.
@@ -412,33 +396,15 @@ where
                     "TODO: No proper error code for trying to change before a document is synced"
                 );
                 };
-            if !entries.is_empty() {
-                let write_discovery_key = document_state.write_discovery_key();
-                let length = {
-                    let write_feed = get_feed(&self.feeds, &write_discovery_key).await.unwrap();
-                    let mut write_feed = write_feed.lock().await;
-                    let entry_data_batch: Vec<Vec<u8>> = entries
-                        .into_iter()
-                        .map(|entry| serialize_entry(&entry))
-                        .collect::<Result<Vec<Vec<u8>>, PeermergeError>>()?;
-                    write_feed
-                        .append_batch(
-                            entry_data_batch,
-                            self.doc_signature_key_pair.secret.as_ref().unwrap(),
-                        )
-                        .await?
-                };
-                document_state
-                    .set_cursor_and_save_data(
-                        &write_discovery_key,
-                        length,
-                        DocsChangeResult {
-                            meta_changed: false,
-                            user_changed: true,
-                        },
-                    )
-                    .await;
-            }
+            append_entries_to_write_feed(
+                entries,
+                false,
+                true,
+                &mut document_state,
+                &self.doc_signature_key_pair,
+                &self.feeds,
+            )
+            .await?;
             (result, patches)
         };
         if !patches.is_empty() {
@@ -2168,6 +2134,48 @@ where
         },
         init_result,
     ))
+}
+
+async fn append_entries_to_write_feed<T, U>(
+    entries: Vec<Entry>,
+    meta_changed: bool,
+    user_changed: bool,
+    document_state: &mut DocStateWrapper<T>,
+    doc_signature_key_pair: &PartialKeypair,
+    feeds: &Arc<DashMap<[u8; 32], Arc<Mutex<Feed<U>>>>>,
+) -> Result<(), PeermergeError>
+where
+    T: RandomAccess + Debug + Send + 'static,
+    U: FeedPersistence,
+{
+    if !entries.is_empty() {
+        let write_discovery_key = document_state.write_discovery_key();
+        let length = {
+            let write_feed = get_feed(feeds, &write_discovery_key).await.unwrap();
+            let mut write_feed = write_feed.lock().await;
+            let entry_data_batch: Vec<Vec<u8>> = entries
+                .into_iter()
+                .map(|entry| serialize_entry(&entry))
+                .collect::<Result<Vec<Vec<u8>>, PeermergeError>>()?;
+            write_feed
+                .append_batch(
+                    entry_data_batch,
+                    doc_signature_key_pair.secret.as_ref().unwrap(),
+                )
+                .await?
+        };
+        document_state
+            .set_cursor_and_save_data(
+                &write_discovery_key,
+                length,
+                DocsChangeResult {
+                    meta_changed,
+                    user_changed,
+                },
+            )
+            .await;
+    }
+    Ok(())
 }
 
 async fn update_content<T>(
