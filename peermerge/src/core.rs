@@ -184,7 +184,7 @@ where
         };
         if !state_events.is_empty() {
             if let Some(state_event_sender) = self.state_event_sender.lock().await.as_mut() {
-                send_state_events::<T>(state_event_sender, state_events, None).await;
+                send_state_events(state_event_sender, state_events, &self.peermerge_state).await;
             }
         }
         Ok(result)
@@ -226,7 +226,7 @@ where
         let state_events = document.unreserve_object(obj).await?;
         if !state_events.is_empty() {
             if let Some(state_event_sender) = self.state_event_sender.lock().await.as_mut() {
-                send_state_events::<T>(state_event_sender, state_events, None).await;
+                send_state_events(state_event_sender, state_events, &self.peermerge_state).await;
             }
         }
         Ok(())
@@ -343,7 +343,12 @@ where
     ) -> Result<(Document<T, U>, Option<DocumentId>), PeermergeError> {
         if !result.state_events.is_empty() {
             if let Some(state_event_sender) = self.state_event_sender.lock().await.as_mut() {
-                send_state_events::<T>(state_event_sender, result.state_events, None).await;
+                send_state_events(
+                    state_event_sender,
+                    result.state_events,
+                    &self.peermerge_state,
+                )
+                .await;
             }
         }
         let parent_id: Option<DocumentId> =
@@ -629,7 +634,7 @@ async fn on_feed_event_memory(
                                 send_state_events::<RandomAccessMemory>(
                                     &mut state_event_sender,
                                     attach_result.state_events,
-                                    None,
+                                    &peermerge_state,
                                 )
                                 .await;
                             }
@@ -745,7 +750,7 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
         let documents = Arc::new(documents);
         let peermerge_state = Arc::new(Mutex::new(state_wrapper));
         if let Some(state_event_sender) = state_event_sender.as_mut() {
-            send_state_events(state_event_sender, state_events, Some(&peermerge_state)).await;
+            send_state_events(state_event_sender, state_events, &peermerge_state).await;
         }
 
         Ok(Self {
@@ -938,10 +943,10 @@ async fn on_feed_event_disk(
                             .unwrap();
 
                             if !attach_result.state_events.is_empty() {
-                                send_state_events::<RandomAccessDisk>(
+                                send_state_events(
                                     &mut state_event_sender,
                                     attach_result.state_events,
-                                    None,
+                                    &peermerge_state,
                                 )
                                 .await;
                             }
@@ -985,15 +990,13 @@ async fn on_feed_event_disk(
 async fn send_state_events<T>(
     state_event_sender: &mut UnboundedSender<StateEvent>,
     state_events: Vec<StateEvent>,
-    peemerge_state: Option<&Arc<Mutex<PeermergeStateWrapper<T>>>>,
+    peermerge_state: &Arc<Mutex<PeermergeStateWrapper<T>>>,
 ) where
     T: RandomAccess + Debug + Send + 'static,
 {
     if !state_event_sender.is_closed() {
         for mut state_event in state_events {
-            if let Some(peermerge_state) = peemerge_state {
-                post_process_state_event(&mut state_event, peermerge_state).await;
-            }
+            post_process_state_event(&mut state_event, peermerge_state).await;
             state_event_sender.unbounded_send(state_event).unwrap();
         }
     }
@@ -1044,7 +1047,7 @@ async fn process_feed_event<T, U>(
             let state_events = document
                 .process_remote_feed_synced(peer_id, discovery_key, contiguous_length)
                 .await;
-            send_state_events::<T>(state_event_sender, state_events, None).await;
+            send_state_events(state_event_sender, state_events, peermerge_state).await;
         }
         FeedEventContent::FeedSynced {
             peer_id,
@@ -1057,7 +1060,7 @@ async fn process_feed_event<T, U>(
             let state_events = document
                 .process_feed_synced(peer_id, discovery_key, contiguous_length)
                 .await;
-            send_state_events(state_event_sender, state_events, Some(peermerge_state)).await;
+            send_state_events(state_event_sender, state_events, peermerge_state).await;
         }
     }
 }
