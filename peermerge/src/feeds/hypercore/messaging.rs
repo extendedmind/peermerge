@@ -575,6 +575,7 @@ where
             FEED_SYNCED_LOCAL_SIGNAL_NAME => {
                 let mut dec_state = State::from_buffer(&data);
                 let message: FeedSyncedMessage = dec_state.decode(&data)?;
+                let mut events: Vec<FeedEvent> = vec![];
                 if message.contiguous_length > peer_state.synced_contiguous_length
                     && peer_state.contiguous_range_sent < message.contiguous_length
                 {
@@ -591,17 +592,27 @@ where
                         length: contiguous_length,
                     };
                     peer_state.contiguous_range_sent = contiguous_length;
-                    channel.send(Message::Range(range_msg)).await?;
+                    if !channel.closed() {
+                        channel.send(Message::Range(range_msg)).await?
+                    } else {
+                        events.push(FeedEvent::new(
+                            peer_state.doc_discovery_key,
+                            FeedDisconnected {
+                                channel: channel.id() as u64,
+                            },
+                        ));
+                    }
                 }
                 if !message.not_created_child_documents.is_empty() {
                     // Let's just try again to create the documents now that we have more info.
-                    return Ok(vec![FeedEvent::new(
+                    events.push(FeedEvent::new(
                         peer_state.doc_discovery_key,
                         NewChildDocumentsBroadcasted {
                             new_child_documents: message.not_created_child_documents,
                         },
-                    )]);
+                    ));
                 }
+                return Ok(events);
             }
             FEEDS_CHANGED_LOCAL_SIGNAL_NAME => {
                 assert!(

@@ -20,7 +20,7 @@ use async_std::{task, test as async_test};
 use tokio::{task, test as async_test};
 
 #[test(async_test)]
-async fn tcp_proxy_disk_encrypted() -> anyhow::Result<()> {
+async fn proxy_tcp_disk_encrypted() -> anyhow::Result<()> {
     let host = "localhost";
     let port: u16 = 8101;
     let (creator_state_event_sender, creator_state_event_receiver): (
