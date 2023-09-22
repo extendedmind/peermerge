@@ -1,7 +1,6 @@
 use automerge::transaction::Transaction;
 use automerge::{AutomergeError, ObjId, Patch};
 use dashmap::DashMap;
-use futures::channel::mpsc::UnboundedSender;
 use hypercore_protocol::hypercore::{generate_signing_key, PartialKeypair, VerifyingKey};
 #[cfg(not(target_arch = "wasm32"))]
 use random_access_disk::RandomAccessDisk;
@@ -366,17 +365,16 @@ where
         &mut self,
         cb: F,
         change_id: Option<Vec<u8>>,
-        state_event_sender: &mut Arc<Mutex<Option<UnboundedSender<StateEvent>>>>,
-    ) -> Result<O, PeermergeError>
+    ) -> Result<(O, Vec<StateEvent>), PeermergeError>
     where
         F: FnOnce(&mut AutomergeDoc) -> Result<O, AutomergeError>,
     {
         if self.access_type != AccessType::ReadWrite {
             panic!("Can not transact mutating on a proxy or read-only peer");
         }
-        let (result, patches) = {
+        let (result, state_events) = {
             let mut document_state = self.document_state.lock().await;
-            let (entries, result, patches) =
+            let (entries, result, mut state_events) =
                 if let Some(doc) = document_state.user_automerge_doc_mut() {
                     let (entries, result) = transact_mut_autocommit(
                         false,
@@ -390,35 +388,34 @@ where
                     } else {
                         vec![]
                     };
-                    (entries, result, patches)
+                    let state_events: Vec<StateEvent> = if !patches.is_empty() {
+                        vec![StateEvent::new(
+                            self.id(),
+                            DocumentChanged { change_id, patches },
+                        )]
+                    } else {
+                        vec![]
+                    };
+                    (entries, result, state_events)
                 } else {
                     unimplemented!(
                     "TODO: No proper error code for trying to change before a document is synced"
                 );
                 };
-            append_entries_to_write_feed(
-                entries,
-                false,
-                true,
-                &mut document_state,
-                &self.doc_signature_key_pair,
-                &self.feeds,
-            )
-            .await?;
-            (result, patches)
+            state_events.extend(
+                append_entries_to_write_feed(
+                    entries,
+                    false,
+                    true,
+                    &mut document_state,
+                    &self.doc_signature_key_pair,
+                    &self.feeds,
+                )
+                .await?,
+            );
+            (result, state_events)
         };
-        if !patches.is_empty() {
-            let mut state_event_sender = state_event_sender.lock().await;
-            if let Some(sender) = state_event_sender.as_mut() {
-                sender
-                    .unbounded_send(StateEvent::new(
-                        self.id(),
-                        DocumentChanged { change_id, patches },
-                    ))
-                    .unwrap();
-            }
-        }
-        Ok(result)
+        Ok((result, state_events))
     }
 
     #[instrument(skip_all, fields(ctx = self.log_context))]
@@ -2143,11 +2140,12 @@ async fn append_entries_to_write_feed<T, U>(
     document_state: &mut DocStateWrapper<T>,
     doc_signature_key_pair: &PartialKeypair,
     feeds: &Arc<DashMap<[u8; 32], Arc<Mutex<Feed<U>>>>>,
-) -> Result<(), PeermergeError>
+) -> Result<Vec<StateEvent>, PeermergeError>
 where
     T: RandomAccess + Debug + Send + 'static,
     U: FeedPersistence,
 {
+    let state_events: Vec<StateEvent> = vec![];
     if !entries.is_empty() {
         let write_discovery_key = document_state.write_discovery_key();
         let length = {
@@ -2175,7 +2173,7 @@ where
             )
             .await;
     }
-    Ok(())
+    Ok(state_events)
 }
 
 async fn update_content<T>(
