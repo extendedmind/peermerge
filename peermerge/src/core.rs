@@ -78,6 +78,10 @@ where
     documents: Arc<DashMap<DocumentId, Document<T, U>>>,
     /// Sender for events
     state_event_sender: Arc<Mutex<Option<UnboundedSender<StateEvent>>>>,
+    /// Transient save of reattach secrets for child documents, used only for memory
+    /// peermerges. Need to be stored because child documents' write feeds can't be
+    /// created immediately.
+    reattach_secrets: Option<HashMap<DocumentId, SigningKey>>,
 }
 
 impl<T, U> Peermerge<T, U>
@@ -378,9 +382,33 @@ impl Peermerge<RandomAccessMemory, FeedMemoryPersistence> {
             max_entry_data_size_bytes: options.max_entry_data_size_bytes,
             max_write_feed_length: options.max_write_feed_length,
         };
+        let (reattach_secrets, peer_id) = if let Some(reattach_secrets) = options.reattach_secrets {
+            let mut secrets: HashMap<DocumentId, SigningKey> = HashMap::new();
+            let mut new_peer_id: Option<PeerId> = None;
+            for (document_id, reattach_secret) in reattach_secrets {
+                let (peer_id, write_feed_key_pair_bytes) =
+                    decode_reattach_secret(&reattach_secret)?;
+                if let Some(id) = new_peer_id {
+                    if peer_id != id {
+                        return Err(PeermergeError::BadArgument {
+                            context: "Invalid reattach secrets, peer id is not the same"
+                                .to_string(),
+                        });
+                    }
+                } else {
+                    new_peer_id = Some(peer_id);
+                }
+                let write_feed_signing_key = signing_key_from_bytes(&write_feed_key_pair_bytes);
+                secrets.insert(document_id, write_feed_signing_key);
+            }
+            (Some(secrets), new_peer_id)
+        } else {
+            (None, None)
+        };
         let wrapper = PeermergeStateWrapper::new_memory(
             &options.default_peer_header,
             document_settings.clone(),
+            peer_id,
         )
         .await;
         Ok(Self {
@@ -391,6 +419,7 @@ impl Peermerge<RandomAccessMemory, FeedMemoryPersistence> {
             documents: Arc::new(DashMap::new()),
             state_event_sender: Arc::new(Mutex::new(options.state_event_sender)),
             document_settings,
+            reattach_secrets,
         })
     }
 
@@ -436,7 +465,9 @@ impl Peermerge<RandomAccessMemory, FeedMemoryPersistence> {
             .map(|secret| decode_document_secret(&secret))
             .transpose()?;
         let decoded_document_url = decode_doc_url(&options.document_url, &document_secret)?;
-        let reattach_secrets = if let Some(reattach_secrets) = options.reattach_secrets {
+
+        // If reattach secrets have been given, there are conditions to attaching
+        if self.reattach_secrets.is_some() {
             if decoded_document_url.static_info.child {
                 return Err(PeermergeError::BadArgument {
                     context: "Can not reattach a child document".to_string(),
@@ -447,45 +478,13 @@ impl Peermerge<RandomAccessMemory, FeedMemoryPersistence> {
                     context: "Can only reattach to an empty peermerge".to_string(),
                 });
             }
-            let mut secrets: HashMap<DocumentId, SigningKey> = HashMap::new();
-            let mut new_peer_id: Option<PeerId> = None;
-            for (document_id, reattach_secret) in reattach_secrets {
-                let (peer_id, write_feed_key_pair_bytes) =
-                    decode_reattach_secret(&reattach_secret)?;
-                if let Some(id) = new_peer_id {
-                    if peer_id != id {
-                        return Err(PeermergeError::BadArgument {
-                            context: "Invalid reattach secrets, peer id is not the same"
-                                .to_string(),
-                        });
-                    }
-                } else {
-                    new_peer_id = Some(peer_id);
-                }
-                let write_feed_signing_key = signing_key_from_bytes(&write_feed_key_pair_bytes);
-                secrets.insert(document_id, write_feed_signing_key);
-            }
-            if let Some(new_peer_id) = new_peer_id {
-                if !secrets.contains_key(&decoded_document_url.static_info.document_id) {
-                    return Err(PeermergeError::BadArgument {
-                        context:
-                            "Reattach secrets did not contain the key for document id for the URL"
-                                .to_string(),
-                    });
-                }
-                self.peer_id = new_peer_id;
-                Some(secrets)
-            } else {
-                None
-            }
-        } else {
-            None
-        };
+        }
+
         let attach_result = Document::attach_memory(
             self.peer_id,
             &self.default_peer_header,
             decoded_document_url,
-            reattach_secrets,
+            self.reattach_secrets.as_mut(),
             parent_id_signing_key_and_header.map(|value| DocumentParent::New {
                 parent_id: value.0,
                 signing_key: value.1,
@@ -524,6 +523,7 @@ impl Peermerge<RandomAccessMemory, FeedMemoryPersistence> {
         let peer_id = self.peer_id;
         let default_peer_header = self.default_peer_header.clone();
         let document_settings = self.document_settings.clone();
+        let reattach_secrets = self.reattach_secrets.clone();
 
         #[cfg(not(target_arch = "wasm32"))]
         task::spawn(async move {
@@ -536,6 +536,7 @@ impl Peermerge<RandomAccessMemory, FeedMemoryPersistence> {
                 state_event_sender_for_task,
                 documents_for_task,
                 peermerge_state_for_task,
+                reattach_secrets,
             )
             .await;
         });
@@ -550,6 +551,7 @@ impl Peermerge<RandomAccessMemory, FeedMemoryPersistence> {
                 state_event_sender_for_task,
                 documents_for_task,
                 peermerge_state_for_task,
+                reattach_secrets,
             )
             .await;
         });
@@ -574,6 +576,7 @@ async fn on_feed_event_memory(
     state_event_sender_mutex: Arc<Mutex<Option<UnboundedSender<StateEvent>>>>,
     mut documents: Arc<DashMap<DocumentId, Document<RandomAccessMemory, FeedMemoryPersistence>>>,
     peermerge_state: Arc<Mutex<PeermergeStateWrapper<RandomAccessMemory>>>,
+    mut reattach_secrets: Option<HashMap<DocumentId, SigningKey>>,
 ) {
     let mut state_event_sender: UnboundedSender<StateEvent> = state_event_sender_mutex
         .lock()
@@ -621,7 +624,7 @@ async fn on_feed_event_memory(
                                 peer_id,
                                 &default_peer_header,
                                 decoded_document_url,
-                                None,
+                                reattach_secrets.as_mut(),
                                 Some(DocumentParent::Registered {
                                     child_document_info: new_child_document.clone(),
                                     parent_id,
@@ -653,6 +656,17 @@ async fn on_feed_event_memory(
                             .unwrap();
                     }
                 }
+            }
+            FeedEventContent::FeedMaxLengthReached { discovery_key } => {
+                let mut document =
+                    get_document_by_discovery_key(&documents, &event.doc_discovery_key)
+                        .await
+                        .unwrap();
+                let state_events = document
+                    .replace_write_feed_memory(&discovery_key)
+                    .await
+                    .unwrap();
+                send_state_events(&mut state_event_sender, state_events, &peermerge_state).await;
             }
             _ => {
                 process_feed_event(
@@ -693,6 +707,7 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
             documents: Arc::new(DashMap::new()),
             state_event_sender: Arc::new(Mutex::new(options.state_event_sender)),
             document_settings,
+            reattach_secrets: None,
         })
     }
 
@@ -761,6 +776,7 @@ impl Peermerge<RandomAccessDisk, FeedDiskPersistence> {
             documents,
             state_event_sender: Arc::new(Mutex::new(state_event_sender)),
             document_settings,
+            reattach_secrets: None,
         })
     }
 
@@ -908,7 +924,10 @@ async fn on_feed_event_disk(
                     get_document_by_discovery_key(&documents, &event.doc_discovery_key)
                         .await
                         .unwrap();
-                document.process_new_feeds_broadcasted_disk(new_feeds).await;
+                document
+                    .process_new_feeds_broadcasted_disk(new_feeds)
+                    .await
+                    .unwrap();
             }
             FeedEventContent::NewChildDocumentsBroadcasted {
                 new_child_documents,
@@ -967,7 +986,17 @@ async fn on_feed_event_disk(
                     }
                 }
             }
-
+            FeedEventContent::FeedMaxLengthReached { discovery_key } => {
+                let mut document =
+                    get_document_by_discovery_key(&documents, &event.doc_discovery_key)
+                        .await
+                        .unwrap();
+                let state_events = document
+                    .replace_write_feed_disk(&discovery_key)
+                    .await
+                    .unwrap();
+                send_state_events(&mut state_event_sender, state_events, &peermerge_state).await;
+            }
             _ => {
                 process_feed_event(
                     event,
@@ -1017,6 +1046,9 @@ async fn process_feed_event<T, U>(
             unreachable!("Implemented by concrete type")
         }
         FeedEventContent::NewChildDocumentsBroadcasted { .. } => {
+            unreachable!("Implemented by concrete type")
+        }
+        FeedEventContent::FeedMaxLengthReached { .. } => {
             unreachable!("Implemented by concrete type")
         }
         FeedEventContent::FeedDisconnected { .. } => {

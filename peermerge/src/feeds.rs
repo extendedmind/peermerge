@@ -4,7 +4,7 @@ use std::fmt::Debug;
 mod common;
 mod hypercore;
 
-pub(crate) use common::{get_feed, get_feed_discovery_keys};
+pub(crate) use common::{get_feed, get_feed_discovery_keys, remove_feed};
 
 pub use ::hypercore_protocol::{Protocol, ProtocolBuilder};
 pub(crate) use hypercore::on_protocol;
@@ -12,7 +12,7 @@ pub(crate) use hypercore::HypercoreWrapper as Feed;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use hypercore::{
     create_new_read_disk_hypercore as create_new_read_disk_feed,
-    create_new_write_disk_hypercore as create_new_write_disk_feed,
+    create_new_write_disk_hypercore as create_new_write_disk_feed, get_path_from_discovery_key,
     open_disk_hypercore as open_disk_feed,
 };
 pub(crate) use hypercore::{

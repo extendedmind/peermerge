@@ -12,6 +12,8 @@ pub struct PeermergeMemoryOptions {
     pub default_peer_header: NameDescription,
     #[builder(setter(into, strip_option), default)]
     pub state_event_sender: Option<UnboundedSender<StateEvent>>,
+    #[builder(setter(into, strip_option), default)]
+    pub reattach_secrets: Option<HashMap<DocumentId, String>>,
     #[builder(default = "DEFAULT_MAX_ENTRY_DATA_SIZE_BYTES")]
     pub max_entry_data_size_bytes: usize,
     #[builder(default = "DEFAULT_MAX_WRITE_FEED_LENGTH")]
@@ -63,8 +65,6 @@ pub struct AttachDocumentMemoryOptions {
     pub document_url: String,
     #[builder(setter(into, strip_option), default)]
     pub document_secret: Option<String>,
-    #[builder(setter(into, strip_option), default)]
-    pub reattach_secrets: Option<HashMap<DocumentId, String>>,
     #[builder(setter(into, strip_option), default)]
     pub parent_id: Option<DocumentId>,
     #[builder(setter(into, strip_option), default)]

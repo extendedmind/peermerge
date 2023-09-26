@@ -13,7 +13,6 @@ use super::PeerState;
 use crate::{
     common::{
         cipher::verify_data_signature,
-        keys::discovery_key_from_public_key,
         message::{
             BroadcastMessage, FeedSyncedMessage, FeedVerificationMessage, FeedsChangedMessage,
         },
@@ -39,27 +38,18 @@ const CLOSED_LOCAL_SIGNAL_NAME: &str = "closed";
 pub(super) fn create_broadcast_message(
     feeds_state: &DocumentFeedsState,
     child_documents: &[ChildDocumentInfo],
-    active_feeds_to_include: &Vec<DocumentFeedInfo>,
     inactive_feeds: Option<Vec<DocumentFeedInfo>>,
 ) -> Message {
-    // Take all verified feeds from the store
-    let mut all_active_feeds: Vec<DocumentFeedInfo> = feeds_state
-        .active_peer_feeds(false)
+    // Take all active peer feeds from the store
+    let active_peer_feeds: Vec<DocumentFeedInfo> = feeds_state
+        .active_peer_feeds()
         .into_iter()
         .map(|(_, feed)| feed)
         .collect();
 
-    // Then include also feeds given as parameter, i.e. feeds not-yet-verified
-    // but just now created.
-    for active_feed_to_include in active_feeds_to_include {
-        if !all_active_feeds.contains(active_feed_to_include) {
-            all_active_feeds.push(active_feed_to_include.clone());
-        }
-    }
-
     let broadcast_message: BroadcastMessage = BroadcastMessage {
         write_feed: feeds_state.write_feed.clone(),
-        active_feeds: all_active_feeds,
+        active_feeds: active_peer_feeds,
         inactive_feeds,
         child_documents: child_documents.to_vec(),
     };
@@ -517,7 +507,6 @@ where
                     let message = create_broadcast_message(
                         feeds_state,
                         &peer_state.child_documents,
-                        &peer_state.broadcast_new_feeds,
                         Some(compare_result.inactive_feeds_to_rebroadcast),
                     );
                     channel.send(message).await?;
@@ -531,12 +520,6 @@ where
                         new_feed.verify(&peer_state.doc_signature_verifying_key)?;
                     }
 
-                    // We can send the (possibly partial) new feeds immediately
-                    // because (possible) duplicates from a re-broadcast will be
-                    // removed at merge_new_feeds.
-                    peer_state
-                        .broadcast_new_feeds
-                        .extend(compare_result.new_feeds.clone());
                     // New remote feeds found
                     feed_events.push(FeedEvent::new(
                         peer_state.doc_discovery_key,
@@ -555,11 +538,27 @@ where
             APPEND_LOCAL_SIGNAL_NAME => {
                 let mut dec_state = State::from_buffer(&data);
                 let length: u64 = dec_state.decode(&data)?;
+                if length >= peer_state.max_write_feed_length {
+                    // Immediately send info about max length exceeded, and disconnect
+                    return Ok(vec![
+                        FeedEvent::new(
+                            peer_state.doc_discovery_key,
+                            FeedMaxLengthReached {
+                                discovery_key: *channel.discovery_key(),
+                            },
+                        ),
+                        FeedEvent::new(
+                            peer_state.doc_discovery_key,
+                            FeedDisconnected {
+                                channel: channel.id() as u64,
+                            },
+                        ),
+                    ]);
+                }
                 let info = {
                     let hypercore = hypercore.lock().await;
                     hypercore.info()
                 };
-
                 if info.contiguous_length >= length
                     && peer_state.contiguous_range_sent < info.contiguous_length
                 {
@@ -638,7 +637,6 @@ where
                 let messages = vec![create_broadcast_message(
                     feeds_state,
                     &peer_state.child_documents,
-                    &peer_state.broadcast_new_feeds,
                     None,
                 )];
                 channel.send_batch(&messages).await?;
@@ -660,19 +658,11 @@ where
                             .signal_local_protocol(FEED_VERIFICATION_LOCAL_SIGNAL_NAME, data)
                             .await?;
                     }
-                    if message.peer_id.is_some()
-                        && !peer_state.broadcast_new_feeds.iter().any(|feed| {
-                            discovery_key_from_public_key(&feed.public_key)
-                                == message.feed_discovery_key
-                        })
-                    {
-                        // Verification changed for one of the peer feeds, but not the ones that it
-                        // itself sent (and which were already part of a previous broadcast) need to
-                        // re-broadcast.
+                    if message.peer_id.is_some() {
+                        // Verification changed for one of the peer feeds
                         let message = create_broadcast_message(
                             feeds_state,
                             &peer_state.child_documents,
-                            &peer_state.broadcast_new_feeds,
                             None,
                         );
                         channel.send(message).await?;
@@ -688,12 +678,8 @@ where
                 let child_document_info: ChildDocumentInfo = dec_state.decode(&data)?;
                 peer_state.child_documents.push(child_document_info);
                 let feeds_state = peer_state.feeds_state.as_ref().unwrap();
-                let message = create_broadcast_message(
-                    feeds_state,
-                    &peer_state.child_documents,
-                    &peer_state.broadcast_new_feeds,
-                    None,
-                );
+                let message =
+                    create_broadcast_message(feeds_state, &peer_state.child_documents, None);
                 channel.send(message).await?;
 
                 // Transmit this event forward to the protocol so that the new document can

@@ -65,7 +65,6 @@ where
     let mut messages: Vec<Message> = vec![create_broadcast_message(
         peer_state.feeds_state.as_ref().unwrap(),
         &peer_state.child_documents,
-        &vec![],
         None,
     )];
     messages.extend(create_initial_synchronize(&mut hypercore, &mut peer_state).await);

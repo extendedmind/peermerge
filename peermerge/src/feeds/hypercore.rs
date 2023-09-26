@@ -13,7 +13,8 @@ use messaging::on_message;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use persistence::{
-    create_new_read_disk_hypercore, create_new_write_disk_hypercore, open_disk_hypercore,
+    create_new_read_disk_hypercore, create_new_write_disk_hypercore, get_path_from_discovery_key,
+    open_disk_hypercore,
 };
 pub(crate) use persistence::{create_new_read_memory_hypercore, create_new_write_memory_hypercore};
 pub(crate) use protocol::on_protocol;

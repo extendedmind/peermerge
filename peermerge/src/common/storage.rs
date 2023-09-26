@@ -6,6 +6,11 @@ use random_access_memory::RandomAccessMemory;
 use random_access_storage::RandomAccess;
 use std::{fmt::Debug, path::PathBuf};
 
+#[cfg(all(not(target_arch = "wasm32"), feature = "async-std"))]
+use async_std::fs::remove_dir_all;
+#[cfg(all(not(target_arch = "wasm32"), feature = "tokio"))]
+use tokio::fs::remove_dir_all;
+
 use crate::{
     common::state::{DocumentState, PeermergeState},
     crdt::{
@@ -73,8 +78,9 @@ impl PeermergeStateWrapper<RandomAccessMemory> {
     pub(crate) async fn new_memory(
         peer_header: &NameDescription,
         document_write_settings: DocumentSettings,
+        peer_id: Option<PeerId>,
     ) -> Self {
-        let state = PeermergeState::new(peer_header, vec![], document_write_settings);
+        let state = PeermergeState::new(peer_header, vec![], document_write_settings, peer_id);
         let mut storage = RandomAccessMemory::default();
         write_repo_state(&state, &mut storage).await;
         Self { state, storage }
@@ -88,7 +94,7 @@ impl PeermergeStateWrapper<RandomAccessDisk> {
         data_root_dir: &PathBuf,
         document_write_settings: DocumentSettings,
     ) -> Result<Self, PeermergeError> {
-        let state = PeermergeState::new(peer_header, vec![], document_write_settings);
+        let state = PeermergeState::new(peer_header, vec![], document_write_settings, None);
         let state_path = get_peermerge_state_path(data_root_dir);
         let mut storage = RandomAccessDisk::builder(state_path.clone())
             .build()
@@ -120,6 +126,19 @@ impl PeermergeStateWrapper<RandomAccessDisk> {
 
 fn get_peermerge_state_path(data_root_dir: &PathBuf) -> PathBuf {
     data_root_dir.join(PathBuf::from("peermerge_state.bin"))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) async fn destroy_path_disk(hypercore_dir: &PathBuf) -> Result<(), PeermergeError> {
+    remove_dir_all(hypercore_dir)
+        .await
+        .map_err(|err| PeermergeError::IO {
+            context: Some(format!(
+                "Could not delete hypercore directory at {:?}",
+                hypercore_dir
+            )),
+            source: err,
+        })
 }
 
 #[derive(Debug)]
@@ -166,12 +185,23 @@ where
         }
     }
 
-    pub(crate) async fn set_verified(
+    pub(crate) async fn set_verified_and_persist(
         &mut self,
         discovery_key: &FeedDiscoveryKey,
         peer_id: &Option<PeerId>,
     ) -> bool {
         let changed = self.state.feeds_state.verify_feed(discovery_key, peer_id);
+        if changed {
+            write_document_state(&self.state, &mut self.storage).await;
+        }
+        changed
+    }
+
+    pub(crate) async fn set_removed_and_persist(
+        &mut self,
+        discovery_key: &FeedDiscoveryKey,
+    ) -> bool {
+        let changed = self.state.feeds_state.set_removed(discovery_key);
         if changed {
             write_document_state(&self.state, &mut self.storage).await;
         }
@@ -202,16 +232,12 @@ where
         }
     }
 
-    pub(crate) fn write_discovery_key(&self) -> FeedDiscoveryKey {
-        discovery_key_from_public_key(
-            &self
-                .state
-                .feeds_state
-                .write_feed
-                .clone()
-                .expect("TODO: read-only hypercore")
-                .public_key,
-        )
+    pub(crate) fn write_discovery_key(&self) -> Option<FeedDiscoveryKey> {
+        self.state
+            .feeds_state
+            .write_feed
+            .as_ref()
+            .map(|key| discovery_key_from_public_key(&key.public_key))
     }
 
     pub(crate) fn state(&self) -> &DocumentState {

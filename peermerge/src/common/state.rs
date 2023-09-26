@@ -46,8 +46,9 @@ impl PeermergeState {
         default_peer_header: &NameDescription,
         document_ids: Vec<DocumentIdWithParents>,
         document_settings: DocumentSettings,
+        peer_id: Option<PeerId>,
     ) -> Self {
-        let peer_id: PeerId = *Uuid::new_v4().as_bytes();
+        let peer_id: PeerId = peer_id.unwrap_or_else(|| *Uuid::new_v4().as_bytes());
         Self::new_with_version(
             PEERMERGE_VERSION,
             peer_id,
@@ -477,28 +478,20 @@ impl DocumentFeedsState {
         }
     }
 
-    /// Gets all active, verified feeds
-    pub(crate) fn active_peer_feeds(
-        &self,
-        tolerate_unverified: bool,
-    ) -> Vec<(usize, DocumentFeedInfo)> {
+    /// Gets all active peer feeds, including the ones that are not yet verified.
+    /// NB: we can treat verified feeds the same way as unverified, because
+    /// broadcasted feed infos are signed so we know they are legitimate
+    /// even without verifying the first feed entry.
+    pub(crate) fn active_peer_feeds(&self) -> Vec<(usize, DocumentFeedInfo)> {
         let mut active_feeds: Vec<(usize, DocumentFeedInfo)> = vec![];
         for (peer_id, feeds) in &self.other_feeds {
             if peer_id != &self.peer_id {
                 let replaced_public_keys: Vec<FeedPublicKey> = feeds
                     .iter()
-                    .filter_map(|feed| {
-                        if !tolerate_unverified && !feed.verified {
-                            None
-                        } else {
-                            feed.replaced_public_key
-                        }
-                    })
+                    .filter_map(|feed| feed.replaced_public_key)
                     .collect();
                 for (index, feed) in feeds.iter().enumerate().rev() {
-                    if (tolerate_unverified || feed.verified)
-                        && !replaced_public_keys.contains(&feed.public_key)
-                    {
+                    if !replaced_public_keys.contains(&feed.public_key) {
                         active_feeds.push((index, feed.clone()));
                         // There can't be more than one, we expect to break
                         // immediately as the feeds are stored in reverse
@@ -511,10 +504,10 @@ impl DocumentFeedsState {
         active_feeds
     }
 
-    /// Gets all removable feeds
+    /// Gets all feeds that have been replaced but not yet removed
     pub(crate) fn removable_feeds(&self) -> Vec<DocumentFeedInfo> {
         let mut removable_feeds: Vec<DocumentFeedInfo> = vec![];
-        let active_peer_feeds = self.active_peer_feeds(false);
+        let active_peer_feeds = self.active_peer_feeds();
         for feeds in self.other_feeds.values() {
             for feed in feeds.iter().rev() {
                 if !active_peer_feeds
@@ -565,7 +558,7 @@ impl DocumentFeedsState {
         mut remote_active_feeds: Vec<DocumentFeedInfo>,
         remote_inactive_feeds: Option<Vec<DocumentFeedInfo>>,
     ) -> Result<CompareBroadcastedFeedsResult, PeermergeError> {
-        let mut stored_active_peer_feeds = self.active_peer_feeds(true);
+        let mut stored_active_peer_feeds = self.active_peer_feeds();
         let mut wait_for_rebroadcast = false;
 
         // First trim the remote_write_feed and remote_active_feeds and to not have any
@@ -972,12 +965,11 @@ impl DocumentFeedsState {
     }
 
     /// Replace the write feed's public key, returns the replaced_feeds and feeds_to_create.
-    #[allow(dead_code)] // TODO: Remote when implemented
     pub(crate) fn replace_write_public_key(
         &mut self,
         new_write_public_key: FeedPublicKey,
         doc_signature_signing_key: &SigningKey,
-    ) -> ChangeDocumentFeedsStateResult {
+    ) -> (FeedDiscoveryKey, ChangeDocumentFeedsStateResult) {
         let mut replaced_write_feed = self.write_feed.clone().unwrap();
         let mut new_write_feed = DocumentFeedInfo::new(
             replaced_write_feed.peer_id,
@@ -998,14 +990,16 @@ impl DocumentFeedsState {
             );
         }
 
-        // Return values without discovery keys
-        replaced_write_feed.discovery_key = None;
-        new_write_feed.discovery_key = None;
-        ChangeDocumentFeedsStateResult {
-            changed: true,
-            replaced_feeds: vec![replaced_write_feed],
-            feeds_to_create: vec![new_write_feed],
-        }
+        // Take out discovery key into its own value
+        let replaced_discovery_key = replaced_write_feed.discovery_key.take().unwrap();
+        (
+            replaced_discovery_key,
+            ChangeDocumentFeedsStateResult {
+                changed: true,
+                replaced_feeds: vec![replaced_write_feed],
+                feeds_to_create: vec![new_write_feed],
+            },
+        )
     }
 
     pub(crate) fn verify_feed(
@@ -1033,6 +1027,22 @@ impl DocumentFeedsState {
             if !self.doc_feed_verified {
                 self.doc_feed_verified = true;
                 changed = true;
+            }
+        }
+        changed
+    }
+
+    pub(crate) fn set_removed(&mut self, discovery_key: &FeedDiscoveryKey) -> bool {
+        let mut changed = false;
+        for (_, feeds) in self.other_feeds.iter_mut() {
+            for mut stored_feed_info in feeds.iter_mut() {
+                if stored_feed_info.discovery_key.as_ref().unwrap() == discovery_key {
+                    if !stored_feed_info.removed {
+                        stored_feed_info.removed = true;
+                        changed = true;
+                    }
+                    break;
+                }
             }
         }
         changed
@@ -1408,7 +1418,7 @@ mod tests {
             Some(my_write_feed.public_key),
             &signing_key,
         );
-        let replace_result = fs.replace_write_public_key(my_new_write_feed_pk, &signing_key);
+        let (_, replace_result) = fs.replace_write_public_key(my_new_write_feed_pk, &signing_key);
         assert_eq!(fs.write_feed, Some(my_new_write_feed.clone()));
         assert_eq!(replace_result.replaced_feeds, vec![my_write_feed.clone()]);
         assert_eq!(

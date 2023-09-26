@@ -169,6 +169,7 @@ where
                                 peer_id,
                                 document.doc_discovery_key(),
                                 document.doc_signature_verifying_key(),
+                                document.settings().max_write_feed_length,
                                 channel,
                                 channel_receiver,
                                 channel_sender,

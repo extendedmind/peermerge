@@ -210,6 +210,7 @@ async fn proxy_disk_encrypted() -> anyhow::Result<()> {
         PeermergeMemoryOptionsBuilder::default()
             .default_peer_header(NameDescription::new("joiner"))
             .state_event_sender(joiner_state_event_sender)
+            .reattach_secrets(reattach_secrets)
             .build()?,
     )
     .await?;
@@ -221,7 +222,6 @@ async fn proxy_disk_encrypted() -> anyhow::Result<()> {
             AttachDocumentMemoryOptionsBuilder::default()
                 .document_url(doc_url.clone())
                 .document_secret(document_secret)
-                .reattach_secrets(reattach_secrets)
                 .build()?,
         )
         .await?;

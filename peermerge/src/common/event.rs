@@ -88,4 +88,7 @@ pub(crate) enum FeedEventContent {
         discovery_key: FeedDiscoveryKey,
         contiguous_length: u64,
     },
+    FeedMaxLengthReached {
+        discovery_key: FeedDiscoveryKey,
+    },
 }

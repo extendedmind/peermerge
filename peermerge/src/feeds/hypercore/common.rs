@@ -6,7 +6,7 @@ use hypercore_protocol::{
 };
 
 use crate::{
-    common::state::{ChildDocumentInfo, DocumentFeedInfo, DocumentFeedsState},
+    common::state::{ChildDocumentInfo, DocumentFeedsState},
     FeedDiscoveryKey, PeerId,
 };
 
@@ -23,6 +23,7 @@ pub(super) struct PeerState {
     pub(super) peer_id: Option<PeerId>,
     pub(super) doc_discovery_key: FeedDiscoveryKey,
     pub(super) doc_signature_verifying_key: VerifyingKey,
+    pub(super) max_write_feed_length: u64,
     pub(super) can_upgrade: bool,
     pub(super) remote_fork: u64,
     pub(super) remote_length: u64,
@@ -31,11 +32,6 @@ pub(super) struct PeerState {
     pub(super) remote_uploading: bool,
     pub(super) remote_downloading: bool,
     pub(super) length_acked: u64,
-
-    /// Broadcasting temporary value to store feeds that we sent
-    /// forward as new. Needed to include them into the next broadcast
-    /// even though they are not yet verified.
-    pub(super) broadcast_new_feeds: Vec<DocumentFeedInfo>,
 
     /// Inflight requests
     pub(super) inflight: InflightTracker,
@@ -59,6 +55,7 @@ impl PeerState {
         is_doc: bool,
         doc_discovery_key: FeedDiscoveryKey,
         doc_signature_verifying_key: VerifyingKey,
+        max_write_feed_length: u64,
         feeds_state: Option<DocumentFeedsState>,
         child_documents: Vec<ChildDocumentInfo>,
         peer_id: Option<PeerId>,
@@ -68,6 +65,7 @@ impl PeerState {
             is_doc,
             doc_discovery_key,
             doc_signature_verifying_key,
+            max_write_feed_length,
             feeds_state,
             child_documents,
             peer_id,
@@ -79,7 +77,6 @@ impl PeerState {
             remote_uploading: true,
             remote_downloading: true,
             length_acked: 0,
-            broadcast_new_feeds: vec![],
             inflight: InflightTracker::default(),
             synced_contiguous_length: 0,
             notified_remote_synced_contiguous_length: 0,

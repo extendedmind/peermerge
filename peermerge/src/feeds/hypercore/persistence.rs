@@ -31,6 +31,7 @@ pub(crate) async fn create_new_write_disk_hypercore(
         .unwrap();
     let (wrapper, encryption_key) = HypercoreWrapper::from_disk_hypercore(
         hypercore,
+        hypercore_dir,
         AccessType::ReadWrite,
         encrypted,
         encryption_key,
@@ -59,8 +60,15 @@ pub(crate) async fn create_new_read_disk_hypercore(
         .build()
         .await
         .unwrap();
-    HypercoreWrapper::from_disk_hypercore(hypercore, access_type, encrypted, encryption_key, false)
-        .0
+    HypercoreWrapper::from_disk_hypercore(
+        hypercore,
+        hypercore_dir,
+        access_type,
+        encrypted,
+        encryption_key,
+        false,
+    )
+    .0
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -83,6 +91,7 @@ pub(crate) async fn open_disk_hypercore(
         hypercore.info().length,
         HypercoreWrapper::from_disk_hypercore(
             hypercore,
+            hypercore_dir,
             access_type,
             encrypted,
             encryption_key,
@@ -90,6 +99,15 @@ pub(crate) async fn open_disk_hypercore(
         )
         .0,
     )
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn get_path_from_discovery_key(
+    prefix: &PathBuf,
+    discovery_key: &FeedDiscoveryKey,
+) -> PathBuf {
+    let encoded = data_encoding::BASE32_NOPAD.encode(discovery_key);
+    prefix.join(PathBuf::from(encoded))
 }
 
 pub(crate) async fn create_new_write_memory_hypercore(
@@ -153,10 +171,4 @@ async fn create_new_memory_hypercore(
         !reattach,
     );
     (wrapper, encryption_key)
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn get_path_from_discovery_key(prefix: &PathBuf, discovery_key: &FeedDiscoveryKey) -> PathBuf {
-    let encoded = data_encoding::BASE32_NOPAD.encode(discovery_key);
-    prefix.join(PathBuf::from(encoded))
 }

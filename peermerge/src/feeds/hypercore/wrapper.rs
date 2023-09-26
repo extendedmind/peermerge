@@ -8,8 +8,8 @@ use hypercore_protocol::{
 use random_access_disk::RandomAccessDisk;
 use random_access_memory::RandomAccessMemory;
 use random_access_storage::RandomAccess;
-use std::fmt::Debug;
 use std::sync::Arc;
+use std::{fmt::Debug, path::PathBuf};
 use tracing::{debug, instrument};
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "async-std"))]
@@ -27,6 +27,8 @@ use super::{
     },
     on_doc_feed, on_feed, PeerState,
 };
+#[cfg(not(target_arch = "wasm32"))]
+use crate::common::storage::destroy_path_disk;
 use crate::{
     common::{
         cipher::{add_signature, verify_data_signature, EntryCipher},
@@ -45,6 +47,7 @@ where
 {
     pub(super) public_key: [u8; 32],
     pub(super) hypercore: Arc<Mutex<Hypercore<T>>>,
+    hypercore_dir: PathBuf,
     access_type: AccessType,
     entry_cipher: Option<EntryCipher>,
     channel_senders: Vec<ChannelSender<Message>>,
@@ -54,6 +57,7 @@ where
 impl HypercoreWrapper<RandomAccessDisk> {
     pub(crate) fn from_disk_hypercore(
         hypercore: Hypercore<RandomAccessDisk>,
+        hypercore_dir: PathBuf,
         access_type: AccessType,
         encrypted: bool,
         encryption_key: &Option<Vec<u8>>,
@@ -69,11 +73,18 @@ impl HypercoreWrapper<RandomAccessDisk> {
         let wrapper = HypercoreWrapper {
             public_key,
             hypercore: Arc::new(Mutex::new(hypercore)),
+            hypercore_dir,
             access_type,
             entry_cipher,
             channel_senders: vec![],
         };
         (wrapper, key)
+    }
+
+    pub(crate) async fn destroy_disk(&mut self) -> Result<(), PeermergeError> {
+        let hypercore = self.hypercore.lock().await;
+        drop(hypercore);
+        destroy_path_disk(&self.hypercore_dir).await
     }
 }
 
@@ -95,6 +106,7 @@ impl HypercoreWrapper<RandomAccessMemory> {
         let wrapper = HypercoreWrapper {
             public_key,
             hypercore: Arc::new(Mutex::new(hypercore)),
+            hypercore_dir: PathBuf::new(),
             access_type,
             entry_cipher,
             channel_senders: vec![],
@@ -296,6 +308,7 @@ where
         peer_id: Option<PeerId>,
         doc_discovery_key: FeedDiscoveryKey,
         doc_signature_verifying_key: VerifyingKey,
+        max_write_feed_length: u64,
         channel: Channel,
         channel_receiver: ChannelReceiver<Message>,
         channel_sender: ChannelSender<Message>,
@@ -308,6 +321,7 @@ where
             is_doc,
             doc_discovery_key,
             doc_signature_verifying_key,
+            max_write_feed_length,
             peers_state,
             child_documents,
             peer_id,

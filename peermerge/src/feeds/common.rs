@@ -28,6 +28,27 @@ where
     }
 }
 
+pub(crate) async fn remove_feed<T>(
+    feeds: &Arc<DashMap<[u8; 32], Arc<Mutex<Feed<T>>>>>,
+    discovery_key: &FeedDiscoveryKey,
+) -> Option<Arc<Mutex<Feed<T>>>>
+where
+    T: FeedPersistence,
+{
+    loop {
+        if let Some(entry) = feeds.try_entry(*discovery_key) {
+            match entry {
+                dashmap::mapref::entry::Entry::Occupied(value) => break Some(value.remove()),
+                dashmap::mapref::entry::Entry::Vacant(_) => {
+                    break None;
+                }
+            }
+        } else {
+            YieldNow(false).await;
+        }
+    }
+}
+
 pub(crate) async fn get_feed_discovery_keys<T>(
     feeds: &Arc<DashMap<[u8; 32], Arc<Mutex<Feed<T>>>>>,
 ) -> Vec<[u8; 32]>
