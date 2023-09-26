@@ -167,6 +167,14 @@ where
         Ok(result)
     }
 
+    pub(crate) fn content_mut(&mut self) -> Option<&mut DocumentContent> {
+        if let Some(content) = self.state.content.as_mut() {
+            Some(content)
+        } else {
+            None
+        }
+    }
+
     pub(crate) fn content_feeds_state_and_unapplied_entries_mut(
         &mut self,
     ) -> Option<(

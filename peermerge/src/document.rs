@@ -1787,6 +1787,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
         }
 
         // Open write feed, if any
+        // TODO: ReadOnly peer should have content initialized as well
         let feeds = if let Some(write_feed_info) = write_feed {
             let write_discovery_key = discovery_key_from_public_key(&write_feed_info.public_key);
             debug!(
@@ -1801,6 +1802,18 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
                 &encryption_key,
             )
             .await;
+
+            // Initialize content
+            if let Some(content) = document_state_wrapper.content_mut() {
+                let meta_automerge_doc =
+                    init_automerge_doc_from_data(&write_feed_info.peer_id, &content.meta_doc_data);
+                content.meta_automerge_doc = Some(meta_automerge_doc);
+                if let Some(user_doc_data) = &content.user_doc_data {
+                    let user_automerge_doc =
+                        init_automerge_doc_from_data(&write_feed_info.peer_id, user_doc_data);
+                    content.user_automerge_doc = Some(user_automerge_doc);
+                }
+            }
 
             let feeds = if write_feed.info().await.length >= settings.max_write_feed_length {
                 // The write feed has gone above the limit. This is happens when there is
@@ -1840,7 +1853,7 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
                 Arc::new(feeds)
             };
 
-            // Initialize doc, fill unapplied changes and possibly save state if it had been left
+            // Fill unapplied changes and possibly save state if it had been left
             // unsaved
             if let Some((content, feeds_state, unapplied_entries)) =
                 document_state_wrapper.content_feeds_state_and_unapplied_entries_mut()
@@ -2598,10 +2611,7 @@ where
             .meta_automerge_doc
             .as_mut()
             .expect("Meta doc needs to be present when replacing write feed"),
-        content
-            .user_automerge_doc
-            .as_mut()
-            .expect("User doc needs to be present when replacing write feed"),
+        content.user_automerge_doc.as_mut(),
         max_entry_data_size_bytes,
     )?;
     let write_feed_init_data: Vec<Vec<u8>> = serialize_init_entries(init_peer_entries)?;

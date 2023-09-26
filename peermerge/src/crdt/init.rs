@@ -120,14 +120,14 @@ pub(crate) fn init_peer(
 
 pub(crate) fn reinit_peer(
     meta_automerge_doc: &mut AutomergeDoc,
-    user_automerge_doc: &mut AutomergeDoc,
+    user_automerge_doc: Option<&mut AutomergeDoc>,
     max_entry_data_size_bytes: usize,
 ) -> Result<Vec<Entry>, PeermergeError> {
     let meta_doc_data = save_automerge_doc(meta_automerge_doc);
-    let user_doc_data = save_automerge_doc(user_automerge_doc);
+    let user_doc_data: Option<Vec<u8>> = user_automerge_doc.map(save_automerge_doc);
     let entries = split_datas_into_entries(
         &meta_doc_data,
-        &Some(user_doc_data),
+        &user_doc_data,
         false,
         max_entry_data_size_bytes,
     );

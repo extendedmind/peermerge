@@ -1,5 +1,6 @@
 use futures::{
     channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender},
+    future::join_all,
     stream::StreamExt,
 };
 use peermerge::{
@@ -25,15 +26,15 @@ use common::*;
 
 #[test(async_test)]
 async fn disk_two_peers_plain() -> anyhow::Result<()> {
-    disk_two_peers(false).await
+    disk_two_peers(false, 10).await
 }
 
 #[test(async_test)]
 async fn disk_two_peers_encrypted() -> anyhow::Result<()> {
-    disk_two_peers(true).await
+    disk_two_peers(true, 10).await
 }
 
-async fn disk_two_peers(encrypted: bool) -> anyhow::Result<()> {
+async fn disk_two_peers(encrypted: bool, max_write_feed_length: u64) -> anyhow::Result<()> {
     let creator_dir = Builder::new()
         .prefix(&format!(
             "disk_two_peers_creator_{}",
@@ -54,6 +55,7 @@ async fn disk_two_peers(encrypted: bool) -> anyhow::Result<()> {
         PeermergeDiskOptionsBuilder::default()
             .default_peer_header(NameDescription::new("creator"))
             .data_root_dir(creator_dir.clone())
+            .max_write_feed_length(max_write_feed_length)
             .build()?,
     )
     .await?;
@@ -164,7 +166,7 @@ async fn disk_two_peers(encrypted: bool) -> anyhow::Result<()> {
     )
     .await?;
 
-    // Reopen the disk peermerges from disk, assert that opening works with new scalar
+    // Verify that document infos can be fetched
 
     let creator_document_infos = Peermerge::document_infos_disk(&creator_dir).await?.unwrap();
     assert_eq!(creator_document_infos.len(), 1);
@@ -183,6 +185,40 @@ async fn disk_two_peers(encrypted: bool) -> anyhow::Result<()> {
 
     let mut creator_document_secrets = HashMap::new();
     creator_document_secrets.insert(creator_doc_info.id(), document_secret.clone());
+
+    // Reopen and append values standalone creator that cause the max feed length to be exceeded
+    {
+        let mut peermerge_creator =
+            Peermerge::open_disk(creator_document_secrets.clone(), &creator_dir, None).await?;
+        for i in 0..max_write_feed_length {
+            peermerge_creator
+                .transact_mut(
+                    &creator_doc_info.id(),
+                    |doc| doc.put(ROOT, format!("s{i}"), i),
+                    None,
+                )
+                .await?;
+        }
+        let (creator_state_event_sender, mut creator_state_event_receiver): (
+            UnboundedSender<StateEvent>,
+            UnboundedReceiver<StateEvent>,
+        ) = unbounded();
+        Peermerge::open_disk(
+            creator_document_secrets.clone(),
+            &creator_dir,
+            Some(creator_state_event_sender),
+        )
+        .await?;
+        if let Some(event) = creator_state_event_receiver.next().await {
+            assert!(matches!(event.content, PeerChanged { .. }));
+        }
+        if let Some(event) = creator_state_event_receiver.next().await {
+            assert!(matches!(event.content, DocumentInitialized { .. }));
+        }
+    }
+
+    // Reopen both the disk peermerges, assert that opening works with new scalar
+
     let mut peermerge_creator =
         Peermerge::open_disk(creator_document_secrets, &creator_dir, None).await?;
     let values = peermerge_creator
@@ -264,7 +300,7 @@ async fn run_disk_two_peers(
     let assert_sync_joiner = Arc::clone(&assert_sync_creator);
 
     let mut peermerge_creator_for_task = peermerge_creator.clone();
-    task::spawn(async move {
+    let creator_connect = task::spawn(async move {
         peermerge_creator_for_task
             .connect_protocol_disk(&mut proto_responder)
             .await
@@ -272,14 +308,14 @@ async fn run_disk_two_peers(
     });
 
     let mut peermerge_joiner_for_task = peermerge_joiner.clone();
-    task::spawn(async move {
+    let joiner_connect = task::spawn(async move {
         peermerge_joiner_for_task
             .connect_protocol_disk(&mut proto_initiator)
             .await
             .unwrap();
     });
     let expected_scalars_for_task = expected_scalars.clone();
-    task::spawn(async move {
+    let joiner_process = task::spawn(async move {
         process_joiner_state_event(
             peermerge_joiner,
             joiner_doc_id,
@@ -292,7 +328,7 @@ async fn run_disk_two_peers(
     });
 
     process_creator_state_events(
-        peermerge_creator,
+        &mut peermerge_creator,
         creator_doc_id,
         creator_state_event_receiver,
         assert_sync_creator,
@@ -300,6 +336,9 @@ async fn run_disk_two_peers(
         expected_changes,
     )
     .await?;
+
+    peermerge_creator.close().await.unwrap();
+    join_all(vec![creator_connect, joiner_connect, joiner_process]).await;
     Ok(())
 }
 
@@ -363,7 +402,7 @@ async fn process_joiner_state_event(
 
 #[instrument(skip_all)]
 async fn process_creator_state_events(
-    peermerge: Peermerge<RandomAccessDisk, FeedDiskPersistence>,
+    peermerge: &mut Peermerge<RandomAccessDisk, FeedDiskPersistence>,
     doc_id: DocumentId,
     mut creator_state_event_receiver: UnboundedReceiver<StateEvent>,
     assert_sync: BoolCondvar,
