@@ -62,7 +62,7 @@ async fn proxy_tcp_disk_encrypted() -> anyhow::Result<()> {
     let doc_url = peermerge_creator
         .sharing_info(&creator_doc_info.id())
         .await?
-        .doc_url;
+        .read_write_doc_url;
     let document_secret = peermerge_creator
         .document_secret(&creator_doc_info.id())
         .await?

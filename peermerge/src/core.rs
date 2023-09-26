@@ -360,7 +360,12 @@ where
                 let mut parent_document = parent_document.take().unwrap();
                 let parent_id = parent_document.id();
                 let document_secret = result.document.document_secret().unwrap();
-                let document_url = &result.document.sharing_info().await.unwrap().doc_url;
+                let document_url = &result
+                    .document
+                    .sharing_info()
+                    .await
+                    .unwrap()
+                    .read_write_doc_url;
                 parent_document
                     .add_created_child_document(child_document_info, document_url, document_secret)
                     .await?;

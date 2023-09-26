@@ -117,7 +117,7 @@ async fn memory_three_writers() -> anyhow::Result<()> {
     let document_url = peermerge_creator
         .sharing_info(&creator_doc_info.id())
         .await?
-        .doc_url;
+        .read_write_doc_url;
     let joiner_doc_info = peermerge_joiner
         .attach_document_memory(
             AttachDocumentMemoryOptionsBuilder::default()
@@ -500,7 +500,8 @@ async fn process_creator_state_events(
                                 .build()?,
                         )
                         .await?;
-                        let document_url = peermerge.sharing_info(&doc_id).await?.doc_url;
+                        let document_url =
+                            peermerge.sharing_info(&doc_id).await?.read_write_doc_url;
                         let latecomer_doc_info = peermerge_latecomer
                             .attach_document_memory(
                                 AttachDocumentMemoryOptionsBuilder::default()

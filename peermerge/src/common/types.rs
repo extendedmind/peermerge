@@ -161,7 +161,7 @@ impl DocumentInfo {
 pub struct DocumentSharingInfo {
     pub proxy: bool,
     pub proxy_doc_url: String,
-    pub doc_url: String,
+    pub read_write_doc_url: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]

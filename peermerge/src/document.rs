@@ -13,7 +13,8 @@ use std::{fmt::Debug, path::PathBuf};
 use tracing::{debug, enabled, instrument, warn, Level};
 
 use crate::common::cipher::{
-    create_signature, encode_document_id, proxy_doc_url_from_doc_url, DecodedDocUrl, DocumentSecret,
+    create_signature, encode_document_id, proxy_doc_url_from_read_write_doc_url, DecodedDocUrl,
+    DocumentSecret,
 };
 use crate::common::encoding::{serialize_entry, serialize_init_entries};
 use crate::common::entry::{Entry, ShrunkEntries};
@@ -496,14 +497,17 @@ where
     pub(crate) async fn sharing_info(&self) -> Result<DocumentSharingInfo, PeermergeError> {
         if let Some(doc_signature_signing_key) = &self.doc_signature_key_pair.secret {
             let mut document_state = self.document_state.lock().await;
-            let doc_url = document_state
+            let read_write_doc_url = document_state
                 .state_mut()
                 .doc_url(doc_signature_signing_key, &self.encryption_key);
 
             Ok(DocumentSharingInfo {
                 proxy: false,
-                proxy_doc_url: proxy_doc_url_from_doc_url(&doc_url, doc_signature_signing_key),
-                doc_url,
+                proxy_doc_url: proxy_doc_url_from_read_write_doc_url(
+                    &read_write_doc_url,
+                    doc_signature_signing_key,
+                ),
+                read_write_doc_url,
             })
         } else {
             Err(PeermergeError::NotWritable)

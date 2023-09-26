@@ -148,12 +148,12 @@ pub(crate) fn encode_doc_url(
     url
 }
 
-pub(crate) fn proxy_doc_url_from_doc_url(
-    doc_url: &str,
+pub(crate) fn proxy_doc_url_from_read_write_doc_url(
+    read_write_doc_url: &str,
     doc_signature_signing_key: &SigningKey,
 ) -> String {
-    let (domain_end, _) = get_domain_end_and_appendix_start_end_encrypted(doc_url);
-    let mut url = format!("{}?{}", &doc_url[..domain_end], SIGNATURE_PARAM);
+    let (domain_end, _) = get_domain_end_and_appendix_start_end_encrypted(read_write_doc_url);
+    let mut url = format!("{}?{}", &read_write_doc_url[..domain_end], SIGNATURE_PARAM);
 
     // Lastly sign the entire string URL and append signature to the end
     sign_url(&mut url, doc_signature_signing_key);

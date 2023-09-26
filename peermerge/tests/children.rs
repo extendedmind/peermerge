@@ -195,7 +195,7 @@ async fn children_three_main_documents_two_shared() -> anyhow::Result<()> {
     let shared_doc_info_attach_a = peermerge_creator_1
         .attach_document_memory(
             AttachDocumentMemoryOptionsBuilder::default()
-                .document_url(sharing_info_a.doc_url.clone())
+                .document_url(sharing_info_a.read_write_doc_url.clone())
                 .document_secret(document_secret_a.clone())
                 .parent_id(document_1_id)
                 .parent_header(NameDescription::new("document_1_override"))
@@ -206,7 +206,7 @@ async fn children_three_main_documents_two_shared() -> anyhow::Result<()> {
     let shared_doc_info_attach_a = peermerge_joiner_3
         .attach_document_memory(
             AttachDocumentMemoryOptionsBuilder::default()
-                .document_url(sharing_info_a.doc_url)
+                .document_url(sharing_info_a.read_write_doc_url)
                 .document_secret(document_secret_a)
                 .parent_id(document_3_id)
                 .parent_header(NameDescription::new("document_3_override"))
@@ -310,7 +310,7 @@ async fn children_three_main_documents_two_shared() -> anyhow::Result<()> {
     let shared_doc_info_attach_b = peermerge_creator_1
         .attach_document_memory(
             AttachDocumentMemoryOptionsBuilder::default()
-                .document_url(sharing_info_b.doc_url)
+                .document_url(sharing_info_b.read_write_doc_url)
                 .document_secret(document_secret_b)
                 .parent_id(document_1_id)
                 .parent_header(NameDescription::new("document_1_override"))
@@ -405,7 +405,7 @@ async fn create_main_document_memory(
     peermerge_joiner
         .attach_document_memory(
             AttachDocumentMemoryOptionsBuilder::default()
-                .document_url(sharing_info.doc_url)
+                .document_url(sharing_info.read_write_doc_url)
                 .document_secret(document_secret)
                 .build()?,
         )
@@ -438,7 +438,7 @@ async fn create_main_document_disk(
     peermerge_joiner
         .attach_document_disk(
             AttachDocumentDiskOptionsBuilder::default()
-                .document_url(sharing_info.doc_url)
+                .document_url(sharing_info.read_write_doc_url)
                 .document_secret(document_secret)
                 .build()?,
         )

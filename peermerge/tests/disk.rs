@@ -31,7 +31,7 @@ async fn disk_two_peers_plain() -> anyhow::Result<()> {
 
 #[test(async_test)]
 async fn disk_two_peers_encrypted() -> anyhow::Result<()> {
-    disk_two_peers(true, 10).await
+    disk_two_peers(true, 5).await
 }
 
 async fn disk_two_peers(encrypted: bool, max_write_feed_length: u64) -> anyhow::Result<()> {
@@ -74,7 +74,7 @@ async fn disk_two_peers(encrypted: bool, max_write_feed_length: u64) -> anyhow::
     let doc_url = peermerge_creator
         .sharing_info(&creator_doc_info.id())
         .await?
-        .doc_url;
+        .read_write_doc_url;
     let document_secret = peermerge_creator
         .document_secret(&creator_doc_info.id())
         .await?
