@@ -530,26 +530,27 @@ impl DocumentFeedsState {
         replaced_public_key: &Option<FeedPublicKey>,
         remote_inactive_feeds: &Option<Vec<DocumentFeedInfo>>,
     ) -> bool {
+        let mut exists: bool = false;
         if let Some(replaced_public_key) = replaced_public_key {
+            // First search stored feeds
             if let Some(stored_feeds) = self.other_feeds.get(peer_id) {
-                if stored_feeds
+                exists = stored_feeds
                     .iter()
-                    .any(|feed| &feed.public_key == replaced_public_key)
-                {
-                    true
-                } else if let Some(remote_inactive_feeds) = remote_inactive_feeds {
-                    remote_inactive_feeds
+                    .any(|feed| &feed.public_key == replaced_public_key);
+            }
+            // Then if it didn't hit, search the inactive feeds remote might have sent
+            if !exists {
+                if let Some(remote_inactive_feeds) = remote_inactive_feeds {
+                    exists = remote_inactive_feeds
                         .iter()
                         .any(|feed| &feed.public_key == replaced_public_key)
-                } else {
-                    false
                 }
-            } else {
-                false
             }
         } else {
-            true
+            // It is not replaced so it exists
+            exists = true
         }
+        exists
     }
 
     pub(crate) fn compare_broadcasted_feeds(
@@ -619,23 +620,28 @@ impl DocumentFeedsState {
         let mut new_remote_feeds_map: HashMap<PeerId, Vec<DocumentFeedInfo>> = HashMap::new();
         if let Some(remote_inactive_feeds) = &remote_inactive_feeds {
             for remote_inactive_feed in remote_inactive_feeds {
-                if let Some(stored_feeds) = self.other_feeds.get(&remote_inactive_feed.peer_id) {
-                    if !stored_feeds.contains(remote_inactive_feed) {
-                        let new_feed = remote_inactive_feed.clone();
-                        if let Some(new_remote_feeds) =
-                            new_remote_feeds_map.get_mut(&new_feed.peer_id)
+                let include_feed = if let Some(stored_feeds) =
+                    self.other_feeds.get(&remote_inactive_feed.peer_id)
+                {
+                    !stored_feeds.contains(remote_inactive_feed)
+                } else {
+                    true
+                };
+                if include_feed {
+                    let new_feed = remote_inactive_feed.clone();
+                    if let Some(new_remote_feeds) = new_remote_feeds_map.get_mut(&new_feed.peer_id)
+                    {
+                        if let Some(previous_index) = new_remote_feeds
+                            .iter()
+                            .position(|feed| Some(feed.public_key) == new_feed.replaced_public_key)
                         {
-                            if let Some(previous_index) = new_remote_feeds.iter().position(|feed| {
-                                Some(feed.public_key) == new_feed.replaced_public_key
-                            }) {
-                                new_remote_feeds
-                                    .splice(previous_index + 1..previous_index + 1, [new_feed]);
-                            } else {
-                                new_remote_feeds.push(new_feed);
-                            }
+                            new_remote_feeds
+                                .splice(previous_index + 1..previous_index + 1, [new_feed]);
                         } else {
-                            new_remote_feeds_map.insert(new_feed.peer_id, vec![new_feed]);
+                            new_remote_feeds.push(new_feed);
                         }
+                    } else {
+                        new_remote_feeds_map.insert(new_feed.peer_id, vec![new_feed]);
                     }
                 }
             }
@@ -678,10 +684,9 @@ impl DocumentFeedsState {
                             stored_feed.public_key == remote_active_feed.public_key
                         })
                 {
-                    // Verify if the remote feed info is bogus because we have
-                    if stored_feed_with_remote_pk.verified
-                        && stored_feed_with_remote_pk.replaced_public_key
-                            != remote_active_feed.replaced_public_key
+                    // Verify if the remote feed info isn't bogus
+                    if stored_feed_with_remote_pk.replaced_public_key
+                        != remote_active_feed.replaced_public_key
                     {
                         return Err(PeermergeError::SecurityIssue {
                                 context: format!(
@@ -703,14 +708,8 @@ impl DocumentFeedsState {
                         if remote_feed_stored_feeds_index < *stored_feeds_index {
                             for i in remote_feed_stored_feeds_index + 1..*stored_feeds_index {
                                 if let Some(stored_inactive_feed) = stored_feeds.get(i) {
-                                    if stored_inactive_feed.verified {
-                                        inactive_feeds_to_rebroadcast
-                                            .push(stored_inactive_feed.clone());
-                                    } else {
-                                        // Need to break on the first unverified or otherwise
-                                        // the info has gaps, which is useless for the remote
-                                        break;
-                                    }
+                                    inactive_feeds_to_rebroadcast
+                                        .push(stored_inactive_feed.clone());
                                 }
                             }
                             // Remove this peer from stored_active_feeds
@@ -755,7 +754,7 @@ impl DocumentFeedsState {
             }
         }
 
-        // Any remaining entries in stored_active_feeds are feeds remote new
+        // Any remaining entries in stored_active_feeds are feeds remote knew
         // nothing about. Send out in the re-broadcast all of the replaced
         // keys.
         for (_, stored_active_feed) in stored_active_peer_feeds {
@@ -767,11 +766,7 @@ impl DocumentFeedsState {
                     .unwrap();
                 for i in 0..stored_active_feed_index {
                     let stored_inactive_feed = &stored_feeds[i];
-                    if stored_inactive_feed.verified {
-                        inactive_feeds_to_rebroadcast.push(stored_inactive_feed.clone());
-                    } else {
-                        panic!("Unverified feed before active feed");
-                    }
+                    inactive_feeds_to_rebroadcast.push(stored_inactive_feed.clone());
                 }
             }
         }
