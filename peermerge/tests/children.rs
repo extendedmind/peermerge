@@ -43,7 +43,6 @@ async fn children_three_main_documents_two_shared() -> anyhow::Result<()> {
             .build()?,
     )
     .await?;
-    println!("### CREATOR 1: {}", peermerge_creator_1.peer_id()[0]);
     let mut peermerge_joiner_1 = Peermerge::new_memory(
         PeermergeMemoryOptionsBuilder::default()
             .default_peer_header(NameDescription::new("joiner_1"))
@@ -51,7 +50,6 @@ async fn children_three_main_documents_two_shared() -> anyhow::Result<()> {
             .build()?,
     )
     .await?;
-    println!("### JOINER 1: {}", peermerge_joiner_1.peer_id()[0]);
     let creator_1_state_event_receiver =
         create_state_events_channel(&mut peermerge_creator_1).await?;
     let joiner_1_state_event_receiver =
@@ -63,7 +61,6 @@ async fn children_three_main_documents_two_shared() -> anyhow::Result<()> {
         &mut peermerge_joiner_1,
     )
     .await?;
-    println!("### DOCUMENT 1: {}", document_1_id[0]);
 
     // Document 2: disk peers
 
@@ -80,7 +77,6 @@ async fn children_three_main_documents_two_shared() -> anyhow::Result<()> {
             .build()?,
     )
     .await?;
-    println!("### CREATOR 2: {}", peermerge_creator_2.peer_id()[0]);
     let joiner_2_dir = Builder::new()
         .prefix("scale_three_main_documents_two_shared_joiner_2")
         .tempdir()
@@ -95,7 +91,6 @@ async fn children_three_main_documents_two_shared() -> anyhow::Result<()> {
             .build()?,
     )
     .await?;
-    println!("### JOINER 2: {}", peermerge_joiner_2.peer_id()[0]);
     let creator_2_state_event_receiver =
         create_state_events_channel(&mut peermerge_creator_2).await?;
     let joiner_2_state_event_receiver =
@@ -107,7 +102,6 @@ async fn children_three_main_documents_two_shared() -> anyhow::Result<()> {
         &mut peermerge_joiner_2,
     )
     .await?;
-    println!("### DOCUMENT 2: {}", document_2_id[0]);
 
     // Document 3: memory peers
     // NB: The creator has small max entry size, big meta and user doc values, to test
@@ -124,7 +118,6 @@ async fn children_three_main_documents_two_shared() -> anyhow::Result<()> {
     )
     .await?;
 
-    println!("### CREATOR 3: {}", peermerge_creator_3.peer_id()[0]);
     let mut peermerge_joiner_3 = Peermerge::new_memory(
         PeermergeMemoryOptionsBuilder::default()
             .default_peer_header(NameDescription::new("joiner_3"))
@@ -132,7 +125,6 @@ async fn children_three_main_documents_two_shared() -> anyhow::Result<()> {
             .build()?,
     )
     .await?;
-    println!("### JOINER 3: {}", peermerge_joiner_3.peer_id()[0]);
     let creator_3_state_event_receiver =
         create_state_events_channel(&mut peermerge_creator_3).await?;
     let joiner_3_state_event_receiver =
@@ -144,7 +136,6 @@ async fn children_three_main_documents_two_shared() -> anyhow::Result<()> {
         &mut peermerge_joiner_3,
     )
     .await?;
-    println!("### DOCUMENT 3: {}", document_3_id[0]);
 
     // Create an assortment of changes, big and small, to verify that changes split into many pieces
     // are recreated later in the joiner.
@@ -177,7 +168,6 @@ async fn children_three_main_documents_two_shared() -> anyhow::Result<()> {
             .build()?,
     )
     .await?;
-    println!("### PROXY: {}", peermerge_proxy.peer_id()[0]);
     let proxy_state_event_receiver = create_state_events_channel(&mut peermerge_proxy).await?;
 
     // Shared document A: between all of the parties
@@ -194,7 +184,6 @@ async fn children_three_main_documents_two_shared() -> anyhow::Result<()> {
         )
         .await?;
     let shared_doc_id_a = shared_doc_info_a.id();
-    println!("### SHARED DOCUMENT A: {}", shared_doc_id_a[0]);
     assert!(shared_doc_info_a.static_info.child);
     let document_secret_a = peermerge_joiner_2
         .document_secret(&shared_doc_id_a)
@@ -309,7 +298,6 @@ async fn children_three_main_documents_two_shared() -> anyhow::Result<()> {
         )
         .await?;
     let shared_doc_id_b = shared_doc_info_b.id();
-    println!("### SHARED DOCUMENT B: {}", shared_doc_id_b[0]);
     assert!(shared_doc_info_b.static_info.child);
     let document_secret_b = peermerge_creator_3
         .document_secret(&shared_doc_id_b)
@@ -798,7 +786,6 @@ async fn process_two_documents_state_events(
     let mut all_peers_synced: bool = false;
     let mut peer_change_count: usize = 0;
     let mut increments_received: bool = false;
-    let peer_id = peermerge.peer_id();
     while let Some(event) = state_event_receiver.next().await {
         match event.content {
             DocumentInitialized { .. } => {
@@ -827,10 +814,6 @@ async fn process_two_documents_state_events(
                             all_peers_synced = true;
                             // For phase two, start incrementing the parent document
                             // to cause one write feed replace.
-                            println!(
-                                "---- {} DOC 2 start append of {DISK_MAX_WRITE_FEED_LENGTH}",
-                                peer_id[0]
-                            );
                             for _ in 0..DISK_MAX_WRITE_FEED_LENGTH {
                                 peermerge
                                     .transact_mut(
@@ -840,12 +823,6 @@ async fn process_two_documents_state_events(
                                     )
                                     .await?;
                             }
-                            println!(
-                                "---- {} DOC 2 all {DISK_MAX_WRITE_FEED_LENGTH} appended",
-                                peer_id[0]
-                            );
-                        } else {
-                            // println!("---- {} DOC 2 VALUE {}", peer_id[0], value);
                         }
                     }
                 } else if event.document_id == parent_document_id && !increments_received {
@@ -879,13 +856,11 @@ async fn process_two_documents_state_events(
             }
             _ => {}
         }
-        // println!("--- {} DOC 2 increments_received={increments_received}, peer_change_count={peer_change_count}", peer_id[0]);
         if increments_received && peer_change_count == 2 {
             // READY
             break;
         }
     }
-    println!("--- {} DOC 2 EXIT", peer_id[0]);
     Ok(())
 }
 
@@ -948,11 +923,6 @@ async fn process_three_documents_state_events(
                         all_peers_synced = true;
                         // For phase two, start incrementing the two shared doc enough to cause
                         // two write feed replacements.
-                        println!(
-                            "---- {} DOC 3 start append of {}",
-                            peer_id[0],
-                            MEMORY_MAX_WRITE_FEED_LENGTH * 2
-                        );
                         for _ in 0..MEMORY_MAX_WRITE_FEED_LENGTH * 2 {
                             peermerge
                                 .transact_mut(
@@ -962,13 +932,6 @@ async fn process_three_documents_state_events(
                                 )
                                 .await?;
                         }
-                        println!(
-                            "---- {} DOC 3 all {} appended",
-                            peer_id[0],
-                            MEMORY_MAX_WRITE_FEED_LENGTH * 2
-                        );
-                    } else {
-                        // println!("---- {} DOC 3 VALUE {}", peer_id[0], value);
                     }
                 } else if event.document_id == two_shared_doc_id && !increments_received {
                     if change_id == Some(two_shared_doc_initial_change_id.clone()) {
@@ -1009,13 +972,11 @@ async fn process_three_documents_state_events(
             _ => {}
         }
 
-        // println!("--- {} DOC 3 increments_received={increments_received}, peer_change_count={peer_change_count}", peer_id[0]);
         if increments_received && peer_change_count == 4 * 2 {
             // READY
             break;
         }
     }
 
-    println!("--- {} DOC 3 EXIT", peer_id[0]);
     Ok(())
 }
