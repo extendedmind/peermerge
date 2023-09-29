@@ -36,6 +36,7 @@ pub async fn setup_peermerge_mesh_memory(
             PeermergeMemoryOptionsBuilder::default()
                 .default_peer_header(NameDescription::new(creator_name))
                 .state_event_sender(state_event_sender.clone())
+                .max_write_feed_length(100000)
                 .build()
                 .unwrap(),
         )
@@ -83,6 +84,7 @@ pub async fn setup_peermerge_mesh_memory(
             PeermergeMemoryOptionsBuilder::default()
                 .default_peer_header(NameDescription::new(&peer_name))
                 .state_event_sender(state_event_sender.clone())
+                .max_write_feed_length(100000)
                 .build()
                 .unwrap(),
         )
@@ -151,6 +153,7 @@ pub async fn setup_peermerge_mesh_disk(
             PeermergeDiskOptionsBuilder::default()
                 .default_peer_header(NameDescription::new(creator_name))
                 .state_event_sender(state_event_sender.clone())
+                .max_write_feed_length(100000)
                 .data_root_dir(creator_dir.clone())
                 .build()
                 .unwrap(),
@@ -208,6 +211,7 @@ pub async fn setup_peermerge_mesh_disk(
             PeermergeDiskOptionsBuilder::default()
                 .default_peer_header(NameDescription::new(&peer_name))
                 .state_event_sender(state_event_sender.clone())
+                .max_write_feed_length(100000)
                 .data_root_dir(peer_dir.clone())
                 .build()
                 .unwrap(),
