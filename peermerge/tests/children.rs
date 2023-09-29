@@ -26,6 +26,9 @@ use tokio::{task, test as async_test};
 pub mod common;
 use common::*;
 
+const MEMORY_MAX_WRITE_FEED_LENGTH: u64 = 16;
+const DISK_MAX_WRITE_FEED_LENGTH: u64 = 8;
+
 /// Test three main documents, each with two peers, and two shared documents,
 /// one between all of them, an one between the first and second. All mediated
 /// by a proxy.
@@ -36,6 +39,7 @@ async fn children_three_main_documents_two_shared() -> anyhow::Result<()> {
     let mut peermerge_creator_1 = Peermerge::new_memory(
         PeermergeMemoryOptionsBuilder::default()
             .default_peer_header(NameDescription::new("creator_1"))
+            .max_write_feed_length(MEMORY_MAX_WRITE_FEED_LENGTH)
             .build()?,
     )
     .await?;
@@ -43,6 +47,7 @@ async fn children_three_main_documents_two_shared() -> anyhow::Result<()> {
     let mut peermerge_joiner_1 = Peermerge::new_memory(
         PeermergeMemoryOptionsBuilder::default()
             .default_peer_header(NameDescription::new("joiner_1"))
+            .max_write_feed_length(MEMORY_MAX_WRITE_FEED_LENGTH)
             .build()?,
     )
     .await?;
@@ -71,6 +76,7 @@ async fn children_three_main_documents_two_shared() -> anyhow::Result<()> {
         PeermergeDiskOptionsBuilder::default()
             .default_peer_header(NameDescription::new("creator_2"))
             .data_root_dir(creator_2_dir.clone())
+            .max_write_feed_length(DISK_MAX_WRITE_FEED_LENGTH)
             .build()?,
     )
     .await?;
@@ -85,6 +91,7 @@ async fn children_three_main_documents_two_shared() -> anyhow::Result<()> {
         PeermergeDiskOptionsBuilder::default()
             .default_peer_header(NameDescription::new("joiner_2"))
             .data_root_dir(joiner_2_dir.clone())
+            .max_write_feed_length(DISK_MAX_WRITE_FEED_LENGTH)
             .build()?,
     )
     .await?;
@@ -112,6 +119,7 @@ async fn children_three_main_documents_two_shared() -> anyhow::Result<()> {
                 &generate_string(1, 1500),
             ))
             .max_entry_data_size_bytes(1024)
+            .max_write_feed_length(MEMORY_MAX_WRITE_FEED_LENGTH)
             .build()?,
     )
     .await?;
@@ -120,6 +128,7 @@ async fn children_three_main_documents_two_shared() -> anyhow::Result<()> {
     let mut peermerge_joiner_3 = Peermerge::new_memory(
         PeermergeMemoryOptionsBuilder::default()
             .default_peer_header(NameDescription::new("joiner_3"))
+            .max_write_feed_length(MEMORY_MAX_WRITE_FEED_LENGTH)
             .build()?,
     )
     .await?;
@@ -425,7 +434,10 @@ async fn create_main_document_disk(
                 .document_type("scale".to_string())
                 .document_header(NameDescription::new(document_name))
                 .build()?,
-            |tx| tx.put(ROOT, "main", document_main_value),
+            |tx| {
+                tx.put(ROOT, "counter", ScalarValue::Counter(0.into()))?;
+                tx.put(ROOT, "main", document_main_value)
+            },
             None,
         )
         .await?;
@@ -780,18 +792,15 @@ async fn process_two_documents_state_events(
     mut peermerge: Peermerge<RandomAccessDisk, FeedDiskPersistence>,
     mut state_event_receiver: UnboundedReceiver<StateEvent>,
     three_shared_doc_id: DocumentId,
-    _parent_document_id: DocumentId,
+    parent_document_id: DocumentId,
 ) -> anyhow::Result<()> {
     let mut first_change = true;
+    let mut all_peers_synced: bool = false;
+    let mut peer_change_count: usize = 0;
+    let mut increments_received: bool = false;
     let peer_id = peermerge.peer_id();
     while let Some(event) = state_event_receiver.next().await {
         match event.content {
-            PeerSynced { .. } => {
-                // TODO
-            }
-            RemotePeerSynced { .. } => {
-                // TODO
-            }
             DocumentInitialized { .. } => {
                 panic!("Unexpected DocumentInitialized for two docs")
             }
@@ -814,17 +823,66 @@ async fn process_two_documents_state_events(
                                 Ok(value.into_scalar().unwrap().to_u64().unwrap())
                             })
                             .await?;
-                        if value == 6 {
-                            break;
+                        if value == 6 && !all_peers_synced {
+                            all_peers_synced = true;
+                            // For phase two, start incrementing the parent document
+                            // to cause one write feed replace.
+                            println!(
+                                "---- {} DOC 2 start append of {DISK_MAX_WRITE_FEED_LENGTH}",
+                                peer_id[0]
+                            );
+                            for _ in 0..DISK_MAX_WRITE_FEED_LENGTH {
+                                peermerge
+                                    .transact_mut(
+                                        &parent_document_id,
+                                        |doc| doc.increment(ROOT, "counter", 1),
+                                        None,
+                                    )
+                                    .await?;
+                            }
+                            println!(
+                                "---- {} DOC 2 all {DISK_MAX_WRITE_FEED_LENGTH} appended",
+                                peer_id[0]
+                            );
                         } else {
-                            println!("---- {} DOC 2 VALUE {}", peer_id[0], value);
+                            // println!("---- {} DOC 2 VALUE {}", peer_id[0], value);
                         }
+                    }
+                } else if event.document_id == parent_document_id && !increments_received {
+                    let value = peermerge
+                        .transact(&parent_document_id, |doc| {
+                            let (value, _) = get(doc, ROOT, "counter")?.unwrap();
+                            Ok(value.into_scalar().unwrap().to_u64().unwrap())
+                        })
+                        .await?;
+                    // Two memory peers, all increment once over the line
+                    if value == DISK_MAX_WRITE_FEED_LENGTH * 2 {
+                        // Ready with increments
+                        increments_received = true;
                     }
                 } else {
                     panic!("Wrong document changed {}", event.document_id[0]);
                 }
             }
+            PeerChanged {
+                replaced_discovery_key,
+                ..
+            } => {
+                if event.document_id == parent_document_id {
+                    if all_peers_synced {
+                        assert!(replaced_discovery_key.is_some());
+                    } else {
+                        assert!(replaced_discovery_key.is_none());
+                    }
+                    peer_change_count += 1;
+                }
+            }
             _ => {}
+        }
+        // println!("--- {} DOC 2 increments_received={increments_received}, peer_change_count={peer_change_count}", peer_id[0]);
+        if increments_received && peer_change_count == 2 {
+            // READY
+            break;
         }
     }
     println!("--- {} DOC 2 EXIT", peer_id[0]);
@@ -841,15 +899,12 @@ async fn process_three_documents_state_events(
 ) -> anyhow::Result<()> {
     let mut two_shared_initialized: bool = false;
     let mut three_shared_initialized: bool = false;
+    let mut all_peers_synced: bool = false;
+    let mut peer_change_count: usize = 0;
+    let mut increments_received: bool = false;
     let peer_id = peermerge.peer_id();
     while let Some(event) = state_event_receiver.next().await {
         match event.content {
-            PeerSynced { .. } => {
-                // TODO
-            }
-            RemotePeerSynced { .. } => {
-                // TODO
-            }
             DocumentInitialized {
                 child,
                 parent_document_ids,
@@ -889,23 +944,75 @@ async fn process_three_documents_state_events(
                             Ok(value.into_scalar().unwrap().to_u64().unwrap())
                         })
                         .await?;
-                    if value == 6 {
-                        break;
+                    if value == 6 && !all_peers_synced {
+                        all_peers_synced = true;
+                        // For phase two, start incrementing the two shared doc enough to cause
+                        // two write feed replacements.
+                        println!(
+                            "---- {} DOC 3 start append of {}",
+                            peer_id[0],
+                            MEMORY_MAX_WRITE_FEED_LENGTH * 2
+                        );
+                        for _ in 0..MEMORY_MAX_WRITE_FEED_LENGTH * 2 {
+                            peermerge
+                                .transact_mut(
+                                    &two_shared_doc_id,
+                                    |doc| doc.increment(ROOT, "shared_counter", 1),
+                                    None,
+                                )
+                                .await?;
+                        }
+                        println!(
+                            "---- {} DOC 3 all {} appended",
+                            peer_id[0],
+                            MEMORY_MAX_WRITE_FEED_LENGTH * 2
+                        );
                     } else {
-                        println!("---- {} DOC 3 VALUE {}", peer_id[0], value);
+                        // println!("---- {} DOC 3 VALUE {}", peer_id[0], value);
                     }
-                } else if event.document_id == two_shared_doc_id {
+                } else if event.document_id == two_shared_doc_id && !increments_received {
                     if change_id == Some(two_shared_doc_initial_change_id.clone()) {
-                        // TODO: Start incrementing shared doc B as well
+                        assert!(!all_peers_synced);
+                    } else if all_peers_synced && !increments_received {
+                        let value = peermerge
+                            .transact(&two_shared_doc_id, |doc| {
+                                let (value, _) = get(doc, ROOT, "shared_counter")?.unwrap();
+                                Ok(value.into_scalar().unwrap().to_u64().unwrap())
+                            })
+                            .await?;
+                        // Four memory peers, all increment twice over the line
+                        if value == MEMORY_MAX_WRITE_FEED_LENGTH * 2 * 4 {
+                            // Ready with increments
+                            increments_received = true;
+                        }
                     } else {
                         panic!(
-                            "{} Wrong document changed {}",
+                            "{} Wrong shared document changed {}",
                             peer_id[0], event.document_id[0]
                         );
                     }
+                } else {
+                    panic!("Wrong document changed {}", event.document_id[0]);
+                }
+            }
+            PeerChanged {
+                replaced_discovery_key,
+                ..
+            } => {
+                if event.document_id == two_shared_doc_id {
+                    if all_peers_synced {
+                        assert!(replaced_discovery_key.is_some());
+                    }
+                    peer_change_count += 1;
                 }
             }
             _ => {}
+        }
+
+        // println!("--- {} DOC 3 increments_received={increments_received}, peer_change_count={peer_change_count}", peer_id[0]);
+        if increments_received && peer_change_count == 4 * 2 {
+            // READY
+            break;
         }
     }
 
