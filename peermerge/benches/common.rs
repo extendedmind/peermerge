@@ -70,7 +70,7 @@ pub async fn setup_peermerge_mesh_memory(
         .sharing_info(&doc_info.id())
         .await
         .unwrap()
-        .read_write_doc_url;
+        .read_write_document_url;
 
     for i in 1..peers {
         let (proto_responder, proto_initiator) = create_pair_memory().await;
@@ -188,7 +188,7 @@ pub async fn setup_peermerge_mesh_disk(
         .sharing_info(&doc_info.id())
         .await
         .unwrap()
-        .read_write_doc_url;
+        .read_write_document_url;
 
     for i in 1..peers {
         let (proto_responder, proto_initiator) = create_pair_memory().await;

@@ -365,7 +365,7 @@ where
                     .sharing_info()
                     .await
                     .unwrap()
-                    .read_write_doc_url;
+                    .read_write_document_url;
                 parent_document
                     .add_created_child_document(child_document_info, document_url, document_secret)
                     .await?;

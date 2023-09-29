@@ -498,17 +498,17 @@ where
     pub(crate) async fn sharing_info(&self) -> Result<DocumentSharingInfo, PeermergeError> {
         if let Some(doc_signature_signing_key) = &self.doc_signature_key_pair.secret {
             let mut document_state = self.document_state.lock().await;
-            let read_write_doc_url = document_state
+            let read_write_document_url = document_state
                 .state_mut()
                 .doc_url(doc_signature_signing_key, &self.encryption_key);
 
             Ok(DocumentSharingInfo {
                 proxy: false,
-                proxy_doc_url: proxy_doc_url_from_read_write_doc_url(
-                    &read_write_doc_url,
+                proxy_document_url: proxy_doc_url_from_read_write_doc_url(
+                    &read_write_document_url,
                     doc_signature_signing_key,
                 ),
-                read_write_doc_url,
+                read_write_document_url,
             })
         } else {
             Err(PeermergeError::NotWritable)

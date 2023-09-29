@@ -74,7 +74,7 @@ async fn disk_two_peers(encrypted: bool, max_write_feed_length: u64) -> anyhow::
     let doc_url = peermerge_creator
         .sharing_info(&creator_doc_info.id())
         .await?
-        .read_write_doc_url;
+        .read_write_document_url;
     let document_secret = peermerge_creator
         .document_secret(&creator_doc_info.id())
         .await?
