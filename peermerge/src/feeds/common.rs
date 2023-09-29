@@ -28,6 +28,31 @@ where
     }
 }
 
+pub(crate) async fn insert_feed<T>(
+    feeds: &Arc<DashMap<[u8; 32], Arc<Mutex<Feed<T>>>>>,
+    feed: Feed<T>,
+    discovery_key: &FeedDiscoveryKey,
+) -> bool
+where
+    T: FeedPersistence,
+{
+    loop {
+        if let Some(entry) = feeds.try_entry(*discovery_key) {
+            match entry {
+                dashmap::mapref::entry::Entry::Occupied(_) => {
+                    break false;
+                }
+                dashmap::mapref::entry::Entry::Vacant(vacant) => {
+                    vacant.insert(Arc::new(Mutex::new(feed)));
+                    break true;
+                }
+            }
+        } else {
+            YieldNow(false).await;
+        }
+    }
+}
+
 pub(crate) async fn remove_feed<T>(
     feeds: &Arc<DashMap<[u8; 32], Arc<Mutex<Feed<T>>>>>,
     discovery_key: &FeedDiscoveryKey,
@@ -38,7 +63,9 @@ where
     loop {
         if let Some(entry) = feeds.try_entry(*discovery_key) {
             match entry {
-                dashmap::mapref::entry::Entry::Occupied(value) => break Some(value.remove()),
+                dashmap::mapref::entry::Entry::Occupied(value) => {
+                    break Some(value.remove());
+                }
                 dashmap::mapref::entry::Entry::Vacant(_) => {
                     break None;
                 }

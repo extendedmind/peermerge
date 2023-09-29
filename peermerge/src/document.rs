@@ -36,12 +36,12 @@ use crate::crdt::{
     transact_mut_autocommit, ApplyEntriesFeedChange, AutomergeDoc, DocsChangeResult,
     UnappliedEntries,
 };
-use crate::feeds::remove_feed;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::feeds::{
     create_new_read_disk_feed, create_new_write_disk_feed, get_path_from_discovery_key,
     open_disk_feed,
 };
+use crate::feeds::{insert_feed, remove_feed};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::FeedDiskPersistence;
 use crate::{
@@ -177,13 +177,13 @@ where
     }
 
     pub(crate) async fn active_feeds(&self) -> Vec<Arc<Mutex<Feed<U>>>> {
-        let mut leaf_feeds = vec![];
+        let mut active_feeds = vec![];
         for feed_discovery_key in get_feed_discovery_keys(&self.feeds).await {
             if feed_discovery_key != self.doc_discovery_key {
-                leaf_feeds.push(get_feed(&self.feeds, &feed_discovery_key).await.unwrap());
+                active_feeds.push(get_feed(&self.feeds, &feed_discovery_key).await.unwrap());
             }
         }
-        leaf_feeds
+        active_feeds
     }
 
     pub(crate) async fn active_feed(
@@ -382,6 +382,7 @@ where
         }
         let (result, state_events) = {
             let mut document_state = self.document_state.lock().await;
+
             let (entries, result, mut state_events) =
                 if let Some(doc) = document_state.user_automerge_doc_mut() {
                     let (entries, result) = transact_mut_autocommit(
@@ -1152,7 +1153,8 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
     pub(crate) async fn process_new_feeds_broadcasted_memory(
         &mut self,
         new_remote_feeds: Vec<DocumentFeedInfo>,
-    ) -> bool {
+    ) -> Vec<StateEvent> {
+        let mut state_events = vec![];
         let result = {
             let mut document_state = self.document_state.lock().await;
             document_state
@@ -1163,8 +1165,10 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
         if result.changed {
             {
                 // Create and insert all new feeds
-                self.create_and_insert_read_memory_feeds(result.feeds_to_create.clone())
-                    .await;
+                state_events.extend(
+                    self.create_and_insert_read_memory_feeds(result.feeds_to_create.clone())
+                        .await,
+                );
             }
             {
                 // Delete replaced feeds
@@ -1181,65 +1185,83 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
                     .await;
             }
         }
-        result.changed
+        state_events
     }
 
     pub(crate) async fn replace_write_feed_memory(
         &mut self,
         write_discovery_key: &FeedDiscoveryKey,
     ) -> Result<Vec<StateEvent>, PeermergeError> {
-        let (new_write_discovery_key, replaced_discovery_key, feeds_state_change_result) = loop {
-            if let Some(entry) = self.feeds.try_entry(*write_discovery_key) {
-                match entry {
-                    dashmap::mapref::entry::Entry::Occupied(value) => {
-                        let mut document_state_wrapper = self.document_state.lock().await;
-                        let document_state = document_state_wrapper.state_mut();
+        let (new_write_discovery_key, replaced_discovery_key, feeds_state_change_result) = {
+            // Always first lock the document state, and only then the feed. This is the same
+            // order as elsewhere and should guarantee no deadlocks.
+            let mut document_state_wrapper = self.document_state.lock().await;
+            let document_state = document_state_wrapper.state_mut();
 
-                        // Locks now acquired, can begin replacing.
-                        let (write_key_pair, new_write_discovery_key) = generate_keys();
-                        let write_verifying_key = write_key_pair.verifying_key();
-                        let write_public_key = write_verifying_key.to_bytes();
-                        let (mut new_write_feed, _) = create_new_write_memory_feed(
-                            write_key_pair,
-                            self.encrypted,
-                            &self.encryption_key,
-                            false,
-                        )
-                        .await;
-
-                        // Initialize write feed to state
-                        let (replaced_discovery_key, feeds_state_change_result) =
-                            init_new_write_feed_to_state(
-                                document_state,
-                                &mut new_write_feed,
-                                write_public_key,
-                                new_write_discovery_key,
-                                &self.doc_signature_signing_key().unwrap(),
-                                self.settings.max_entry_data_size_bytes,
+            let (
+                new_write_feed,
+                new_write_discovery_key,
+                replaced_discovery_key,
+                feeds_state_change_result,
+            ) = loop {
+                if let Some(entry) = self.feeds.try_entry(*write_discovery_key) {
+                    match entry {
+                        dashmap::mapref::entry::Entry::Occupied(value) => {
+                            // Locks now acquired, can begin replacing.
+                            let (write_key_pair, new_write_discovery_key) = generate_keys();
+                            let write_verifying_key = write_key_pair.verifying_key();
+                            let write_public_key = write_verifying_key.to_bytes();
+                            let (mut new_write_feed, _) = create_new_write_memory_feed(
+                                write_key_pair,
+                                self.encrypted,
+                                &self.encryption_key,
+                                false,
                             )
-                            .await?;
+                            .await;
 
-                        // Finally, insert the new feed, and remove the old
-                        self.feeds.insert(
-                            new_write_discovery_key,
-                            Arc::new(Mutex::new(new_write_feed)),
-                        );
-                        value.remove();
-                        break (
-                            new_write_discovery_key,
-                            replaced_discovery_key,
-                            feeds_state_change_result,
-                        );
+                            // Initialize write feed to state
+                            let (replaced_discovery_key, feeds_state_change_result) =
+                                init_new_write_feed_to_state(
+                                    document_state,
+                                    &mut new_write_feed,
+                                    write_public_key,
+                                    new_write_discovery_key,
+                                    &self.doc_signature_signing_key().unwrap(),
+                                    self.settings.max_entry_data_size_bytes,
+                                )
+                                .await?;
+
+                            // Finally, remove the old value and return the new to be inserted
+                            // NB: inserting is not possible here because of try_entry withing
+                            value.remove();
+
+                            break (
+                                new_write_feed,
+                                new_write_discovery_key,
+                                replaced_discovery_key,
+                                feeds_state_change_result,
+                            );
+                        }
+                        dashmap::mapref::entry::Entry::Vacant(_) => {
+                            // The entry has been replaced by another thread, just exit.
+                            return Ok(vec![]);
+                        }
                     }
-                    dashmap::mapref::entry::Entry::Vacant(_) => {
-                        // The entry has been replaced by another thread, just exit.
-                        return Ok(vec![]);
-                    }
+                } else {
+                    debug!(
+                        "Concurrent access to feeds noticed during replace, yielding and retrying."
+                    );
+                    YieldNow(false).await;
                 }
-            } else {
-                debug!("Concurrent access to feeds noticed during replace, yielding and retrying.");
-                YieldNow(false).await;
-            }
+            };
+            // Inserting this here should be ok, because the new write_discovery_key is fetched
+            // from document_state which is locked above.
+            assert!(insert_feed(&self.feeds, new_write_feed, &new_write_discovery_key).await);
+            (
+                new_write_discovery_key,
+                replaced_discovery_key,
+                feeds_state_change_result,
+            )
         };
 
         // Notify result to document feeds so that their DocumentFeedsState can be updated
@@ -1302,7 +1324,11 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
         }
     }
 
-    async fn create_and_insert_read_memory_feeds(&mut self, feed_infos: Vec<DocumentFeedInfo>) {
+    async fn create_and_insert_read_memory_feeds(
+        &mut self,
+        feed_infos: Vec<DocumentFeedInfo>,
+    ) -> Vec<StateEvent> {
+        let mut state_events = vec![];
         for feed_info in feed_infos {
             let discovery_key = discovery_key_from_public_key(&feed_info.public_key);
             // Make sure to insert only once even if two protocols notice the same new
@@ -1329,6 +1355,19 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
                             )
                             .await;
                             vacant.insert(Arc::new(Mutex::new(feed)));
+                            // Create a state event from this new feed
+                            state_events.push(StateEvent::new(
+                                self.id(),
+                                StateEventContent::PeerChanged {
+                                    peer_id: feed_info.peer_id,
+                                    discovery_key: discovery_key_from_public_key(
+                                        &feed_info.public_key,
+                                    ),
+                                    replaced_discovery_key: feed_info
+                                        .replaced_public_key
+                                        .map(|key| discovery_key_from_public_key(&key)),
+                                },
+                            ));
                         }
                     }
                     entry_found = true;
@@ -1338,6 +1377,7 @@ impl Document<RandomAccessMemory, FeedMemoryPersistence> {
                 }
             }
         }
+        state_events
     }
 }
 
@@ -1819,14 +1859,12 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
                 }
             }
 
-            let feeds = if write_feed.info().await.length >= settings.max_write_feed_length {
+            if write_feed.info().await.length >= settings.max_write_feed_length {
                 // The write feed has gone above the limit. This is happens when there is
                 // no protocol attached that automatically causes the feed to switch.
-                let feeds = Arc::new(feeds);
-                let (new_write_discovery_key, _, replaced_discovery_key) =
+                let (new_write_feed, new_write_discovery_key, _, replaced_discovery_key) =
                     create_replacement_write_feed_disk(
                         document_state_wrapper.state_mut(),
-                        &feeds,
                         data_root_dir,
                         doc_signature_signing_key.as_ref().unwrap(),
                         encrypted,
@@ -1834,6 +1872,10 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
                         settings.max_entry_data_size_bytes,
                     )
                     .await?;
+                feeds.insert(
+                    new_write_discovery_key,
+                    Arc::new(Mutex::new(new_write_feed)),
+                );
 
                 // Destroy the old feed after replacement feed has been created,
                 // and set the feed as removed to the state.
@@ -1851,11 +1893,11 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
                         replaced_discovery_key: Some(replaced_discovery_key),
                     },
                 ));
-                feeds
             } else {
                 feeds.insert(write_discovery_key, Arc::new(Mutex::new(write_feed)));
-                Arc::new(feeds)
             };
+
+            let feeds = Arc::new(feeds);
 
             // Fill unapplied changes and possibly save state if it had been left
             // unsaved
@@ -1933,7 +1975,8 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
     pub(crate) async fn process_new_feeds_broadcasted_disk(
         &mut self,
         new_remote_feeds: Vec<DocumentFeedInfo>,
-    ) -> Result<bool, PeermergeError> {
+    ) -> Result<Vec<StateEvent>, PeermergeError> {
+        let mut state_events = vec![];
         let result = {
             let mut document_state = self.document_state.lock().await;
             document_state
@@ -1944,8 +1987,10 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
         if result.changed {
             {
                 // Create and insert all new feeds
-                self.create_and_insert_read_disk_feeds(result.feeds_to_create.clone())
-                    .await;
+                state_events.extend(
+                    self.create_and_insert_read_disk_feeds(result.feeds_to_create.clone())
+                        .await,
+                );
             }
             {
                 // Delete replaced feeds
@@ -1974,60 +2019,80 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
                     .await;
             }
         }
-        Ok(result.changed)
+        Ok(state_events)
     }
 
     pub(crate) async fn replace_write_feed_disk(
         &mut self,
         write_discovery_key: &FeedDiscoveryKey,
     ) -> Result<Vec<StateEvent>, PeermergeError> {
-        let (new_write_discovery_key, feeds_state_change_result, replaced_discovery_key) = loop {
-            if let Some(entry) = self.feeds.try_entry(*write_discovery_key) {
-                match entry {
-                    dashmap::mapref::entry::Entry::Occupied(value) => {
-                        let mut document_state_wrapper = self.document_state.lock().await;
-                        let document_state = document_state_wrapper.state_mut();
+        let (new_write_discovery_key, feeds_state_change_result, replaced_discovery_key) = {
+            // Always first lock the document state, and only then the feed. This is the same
+            // order as elsewhere and should guarantee no deadlocks.
+            let mut document_state_wrapper = self.document_state.lock().await;
+            let document_state = document_state_wrapper.state_mut();
 
-                        // Locks now acquired, can first create the replacement feed
-                        let (
-                            new_write_discovery_key,
-                            feeds_state_change_result,
-                            replaced_discovery_key,
-                        ) = create_replacement_write_feed_disk(
-                            document_state,
-                            &self.feeds,
-                            &self.prefix,
-                            &self.doc_signature_signing_key().unwrap(),
-                            self.encrypted,
-                            &self.encryption_key,
-                            self.settings.max_entry_data_size_bytes,
-                        )
-                        .await?;
+            let (
+                new_write_feed,
+                new_write_discovery_key,
+                feeds_state_change_result,
+                replaced_discovery_key,
+            ) = loop {
+                if let Some(entry) = self.feeds.try_entry(*write_discovery_key) {
+                    match entry {
+                        dashmap::mapref::entry::Entry::Occupied(value) => {
+                            // Locks now acquired, can first create the replacement feed
+                            let (
+                                new_write_feed,
+                                new_write_discovery_key,
+                                feeds_state_change_result,
+                                replaced_discovery_key,
+                            ) = create_replacement_write_feed_disk(
+                                document_state,
+                                &self.prefix,
+                                &self.doc_signature_signing_key().unwrap(),
+                                self.encrypted,
+                                &self.encryption_key,
+                                self.settings.max_entry_data_size_bytes,
+                            )
+                            .await?;
 
-                        // Then remove existing feed from map, destroy the feed and mark it
-                        // as removed.
-                        let old_write_feed = value.remove();
-                        let mut old_write_feed = old_write_feed.lock().await;
-                        old_write_feed.destroy_disk().await?;
-                        document_state_wrapper
-                            .set_removed_and_persist(&replaced_discovery_key)
-                            .await;
+                            // Then remove existing feed from map, destroy the feed and mark it
+                            // as removed.
+                            let old_write_feed = value.remove();
 
-                        break (
-                            new_write_discovery_key,
-                            feeds_state_change_result,
-                            replaced_discovery_key,
-                        );
+                            let mut old_write_feed = old_write_feed.lock().await;
+                            old_write_feed.destroy_disk().await?;
+                            document_state_wrapper
+                                .set_removed_and_persist(&replaced_discovery_key)
+                                .await;
+                            break (
+                                new_write_feed,
+                                new_write_discovery_key,
+                                feeds_state_change_result,
+                                replaced_discovery_key,
+                            );
+                        }
+                        dashmap::mapref::entry::Entry::Vacant(_) => {
+                            // The entry has been replaced by another thread, just exit.
+                            return Ok(vec![]);
+                        }
                     }
-                    dashmap::mapref::entry::Entry::Vacant(_) => {
-                        // The entry has been replaced by another thread, just exit.
-                        return Ok(vec![]);
-                    }
+                } else {
+                    debug!(
+                        "Concurrent access to feeds noticed during replace, yielding and retrying."
+                    );
+                    YieldNow(false).await;
                 }
-            } else {
-                debug!("Concurrent access to feeds noticed during replace, yielding and retrying.");
-                YieldNow(false).await;
-            }
+            };
+            // Inserting this here should be ok, because the new write_discovery_key is fetched
+            // from document_state which is locked above.
+            assert!(insert_feed(&self.feeds, new_write_feed, &new_write_discovery_key).await);
+            (
+                new_write_discovery_key,
+                feeds_state_change_result,
+                replaced_discovery_key,
+            )
         };
 
         // Notify result to document feeds so that their DocumentFeedsState can be updated
@@ -2087,7 +2152,11 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    async fn create_and_insert_read_disk_feeds(&mut self, feed_infos: Vec<DocumentFeedInfo>) {
+    async fn create_and_insert_read_disk_feeds(
+        &mut self,
+        feed_infos: Vec<DocumentFeedInfo>,
+    ) -> Vec<StateEvent> {
+        let mut state_events = vec![];
         for feed_info in feed_infos {
             let discovery_key = discovery_key_from_public_key(&feed_info.public_key);
             // Make sure to insert only once even if two protocols notice the same new
@@ -2116,6 +2185,20 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
                             )
                             .await;
                             vacant.insert(Arc::new(Mutex::new(feed)));
+
+                            // Create a state event from this new feed
+                            state_events.push(StateEvent::new(
+                                self.id(),
+                                StateEventContent::PeerChanged {
+                                    peer_id: feed_info.peer_id,
+                                    discovery_key: discovery_key_from_public_key(
+                                        &feed_info.public_key,
+                                    ),
+                                    replaced_discovery_key: feed_info
+                                        .replaced_public_key
+                                        .map(|key| discovery_key_from_public_key(&key)),
+                                },
+                            ));
                         }
                     }
                     entry_found = true;
@@ -2125,13 +2208,13 @@ impl Document<RandomAccessDisk, FeedDiskPersistence> {
                 }
             }
         }
+        state_events
     }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 async fn create_replacement_write_feed_disk(
     document_state: &mut DocumentState,
-    feeds: &Arc<DashMap<[u8; 32], Arc<Mutex<Feed<FeedDiskPersistence>>>>>,
     data_root_dir: &PathBuf,
     doc_signature_signing_key: &SigningKey,
     encrypted: bool,
@@ -2139,6 +2222,7 @@ async fn create_replacement_write_feed_disk(
     max_entry_data_size_bytes: usize,
 ) -> Result<
     (
+        Feed<FeedDiskPersistence>,
         FeedDiscoveryKey,
         ChangeDocumentFeedsStateResult,
         FeedDiscoveryKey,
@@ -2168,12 +2252,8 @@ async fn create_replacement_write_feed_disk(
     )
     .await?;
 
-    // Finally, insert the new feed
-    feeds.insert(
-        new_write_discovery_key,
-        Arc::new(Mutex::new(new_write_feed)),
-    );
     Ok((
+        new_write_feed,
         new_write_discovery_key,
         feeds_state_change_result,
         replaced_discovery_key,

@@ -392,9 +392,7 @@ async fn process_joiner_state_event(
                 assert!(change_id.is_none());
                 document_changes.push(patches);
             }
-            _ => {
-                panic!("Unkown event {event:?}");
-            }
+            PeerChanged { .. } => {}
         }
     }
     Ok(())
@@ -463,6 +461,12 @@ async fn process_creator_state_events(
             DocumentChanged { patches, .. } => {
                 assert_eq!(patches.len(), expected_changes);
                 document_changes.push(patches);
+            }
+            PeerChanged {
+                replaced_discovery_key,
+                ..
+            } => {
+                assert!(replaced_discovery_key.is_none());
             }
             _ => {
                 panic!("Unkown event {event:?}");

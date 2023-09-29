@@ -4,7 +4,7 @@ use std::fmt::Debug;
 mod common;
 mod hypercore;
 
-pub(crate) use common::{get_feed, get_feed_discovery_keys, remove_feed};
+pub(crate) use common::{get_feed, get_feed_discovery_keys, insert_feed, remove_feed};
 
 pub use ::hypercore_protocol::{Protocol, ProtocolBuilder};
 pub(crate) use hypercore::on_protocol;

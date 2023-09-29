@@ -1,5 +1,7 @@
 use std::collections::HashMap;
+use std::fmt::Debug;
 
+use automerge::ScalarValue;
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use futures::future::join_all;
 use futures::stream::StreamExt;
@@ -10,7 +12,9 @@ use peermerge::{
     PeerId, Peermerge, PeermergeDiskOptionsBuilder, PeermergeMemoryOptionsBuilder, StateEvent,
     StateEventContent::*,
 };
+use peermerge::{CreateNewDocumentDiskOptionsBuilder, FeedPersistence};
 use random_access_memory::RandomAccessMemory;
+use random_access_storage::RandomAccess;
 use tempfile::Builder;
 use test_log::test;
 use tracing::{info, instrument};
@@ -265,6 +269,326 @@ async fn proxy_disk_encrypted() -> anyhow::Result<()> {
     // Close the other side and wait for protocol handles to exit
     peermerge_joiner.close().await.unwrap();
     join_all(vec![joiner_connect, proxy_connect, proxy_process]).await;
+
+    Ok(())
+}
+
+#[test(async_test)]
+async fn proxy_memory_replace_feeds() -> anyhow::Result<()> {
+    let (mut proto_responder, mut proto_initiator) = create_pair_memory().await;
+    let (creator_state_event_sender, creator_state_event_receiver): (
+        UnboundedSender<StateEvent>,
+        UnboundedReceiver<StateEvent>,
+    ) = unbounded();
+    let (proxy_state_event_sender, proxy_state_event_receiver): (
+        UnboundedSender<StateEvent>,
+        UnboundedReceiver<StateEvent>,
+    ) = unbounded();
+    let mut peermerge_creator = Peermerge::new_memory(
+        PeermergeMemoryOptionsBuilder::default()
+            .default_peer_header(NameDescription::new("creator"))
+            .state_event_sender(creator_state_event_sender)
+            .max_write_feed_length(4)
+            .build()?,
+    )
+    .await?;
+    let (creator_doc_info, _) = peermerge_creator
+        .create_new_document_memory(
+            CreateNewDocumentMemoryOptionsBuilder::default()
+                .document_type("test".to_string())
+                .document_header(NameDescription::new("proxy_replace_test"))
+                .encrypted(true)
+                .build()?,
+            |tx| tx.put(ROOT, "counter", ScalarValue::Counter(0.into())),
+            None,
+        )
+        .await?;
+    let document_id = creator_doc_info.id();
+    let document_secret = peermerge_creator
+        .document_secret(&document_id)
+        .await?
+        .unwrap();
+    let sharing_info = peermerge_creator.sharing_info(&document_id).await?;
+    let mut peermerge_creator_for_task = peermerge_creator.clone();
+    task::spawn(async move {
+        peermerge_creator_for_task
+            .connect_protocol_memory(&mut proto_responder)
+            .await
+            .unwrap();
+    });
+
+    let mut peermerge_proxy = Peermerge::new_memory(
+        PeermergeMemoryOptionsBuilder::default()
+            .default_peer_header(NameDescription::new("proxy"))
+            .state_event_sender(proxy_state_event_sender)
+            .build()?,
+    )
+    .await?;
+    peermerge_proxy
+        .attach_document_memory(
+            AttachDocumentMemoryOptionsBuilder::default()
+                .document_url(sharing_info.proxy_doc_url)
+                .build()?,
+        )
+        .await?;
+
+    let mut peermerge_proxy_for_task = peermerge_proxy.clone();
+    task::spawn(async move {
+        peermerge_proxy_for_task
+            .connect_protocol_memory(&mut proto_initiator)
+            .await
+            .unwrap();
+    });
+
+    task::spawn(async move {
+        process_proxy_state_events_indefinitely(proxy_state_event_receiver)
+            .await
+            .unwrap();
+    });
+
+    let peermerge_creator_for_task = peermerge_creator.clone();
+    let expected_count: u64 = 512;
+    let creator_process = task::spawn(async move {
+        process_state_events_feed_replace(
+            peermerge_creator_for_task,
+            &document_id,
+            creator_state_event_receiver,
+            expected_count,
+        )
+        .await
+        .unwrap();
+    });
+
+    for _ in 0..expected_count {
+        peermerge_creator
+            .transact_mut(&document_id, |doc| doc.increment(ROOT, "counter", 1), None)
+            .await?;
+    }
+    join_all(vec![creator_process]).await;
+
+    // Test that a latecomer gets the same value out of the proxy
+    // that has many replaced feeds.
+
+    let (mut proto_responder, mut proto_initiator) = create_pair_memory().await;
+    let (latecomer_state_event_sender, latecomer_state_event_receiver): (
+        UnboundedSender<StateEvent>,
+        UnboundedReceiver<StateEvent>,
+    ) = unbounded();
+
+    let mut peermerge_latecomer = Peermerge::new_memory(
+        PeermergeMemoryOptionsBuilder::default()
+            .default_peer_header(NameDescription::new("latecomer"))
+            .state_event_sender(latecomer_state_event_sender)
+            .build()?,
+    )
+    .await?;
+    peermerge_latecomer
+        .attach_document_memory(
+            AttachDocumentMemoryOptionsBuilder::default()
+                .document_url(sharing_info.read_write_doc_url)
+                .document_secret(document_secret)
+                .build()?,
+        )
+        .await?;
+
+    task::spawn(async move {
+        peermerge_proxy
+            .connect_protocol_memory(&mut proto_responder)
+            .await
+            .unwrap();
+    });
+
+    let mut peermerge_latecomer_for_task = peermerge_latecomer.clone();
+    task::spawn(async move {
+        peermerge_latecomer_for_task
+            .connect_protocol_memory(&mut proto_initiator)
+            .await
+            .unwrap();
+    });
+
+    process_state_events_feed_replace(
+        peermerge_latecomer,
+        &document_id,
+        latecomer_state_event_receiver,
+        expected_count,
+    )
+    .await
+    .unwrap();
+
+    Ok(())
+}
+
+#[test(async_test)]
+async fn proxy_disk_replace_feeds() -> anyhow::Result<()> {
+    let (mut proto_responder, mut proto_initiator) = create_pair_memory().await;
+    let (creator_state_event_sender, creator_state_event_receiver): (
+        UnboundedSender<StateEvent>,
+        UnboundedReceiver<StateEvent>,
+    ) = unbounded();
+    let (proxy_state_event_sender, proxy_state_event_receiver): (
+        UnboundedSender<StateEvent>,
+        UnboundedReceiver<StateEvent>,
+    ) = unbounded();
+
+    let creator_dir = Builder::new()
+        .prefix("creator_dir_replace")
+        .tempdir()
+        .unwrap()
+        .into_path();
+
+    // let debug = "target/creator_dir_replace".to_string();
+    // std::fs::create_dir_all(&debug).unwrap();
+    // let creator_dir = std::path::Path::new(&debug).to_path_buf();
+
+    let mut peermerge_creator = Peermerge::new_disk(
+        PeermergeDiskOptionsBuilder::default()
+            .default_peer_header(NameDescription::new("creator"))
+            .state_event_sender(creator_state_event_sender)
+            .max_write_feed_length(4)
+            .data_root_dir(creator_dir)
+            .build()?,
+    )
+    .await?;
+    let (creator_doc_info, _) = peermerge_creator
+        .create_new_document_disk(
+            CreateNewDocumentDiskOptionsBuilder::default()
+                .document_type("test".to_string())
+                .document_header(NameDescription::new("proxy_test"))
+                .encrypted(true)
+                .build()?,
+            |tx| tx.put(ROOT, "counter", ScalarValue::Counter(0.into())),
+            None,
+        )
+        .await?;
+    let document_id = creator_doc_info.id();
+    let document_secret = peermerge_creator
+        .document_secret(&document_id)
+        .await?
+        .unwrap();
+    let sharing_info = peermerge_creator.sharing_info(&document_id).await?;
+    let mut peermerge_creator_for_task = peermerge_creator.clone();
+    task::spawn(async move {
+        peermerge_creator_for_task
+            .connect_protocol_disk(&mut proto_responder)
+            .await
+            .unwrap();
+    });
+
+    let proxy_dir = Builder::new()
+        .prefix("proxy_dir_replace")
+        .tempdir()
+        .unwrap()
+        .into_path();
+
+    // let debug = "target/proxy_dir_replace".to_string();
+    // std::fs::create_dir_all(&debug).unwrap();
+    // let proxy_dir = std::path::Path::new(&debug).to_path_buf();
+
+    let mut peermerge_proxy = Peermerge::new_disk(
+        PeermergeDiskOptionsBuilder::default()
+            .default_peer_header(NameDescription::new("proxy"))
+            .state_event_sender(proxy_state_event_sender)
+            .data_root_dir(proxy_dir)
+            .build()?,
+    )
+    .await?;
+    peermerge_proxy
+        .attach_document_disk(
+            AttachDocumentDiskOptionsBuilder::default()
+                .document_url(sharing_info.proxy_doc_url)
+                .build()?,
+        )
+        .await?;
+
+    let mut peermerge_proxy_for_task = peermerge_proxy.clone();
+    task::spawn(async move {
+        peermerge_proxy_for_task
+            .connect_protocol_disk(&mut proto_initiator)
+            .await
+            .unwrap();
+    });
+
+    task::spawn(async move {
+        process_proxy_state_events_indefinitely(proxy_state_event_receiver)
+            .await
+            .unwrap();
+    });
+
+    let peermerge_creator_for_task = peermerge_creator.clone();
+    let expected_count: u64 = 32;
+    let creator_process = task::spawn(async move {
+        process_state_events_feed_replace(
+            peermerge_creator_for_task,
+            &document_id,
+            creator_state_event_receiver,
+            expected_count,
+        )
+        .await
+        .unwrap();
+    });
+
+    for _ in 0..expected_count {
+        peermerge_creator
+            .transact_mut(&document_id, |doc| doc.increment(ROOT, "counter", 1), None)
+            .await?;
+    }
+    join_all(vec![creator_process]).await;
+
+    // Test that a latecomer gets the same value out of the proxy
+    // that has many replaced feeds.
+
+    let (mut proto_responder, mut proto_initiator) = create_pair_memory().await;
+    let (latecomer_state_event_sender, latecomer_state_event_receiver): (
+        UnboundedSender<StateEvent>,
+        UnboundedReceiver<StateEvent>,
+    ) = unbounded();
+
+    let latecomer_dir = Builder::new()
+        .prefix("latecomer_dir_replace")
+        .tempdir()
+        .unwrap()
+        .into_path();
+
+    let mut peermerge_latecomer = Peermerge::new_disk(
+        PeermergeDiskOptionsBuilder::default()
+            .default_peer_header(NameDescription::new("latecomer"))
+            .state_event_sender(latecomer_state_event_sender)
+            .data_root_dir(latecomer_dir)
+            .build()?,
+    )
+    .await?;
+    peermerge_latecomer
+        .attach_document_disk(
+            AttachDocumentDiskOptionsBuilder::default()
+                .document_url(sharing_info.read_write_doc_url)
+                .document_secret(document_secret)
+                .build()?,
+        )
+        .await?;
+
+    task::spawn(async move {
+        peermerge_proxy
+            .connect_protocol_disk(&mut proto_responder)
+            .await
+            .unwrap();
+    });
+
+    let mut peermerge_latecomer_for_task = peermerge_latecomer.clone();
+    task::spawn(async move {
+        peermerge_latecomer_for_task
+            .connect_protocol_disk(&mut proto_initiator)
+            .await
+            .unwrap();
+    });
+
+    process_state_events_feed_replace(
+        peermerge_latecomer,
+        &document_id,
+        latecomer_state_event_receiver,
+        expected_count,
+    )
+    .await
+    .unwrap();
 
     Ok(())
 }
@@ -595,6 +919,48 @@ async fn process_joiner_state_events_reopen(
                 } else if contiguous_length > 3 {
                     panic!("Too large contiguous length")
                 }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[instrument(skip_all)]
+async fn process_proxy_state_events_indefinitely(
+    mut proxy_state_event_receiver: UnboundedReceiver<StateEvent>,
+) -> anyhow::Result<()> {
+    while let Some(event) = proxy_state_event_receiver.next().await {
+        info!("Received proxy event {:?}", event);
+    }
+    Ok(())
+}
+
+#[instrument(skip_all)]
+async fn process_state_events_feed_replace<T, U>(
+    peermerge: Peermerge<T, U>,
+    document_id: &DocumentId,
+    mut state_event_receiver: UnboundedReceiver<StateEvent>,
+    expected_count: u64,
+) -> anyhow::Result<()>
+where
+    T: RandomAccess + Debug + Send + 'static,
+    U: FeedPersistence,
+{
+    while let Some(event) = state_event_receiver.next().await {
+        info!("Received event {event:?}");
+
+        if matches!(
+            event.content,
+            DocumentInitialized { .. } | DocumentChanged { .. }
+        ) {
+            let value = peermerge
+                .transact(document_id, |doc| {
+                    let (value, _) = get(doc, ROOT, "counter")?.unwrap();
+                    Ok(value.into_scalar().unwrap().to_u64().unwrap())
+                })
+                .await?;
+            if value == expected_count {
+                break;
             }
         }
     }

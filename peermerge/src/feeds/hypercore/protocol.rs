@@ -55,9 +55,20 @@ where
         debug!("Got protocol event {:?}", event);
         match event {
             Err(err) => {
-                if err.kind() == ErrorKind::BrokenPipe {
-                    // Ignore broken pipe, can happen when the other end closes shop
-                    break;
+                match err.kind() {
+                    ErrorKind::BrokenPipe => {
+                        // Ignore broken pipe, can happen when the other end closes channel
+                        // abruptly
+                        break;
+                    }
+                    ErrorKind::Other => {
+                        if format!("{err}").contains("closed channel") {
+                            // Error sending to a closed channel, does not break the protocol, just
+                            // one channel.
+                            break;
+                        }
+                    }
+                    _ => {}
                 }
                 return Err(PeermergeError::IO {
                     context: Some("Unexpected protocol error".to_string()),

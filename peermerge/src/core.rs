@@ -583,11 +583,13 @@ async fn on_feed_event_memory(
     peermerge_state: Arc<Mutex<PeermergeStateWrapper<RandomAccessMemory>>>,
     mut reattach_secrets: Option<HashMap<DocumentId, SigningKey>>,
 ) {
-    let mut state_event_sender: UnboundedSender<StateEvent> = state_event_sender_mutex
-        .lock()
-        .await
-        .clone()
-        .expect("Should always be present");
+    let mut state_event_sender: UnboundedSender<StateEvent> = {
+        state_event_sender_mutex
+            .lock()
+            .await
+            .clone()
+            .expect("Should always be present")
+    };
     while let Some(event) = feed_event_receiver.next().await {
         debug!("Received event {:?}", event);
         // The state event sender might change so that the other side closes
@@ -602,9 +604,14 @@ async fn on_feed_event_memory(
                     get_document_by_discovery_key(&documents, &event.doc_discovery_key)
                         .await
                         .unwrap();
-                document
+                let state_events = document
                     .process_new_feeds_broadcasted_memory(new_feeds)
                     .await;
+
+                if !state_events.is_empty() {
+                    send_state_events(&mut state_event_sender, state_events, &peermerge_state)
+                        .await;
+                }
             }
             FeedEventContent::NewChildDocumentsBroadcasted {
                 new_child_documents,
@@ -639,7 +646,7 @@ async fn on_feed_event_memory(
                             .await
                             .unwrap();
                             if !attach_result.state_events.is_empty() {
-                                send_state_events::<RandomAccessMemory>(
+                                send_state_events(
                                     &mut state_event_sender,
                                     attach_result.state_events,
                                     &peermerge_state,
@@ -910,11 +917,13 @@ async fn on_feed_event_disk(
     mut documents: Arc<DashMap<DocumentId, Document<RandomAccessDisk, FeedDiskPersistence>>>,
     peermerge_state: Arc<Mutex<PeermergeStateWrapper<RandomAccessDisk>>>,
 ) {
-    let mut state_event_sender: UnboundedSender<StateEvent> = state_event_sender_mutex
-        .lock()
-        .await
-        .clone()
-        .expect("Should always be present");
+    let mut state_event_sender: UnboundedSender<StateEvent> = {
+        state_event_sender_mutex
+            .lock()
+            .await
+            .clone()
+            .expect("Should always be present")
+    };
     while let Some(event) = feed_event_receiver.next().await {
         // The state event sender might change so that the other side closes
         if state_event_sender.is_closed() {
@@ -929,10 +938,14 @@ async fn on_feed_event_disk(
                     get_document_by_discovery_key(&documents, &event.doc_discovery_key)
                         .await
                         .unwrap();
-                document
+                let state_events = document
                     .process_new_feeds_broadcasted_disk(new_feeds)
                     .await
                     .unwrap();
+                if !state_events.is_empty() {
+                    send_state_events(&mut state_event_sender, state_events, &peermerge_state)
+                        .await;
+                }
             }
             FeedEventContent::NewChildDocumentsBroadcasted {
                 new_child_documents,

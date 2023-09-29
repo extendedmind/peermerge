@@ -7,7 +7,7 @@ use hypercore_protocol::{
 use random_access_storage::RandomAccess;
 use std::fmt::Debug;
 use std::sync::Arc;
-use tracing::{debug, instrument, warn};
+use tracing::{debug, info, instrument, warn};
 
 use super::PeerState;
 use crate::{
@@ -219,6 +219,7 @@ where
 {
     debug!("Message on channel={}", channel.id(),);
 
+    let mut events: Vec<FeedEvent> = vec![];
     match message {
         Message::Synchronize(message) => {
             let length_changed = message.length != peer_state.remote_length;
@@ -272,8 +273,7 @@ where
                 peer_state.inflight.add(&mut request);
                 messages.push(Message::Request(request));
             }
-
-            channel.send_batch(&messages).await?;
+            send_message_batch_to_channel(channel, messages, &mut events, peer_state).await?;
         }
         Message::Request(message) => {
             let (info, proof) = {
@@ -292,13 +292,13 @@ where
                     seek: proof.seek,
                     upgrade: proof.upgrade,
                 };
-                channel.send(Message::Data(msg)).await?;
+                send_message_to_channel(channel, Message::Data(msg), &mut events, peer_state)
+                    .await?;
             } else {
                 panic!("Could not create proof from request id {:?}", message.id);
             }
         }
         Message::Data(message) => {
-            let mut events: Vec<FeedEvent> = vec![];
             let (old_info, applied, new_info, request) = {
                 let mut hypercore = hypercore.lock().await;
                 let old_info = hypercore.info();
@@ -409,17 +409,7 @@ where
             if let Some(request) = request {
                 messages.push(Message::Request(request));
             }
-            if !channel.closed() {
-                channel.send_batch(&messages).await?;
-            } else {
-                events.push(FeedEvent::new(
-                    peer_state.doc_discovery_key,
-                    FeedDisconnected {
-                        channel: channel.id() as u64,
-                    },
-                ));
-            }
-            return Ok(events);
+            send_message_batch_to_channel(channel, messages, &mut events, peer_state).await?;
         }
         Message::Range(message) => {
             let mut hypercore = hypercore.lock().await;
@@ -450,7 +440,13 @@ where
                     // If the other side advertises more than we have, we need to request the rest
                     // of the blocks.
                     if let Some(request) = next_request(&mut hypercore, peer_state).await? {
-                        channel.send(Message::Request(request)).await?;
+                        send_message_to_channel(
+                            channel,
+                            Message::Request(request),
+                            &mut events,
+                            peer_state,
+                        )
+                        .await?;
                     }
                 } else {
                     // We have more than the peer, just ignore
@@ -509,7 +505,7 @@ where
                         &peer_state.child_documents,
                         Some(compare_result.inactive_feeds_to_rebroadcast),
                     );
-                    channel.send(message).await?;
+                    send_message_to_channel(channel, message, &mut events, peer_state).await?;
                 }
 
                 if !compare_result.new_feeds.is_empty() {
@@ -539,42 +535,41 @@ where
                 let mut dec_state = State::from_buffer(&data);
                 let length: u64 = dec_state.decode(&data)?;
                 if length >= peer_state.max_write_feed_length {
-                    // Immediately send info about max length exceeded, and disconnect
-                    return Ok(vec![
-                        FeedEvent::new(
-                            peer_state.doc_discovery_key,
-                            FeedMaxLengthReached {
-                                discovery_key: *channel.discovery_key(),
-                            },
-                        ),
-                        FeedEvent::new(
-                            peer_state.doc_discovery_key,
-                            FeedDisconnected {
-                                channel: channel.id() as u64,
-                            },
-                        ),
-                    ]);
-                }
-                let info = {
-                    let hypercore = hypercore.lock().await;
-                    hypercore.info()
-                };
-                if info.contiguous_length >= length
-                    && peer_state.contiguous_range_sent < info.contiguous_length
-                {
-                    let range_msg = Range {
-                        drop: false,
-                        start: 0,
-                        length: info.contiguous_length,
+                    // Immediately close channel and send info about max length exceeded.
+                    events.push(FeedEvent::new(
+                        peer_state.doc_discovery_key,
+                        FeedMaxLengthReached {
+                            discovery_key: *channel.discovery_key(),
+                        },
+                    ));
+                    close_channel(channel, &mut events, peer_state, true).await?;
+                } else {
+                    let info = {
+                        let hypercore = hypercore.lock().await;
+                        hypercore.info()
                     };
-                    peer_state.contiguous_range_sent = info.contiguous_length;
-                    channel.send(Message::Range(range_msg)).await?;
+                    if info.contiguous_length >= length
+                        && peer_state.contiguous_range_sent < info.contiguous_length
+                    {
+                        let range_msg = Range {
+                            drop: false,
+                            start: 0,
+                            length: info.contiguous_length,
+                        };
+                        peer_state.contiguous_range_sent = info.contiguous_length;
+                        send_message_to_channel(
+                            channel,
+                            Message::Range(range_msg),
+                            &mut events,
+                            peer_state,
+                        )
+                        .await?;
+                    }
                 }
             }
             FEED_SYNCED_LOCAL_SIGNAL_NAME => {
                 let mut dec_state = State::from_buffer(&data);
                 let message: FeedSyncedMessage = dec_state.decode(&data)?;
-                let mut events: Vec<FeedEvent> = vec![];
                 if message.contiguous_length > peer_state.synced_contiguous_length
                     && peer_state.contiguous_range_sent < message.contiguous_length
                 {
@@ -591,16 +586,13 @@ where
                         length: contiguous_length,
                     };
                     peer_state.contiguous_range_sent = contiguous_length;
-                    if !channel.closed() {
-                        channel.send(Message::Range(range_msg)).await?
-                    } else {
-                        events.push(FeedEvent::new(
-                            peer_state.doc_discovery_key,
-                            FeedDisconnected {
-                                channel: channel.id() as u64,
-                            },
-                        ));
-                    }
+                    send_message_to_channel(
+                        channel,
+                        Message::Range(range_msg),
+                        &mut events,
+                        peer_state,
+                    )
+                    .await?;
                 }
                 if !message.not_created_child_documents.is_empty() {
                     // Let's just try again to create the documents now that we have more info.
@@ -611,61 +603,79 @@ where
                         },
                     ));
                 }
-                return Ok(events);
             }
             FEEDS_CHANGED_LOCAL_SIGNAL_NAME => {
                 assert!(
                     peer_state.is_doc,
                     "Only doc feed should ever get feeds changed messages"
                 );
-                let feeds_state = peer_state.feeds_state.as_mut().unwrap();
-                let mut dec_state = State::from_buffer(&data);
-                let feeds_changed_message: FeedsChangedMessage = dec_state.decode(&data)?;
+                let broadcast_message = {
+                    let feeds_state = peer_state.feeds_state.as_mut().unwrap();
+                    let mut dec_state = State::from_buffer(&data);
+                    let feeds_changed_message: FeedsChangedMessage = dec_state.decode(&data)?;
 
-                // Set replaced feeds and feeds to create to the feeds state
-                feeds_state.set_replaced_feeds_and_feeds_to_create(
-                    feeds_changed_message.replaced_feeds,
-                    feeds_changed_message.feeds_to_create,
-                );
+                    // Set replaced feeds and feeds to create to the feeds state
+                    feeds_state.set_replaced_feeds_and_feeds_to_create(
+                        feeds_changed_message.replaced_feeds,
+                        feeds_changed_message.feeds_to_create,
+                    );
+                    create_broadcast_message(feeds_state, &peer_state.child_documents, None)
+                };
 
                 // Transmit this event forward to the protocol
-                channel
-                    .signal_local_protocol(FEEDS_CHANGED_LOCAL_SIGNAL_NAME, data)
-                    .await?;
-
-                // Create new broadcast message
-                let messages = vec![create_broadcast_message(
-                    feeds_state,
-                    &peer_state.child_documents,
-                    None,
-                )];
-                channel.send_batch(&messages).await?;
+                if signal_local_protocol_of_channel(
+                    channel,
+                    FEEDS_CHANGED_LOCAL_SIGNAL_NAME,
+                    data,
+                    &mut events,
+                    peer_state,
+                )
+                .await?
+                {
+                    // Create new broadcast message
+                    send_message_to_channel(channel, broadcast_message, &mut events, peer_state)
+                        .await?;
+                }
             }
             FEED_VERIFICATION_LOCAL_SIGNAL_NAME => {
                 assert!(
                     peer_state.is_doc,
                     "Only doc feed should ever get feed verification messages"
                 );
-                let feeds_state = peer_state.feeds_state.as_mut().unwrap();
                 let mut dec_state = State::from_buffer(&data);
                 let message: FeedVerificationMessage = dec_state.decode(&data)?;
-                if feeds_state.verify_feed(&message.feed_discovery_key, &message.peer_id)
-                    && !channel.closed()
-                {
-                    if message.peer_id.is_none() || !message.verified {
+
+                let changed = if message.verified {
+                    let feeds_state = peer_state.feeds_state.as_mut().unwrap();
+                    feeds_state.verify_feed(&message.feed_discovery_key, &message.peer_id)
+                } else {
+                    // TODO mark failed verification to the state
+                    unimplemented!("TODO: mark feed verification failed")
+                };
+
+                if changed {
+                    let channel_works = if message.peer_id.is_none() || !message.verified {
                         // Transmit doc peer verification and failures forward to the protocol
-                        channel
-                            .signal_local_protocol(FEED_VERIFICATION_LOCAL_SIGNAL_NAME, data)
-                            .await?;
-                    }
-                    if message.peer_id.is_some() {
+                        signal_local_protocol_of_channel(
+                            channel,
+                            FEED_VERIFICATION_LOCAL_SIGNAL_NAME,
+                            data,
+                            &mut events,
+                            peer_state,
+                        )
+                        .await?
+                    } else {
+                        true
+                    };
+                    if channel_works && message.peer_id.is_some() {
                         // Verification changed for one of the peer feeds
+                        let feeds_state = peer_state.feeds_state.as_mut().unwrap();
                         let message = create_broadcast_message(
                             feeds_state,
                             &peer_state.child_documents,
                             None,
                         );
-                        channel.send(message).await?;
+                        send_message_to_channel(channel, message, &mut events, peer_state).await?;
                     }
                 }
             }
@@ -680,20 +690,25 @@ where
                 let feeds_state = peer_state.feeds_state.as_ref().unwrap();
                 let message =
                     create_broadcast_message(feeds_state, &peer_state.child_documents, None);
-                channel.send(message).await?;
-
-                // Transmit this event forward to the protocol so that the new document can
-                // be advertised
-                channel
-                    .signal_local_protocol(CHILD_DOCUMENT_CREATED_LOCAL_SIGNAL_NAME, data)
+                if send_message_to_channel(channel, message, &mut events, peer_state).await? {
+                    // Transmit this event forward to the protocol so that the new document can
+                    // be advertised
+                    signal_local_protocol_of_channel(
+                        channel,
+                        CHILD_DOCUMENT_CREATED_LOCAL_SIGNAL_NAME,
+                        data,
+                        &mut events,
+                        peer_state,
+                    )
                     .await?;
+                }
             }
             CLOSED_LOCAL_SIGNAL_NAME => {
                 assert!(
                     peer_state.is_doc,
                     "Only doc feed should ever get closed messages"
                 );
-                channel.close().await?;
+                close_channel(channel, &mut events, peer_state, false).await?;
             }
             _ => {
                 panic!("Received unexpected local signal: {name}");
@@ -711,7 +726,7 @@ where
             panic!("Received unexpected message: {message:?}");
         }
     };
-    Ok(vec![])
+    Ok(events)
 }
 
 /// Return the next request that should be sent based on peer state.
@@ -784,5 +799,105 @@ where
         Ok(Some(request))
     } else {
         Ok(None)
+    }
+}
+
+async fn send_message_to_channel(
+    channel: &mut Channel,
+    message: Message,
+    events: &mut Vec<FeedEvent>,
+    peer_state: &PeerState,
+) -> Result<bool, PeermergeError> {
+    send_message_batch_to_channel(channel, vec![message], events, peer_state).await
+}
+
+async fn send_message_batch_to_channel(
+    channel: &mut Channel,
+    messages: Vec<Message>,
+    events: &mut Vec<FeedEvent>,
+    peer_state: &PeerState,
+) -> Result<bool, PeermergeError> {
+    if !channel.closed() {
+        match channel.send_batch(&messages).await {
+            Ok(_) => Ok(true),
+            Err(error) => {
+                info!("Channel IO error while sending, disconnecting: {error}");
+                events.push(FeedEvent::new(
+                    peer_state.doc_discovery_key,
+                    FeedDisconnected {
+                        channel: channel.id() as u64,
+                    },
+                ));
+                Ok(false)
+            }
+        }
+    } else {
+        events.push(FeedEvent::new(
+            peer_state.doc_discovery_key,
+            FeedDisconnected {
+                channel: channel.id() as u64,
+            },
+        ));
+        Ok(false)
+    }
+}
+
+async fn close_channel(
+    channel: &mut Channel,
+    events: &mut Vec<FeedEvent>,
+    peer_state: &PeerState,
+    notify_disconnect: bool,
+) -> Result<bool, PeermergeError> {
+    let success = if !channel.closed() {
+        match channel.close().await {
+            Ok(_) => true,
+            Err(error) => {
+                info!("Channel IO error while closing, disconnecting: {error}");
+                false
+            }
+        }
+    } else {
+        false
+    };
+    if notify_disconnect {
+        events.push(FeedEvent::new(
+            peer_state.doc_discovery_key,
+            FeedDisconnected {
+                channel: channel.id() as u64,
+            },
+        ));
+    }
+    Ok(success)
+}
+
+async fn signal_local_protocol_of_channel(
+    channel: &mut Channel,
+    local_signal_name: &str,
+    data: Vec<u8>,
+    events: &mut Vec<FeedEvent>,
+    peer_state: &PeerState,
+) -> Result<bool, PeermergeError> {
+    if !channel.closed() {
+        match channel.signal_local_protocol(local_signal_name, data).await {
+            Ok(_) => Ok(true),
+            Err(error) => {
+                info!("Channel IO error while sending local signal, disconnecting: {error}");
+                events.push(FeedEvent::new(
+                    peer_state.doc_discovery_key,
+                    FeedDisconnected {
+                        channel: channel.id() as u64,
+                    },
+                ));
+                Ok(false)
+            }
+        }
+    } else {
+        events.push(FeedEvent::new(
+            peer_state.doc_discovery_key,
+            FeedDisconnected {
+                channel: channel.id() as u64,
+            },
+        ));
+        Ok(false)
     }
 }
