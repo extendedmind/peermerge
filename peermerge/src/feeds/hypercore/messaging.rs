@@ -774,7 +774,7 @@ where
             // got an upgrade response for. With applied upgrade, the info.length increases, so we make
             // sure the index is below the length.
             if peer_state.remote_contiguous_length > request_index && info.length > request_index {
-                let nodes = hypercore.missing_nodes(request_index * 2).await?;
+                let nodes = hypercore.missing_nodes(request_index).await?;
                 Some(RequestBlock {
                     index: request_index,
                     nodes,
