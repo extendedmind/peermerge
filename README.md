@@ -1,11 +1,3 @@
 # Peermerge
 
-Peer protocol (hypercore or p2panda) + Automerge in Rust
-
-## Status
-
-Pre-alpha
-
-## Licence
-
-AGPLv3
+Development continues at [codeberg.org/convivial.software/peermerge](https://codeberg.org/convivial.software/peermerge).
