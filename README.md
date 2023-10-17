@@ -1,3 +1,3 @@
 # Peermerge
 
-Development continues at [codeberg.org/convivial.software/peermerge](https://codeberg.org/convivial.software/peermerge).
+Development continues at [codeberg.org/convivialsoftware/peermerge](https://codeberg.org/convivialsoftware/peermerge).
